@@ -1,2 +1,1 @@
-# react-three-jolt
-⚡ Jolt physics in React
+packages/react-three-jolt/README.md

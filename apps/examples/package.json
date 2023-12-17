@@ -1,0 +1,15 @@
+{
+  "name": "examples",
+  "private": true,
+  "packageManager": "yarn@4.0.2",
+  "dependencies": {
+    "@react-three/jolt": "0.0.0-development",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "prettier": "^2.8.7",
+    "typescript": "^4.9.4",
+    "vite": "^4.0.4"
+  }
+}
