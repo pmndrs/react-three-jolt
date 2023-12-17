@@ -1,0 +1,9 @@
+{
+  "name": "react-three-jolt-root",
+  "private": true,
+  "version": "0.0.0",
+  "repository": "https://github.com/isaac-mason/react-three-jolt.git",
+  "author": "“Isaac <isaac@isaacmason.com>",
+  "license": "MIT",
+  "packageManager": "yarn@4.0.2"
+}
