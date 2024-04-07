@@ -9,7 +9,7 @@
     "Isaac Mason <isaac@isaacmason.com>"
   ],
   "license": "MIT",
-  "packageManager": "yarn@4.0.2",
+  "packageManager": "yarn@4.1.1",
   "workspaces": [
     "packages/*",
     "apps/*"
