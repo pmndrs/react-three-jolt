@@ -24,7 +24,7 @@ If you have Corepack enabled, you should be able to use this project's yarn vers
 
 ## Building
 
-Once you have the above installed, run the following to install dependencies and build all packages:
+Once you have the above installed, run the following to install dependencies and build the project:
 
 ```sh
 > yarn install
@@ -39,3 +39,11 @@ To run the examples, you can run the following:
 > cd apps/examples
 > yarn dev
 ```
+
+## Versioning
+
+This project uses `@changesets/cli` to manage versioning and releases.
+
+As changes are made, changesets should be added with `yarn change`. This will open an interactive prompt to help you describe the changes you've made.
+
+A github action will create a PR for bumping the version based on changesets.
