@@ -18,8 +18,7 @@
     "test": "yarn workspaces foreach -A -t run test",
     "build": "yarn workspaces foreach -A -t run build",
     "change": "yarn changeset",
-    "release": "yarn build && yarn test",
-    "publish": "changeset publish",
+    "publish": "yarn build && yarn test && changeset publish",
     "version": "yarn changeset version && yarn install --mode update-lockfile"
   },
   "devDependencies": {
