@@ -973,7 +973,7 @@ __metadata:
     eslint-plugin-prettier: "npm:^5.0.1"
     eslint-plugin-simple-import-sort: "npm:^10.0.0"
     eslint-plugin-typescript-enum: "npm:^2.1.0"
-    jolt-physics: "npm:^0.11.0"
+    jolt-physics: "npm:^0.22.0"
     prettier: "npm:^3.1.0"
     react: "npm:^18.2.0"
     react-dom: "npm:^18.2.0"
@@ -4482,10 +4482,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"jolt-physics@npm:^0.11.0":
-  version: 0.11.0
-  resolution: "jolt-physics@npm:0.11.0"
-  checksum: bdf62a2a6cafb9760079baa5daa5b8b74012d85632d1e010795fd3589e8f92493c2f6902696a8cebcb7640b47242631a99b96b7dbd32ec27d293d13a08d181d9
+"jolt-physics@npm:^0.22.0":
+  version: 0.22.0
+  resolution: "jolt-physics@npm:0.22.0"
+  checksum: 3cd81811c0c520e0a72feadfa9be6ab92f7c3f51dc3713f424f1a0b5b9bd5c6b6bb386632f0dafd08d733eb856b6ab413878acf2a5b22f52ef352fb00778eaab
   languageName: node
   linkType: hard
 
