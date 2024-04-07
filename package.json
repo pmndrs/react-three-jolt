@@ -16,6 +16,13 @@
   ],
   "scripts": {
     "test": "yarn workspaces foreach -A -t run test",
-    "build": "yarn workspaces foreach -A -t run build"
+    "build": "yarn workspaces foreach -A -t run build",
+    "change": "yarn changeset",
+    "release": "yarn build && yarn test",
+    "publish": "changeset publish",
+    "version": "yarn changeset version && yarn install --mode update-lockfile"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.26.2"
   }
 }
