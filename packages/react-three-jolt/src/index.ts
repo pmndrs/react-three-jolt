@@ -1,1 +1,3 @@
-export const foo = 'bar';
+import * as _fiber from '@react-three/fiber'
+
+export * from './placeholder';

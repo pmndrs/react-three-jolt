@@ -8,6 +8,7 @@ import filesize from 'rollup-plugin-filesize';
 export default [
   {
     input: `./src/index.ts`,
+    external: ['react', 'react-dom'],
     output: [
       {
         file: `dist/index.mjs`,

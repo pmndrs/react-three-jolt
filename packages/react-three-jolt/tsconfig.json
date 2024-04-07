@@ -19,7 +19,8 @@
       "baseUrl": "./",
       "rootDir": "./src",
       "allowSyntheticDefaultImports": true,
-      "outDir": "./dist"
+      "outDir": "./dist",
+      "jsx": "react"
     },
     "files": ["./src/index.ts"]
   }
