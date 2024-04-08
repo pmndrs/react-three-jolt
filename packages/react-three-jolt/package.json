@@ -54,7 +54,7 @@
     "@rollup/plugin-terser": "^0.4.3",
     "@rollup/plugin-typescript": "^11.1.6",
     "@types/three": "^0.163.0",
-    "@typescript-eslint/eslint-plugin": "^6.10.0",
+    "@typescript-eslint/eslint-plugin": "^7.5.0",
     "@typescript-eslint/parser": "^7.5.0",
     "@vitest/coverage-v8": "^1.4.0",
     "babel-loader": "^9.1.3",
