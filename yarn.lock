@@ -1261,7 +1261,7 @@ __metadata:
     "@vitest/coverage-v8": "npm:^1.4.0"
     babel-loader: "npm:^9.1.3"
     eslint: "npm:^9.0.0"
-    eslint-config-airbnb: "npm:^18.2.1"
+    eslint-config-airbnb: "npm:^19.0.4"
     eslint-config-airbnb-base: "npm:^15.0.0"
     eslint-config-prettier: "npm:^9.0.0"
     eslint-import-resolver-typescript: "npm:^3.5.5"
@@ -3568,20 +3568,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-config-airbnb-base@npm:^14.2.1":
-  version: 14.2.1
-  resolution: "eslint-config-airbnb-base@npm:14.2.1"
-  dependencies:
-    confusing-browser-globals: "npm:^1.0.10"
-    object.assign: "npm:^4.1.2"
-    object.entries: "npm:^1.1.2"
-  peerDependencies:
-    eslint: ^5.16.0 || ^6.8.0 || ^7.2.0
-    eslint-plugin-import: ^2.22.1
-  checksum: 10c0/960654ae93f085800850ba5d54d745e576fb1c9e1fe46d0a64086586a1a6a78753ce6990b46c5543c35ba00ba4aee9018e4d3d3307dba8a0bf864a6ac803de16
-  languageName: node
-  linkType: hard
-
 "eslint-config-airbnb-base@npm:^15.0.0":
   version: 15.0.0
   resolution: "eslint-config-airbnb-base@npm:15.0.0"
@@ -3597,20 +3583,20 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint-config-airbnb@npm:^18.2.1":
-  version: 18.2.1
-  resolution: "eslint-config-airbnb@npm:18.2.1"
+"eslint-config-airbnb@npm:^19.0.4":
+  version: 19.0.4
+  resolution: "eslint-config-airbnb@npm:19.0.4"
   dependencies:
-    eslint-config-airbnb-base: "npm:^14.2.1"
+    eslint-config-airbnb-base: "npm:^15.0.0"
     object.assign: "npm:^4.1.2"
-    object.entries: "npm:^1.1.2"
+    object.entries: "npm:^1.1.5"
   peerDependencies:
-    eslint: ^5.16.0 || ^6.8.0 || ^7.2.0
-    eslint-plugin-import: ^2.22.1
-    eslint-plugin-jsx-a11y: ^6.4.1
-    eslint-plugin-react: ^7.21.5
-    eslint-plugin-react-hooks: ^4 || ^3 || ^2.3.0 || ^1.7.0
-  checksum: 10c0/236ce3faf1c43079b441c8c5fe530d42f000d5abd9f5e55f0b7e559fcbe60f01b908a18977b0df6fdb9acd14961422fbf5e8c0734ffa380dea0dcd5dce78b8d2
+    eslint: ^7.32.0 || ^8.2.0
+    eslint-plugin-import: ^2.25.3
+    eslint-plugin-jsx-a11y: ^6.5.1
+    eslint-plugin-react: ^7.28.0
+    eslint-plugin-react-hooks: ^4.3.0
+  checksum: 10c0/867feeda45c4b480b1b8eff8fabc1bb107e837da8b48e5039e0c175ae6ad34af383b1924fc163bbfcef24a324e6651b1515e5bd12cbcbb19535a8838e2544a02
   languageName: node
   linkType: hard
 
@@ -6095,7 +6081,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"object.entries@npm:^1.1.2, object.entries@npm:^1.1.5":
+"object.entries@npm:^1.1.5":
   version: 1.1.7
   resolution: "object.entries@npm:1.1.7"
   dependencies:
