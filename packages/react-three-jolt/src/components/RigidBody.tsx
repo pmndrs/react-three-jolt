@@ -16,7 +16,7 @@ import { useForwardedRef, useJolt } from '../hooks';
 import { getThreeObjectForBody } from '../systems/body-system';
 import * as THREE from 'three';
 import { vec3 } from '../utils';
-import { BodyState } from 'src';
+import { BodyState } from '../systems';
 //import { useImperativeInstance } from '../hooks/use-imperative-instance';
 
 interface RigidBodyProps {

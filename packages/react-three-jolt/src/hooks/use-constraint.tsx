@@ -4,7 +4,7 @@ import { useRef, Ref } from 'react';
 import { useImperativeInstance } from './use-imperative-instance';
 
 // for types
-import { BodyState } from '../';
+import { BodyState } from '../systems';
 
 // helper function to take a list of bodies and add them to the same filter group
 

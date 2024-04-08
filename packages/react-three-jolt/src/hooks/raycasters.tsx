@@ -2,7 +2,7 @@
 import { useJolt } from './';
 import { useMemo } from 'react';
 import * as THREE from 'three';
-import { Raycaster, AdvancedRaycaster, Multicaster } from '../';
+import { Raycaster, AdvancedRaycaster, Multicaster } from '../systems';
 
 // helper function to take a list of bodies and add them to the same filter group
 

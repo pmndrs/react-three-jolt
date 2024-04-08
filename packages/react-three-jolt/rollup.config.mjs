@@ -9,17 +9,18 @@ export default [
     {
         input: `./src/index.ts`,
         external: ['@react-three/fiber', 'three', 'react', 'react-dom'],
+        inlineDynamicImports: true, // Add this line
         output: [
             {
-                //file: `dist/index.mjs`,
-                dir: 'dist',
+                file: `dist/index.mjs`,
+                //dir: 'dist',
                 format: 'es',
                 sourcemap: true,
                 exports: 'named'
             },
             {
-                //file: `dist/index.cjs`,
-                dir: 'dist',
+                file: `dist/index.cjs`,
+                //dir: 'dist',
                 format: 'cjs',
                 sourcemap: true,
                 exports: 'named'

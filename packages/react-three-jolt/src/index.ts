@@ -8,7 +8,3 @@ export * from './components';
 
 // move this to own package
 export * from './useCommand';
-
-//trying to resolve exporting issue
-//export * from './components/Physics';
-export * from './components/RigidBody';
