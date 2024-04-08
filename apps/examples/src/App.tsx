@@ -1,11 +1,11 @@
 import { OrbitControls } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
-import { Placeholder } from '@react-three/jolt';
+import { Experience } from './Experience';
 
 const App = () => {
   return (
     <Canvas>
-      <Placeholder />
+      <Experience />
 
       <OrbitControls />
     </Canvas>
