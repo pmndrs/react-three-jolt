@@ -4,7 +4,7 @@ import * as THREE from 'three';
 
 import Jolt from 'jolt-physics';
 import { Raw } from '../raw';
-import { vec3 } from '../utils';
+import { anyVec3, vec3 } from '../utils';
 
 export class QuerySystem {
     physicsSystem: PhysicsSystem;
@@ -81,18 +81,18 @@ export class Raycaster {
     }
 
     //* Getters and Setters ----------------------------
-    get origin() {
+    get origin(): THREE.Vector3 {
         return vec3.three(this.ray.mOrigin);
     }
-    set origin(value) {
+    set origin(value: anyVec3) {
         const newVec = vec3.jolt(value);
         this.ray.mOrigin = newVec;
         Raw.module.destroy(newVec);
     }
-    get direction() {
+    get direction(): THREE.Vector3 {
         return vec3.three(this.ray.mDirection);
     }
-    set direction(value) {
+    set direction(value: anyVec3) {
         const newVec = vec3.jolt(value);
         this.ray.mDirection = newVec;
         Raw.module.destroy(newVec);
@@ -199,13 +199,13 @@ export class Raycaster {
         if (failHandler) failHandler();
     }
     // ease of life handler to change the origin when casting
-    castFrom(origin: THREE.Vector3, successHandler?: any, failHandler?: any) {
+    castFrom(origin: anyVec3, successHandler?: any, failHandler?: any) {
         this.origin = origin;
         return this.cast(successHandler, failHandler);
     }
     // ease of life to cast from the origin to a point
-    castTo(destination: THREE.Vector3, successHandler?: any, failHandler?: any) {
-        this.direction = destination.clone().sub(this.origin);
+    castTo(destination: anyVec3, successHandler?: any, failHandler?: any) {
+        this.direction = vec3.three(destination).clone().sub(this.origin);
         return this.cast(successHandler, failHandler);
     }
     // ease of life to set an origin and point
