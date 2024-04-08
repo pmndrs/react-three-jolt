@@ -9,18 +9,14 @@ import React, {
     useMemo,
     useRef
 } from 'react';
-import { forwardRef, ReactNode, useContext, useImperativeHandle } from 'react';
+import { forwardRef, ReactNode } from 'react';
 import { Object3D } from 'three';
-import { useForwardedRef, useConst, useJolt } from '../hooks';
+import { useForwardedRef, useJolt } from '../hooks';
 //import * as THREE from 'three';
-import { JoltContext } from './Physics';
-import {
-    BodyState,
-    GenerateBodyOptions,
-    getThreeObjectForBody
-} from '../systems/body-system';
+import { getThreeObjectForBody } from '../systems/body-system';
 import * as THREE from 'three';
-import { quat, vec3 } from '../utils';
+import { vec3 } from '../utils';
+import { BodyState } from 'src';
 //import { useImperativeInstance } from '../hooks/use-imperative-instance';
 
 interface RigidBodyProps {
@@ -36,16 +32,24 @@ interface RigidBodyProps {
     // this is MOTION Type
     type?: string;
     shape?: string;
+    debug?: boolean;
 
     //TODO: do these work yet?
     scale?: number[];
     mass?: number;
     quaternion?: number[];
 }
+export interface RigidBodyContext {
+    object: any;
+    type: string | undefined;
+    position: THREE.Vector3 | undefined;
+    rotation: THREE.Vector3 | undefined;
+    scale: THREE.Vector3 | undefined;
+    quaternion: THREE.Quaternion | undefined;
+}
+export const RigidBodyContext = createContext<RigidBodyContext | undefined>(undefined!);
+
 // the ridgedBody is a forwardRef so we can pass props directly
-
-export const RigidBodyContext = createContext(undefined!);
-
 // inital version from r3/rapier
 export const RigidBody: React.FC<RigidBodyProps> = memo(
     forwardRef((props, forwardedRef) => {
@@ -74,11 +78,9 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         const debugMeshRef = useRef<THREE.Mesh>(null);
         // load the jolt stuff
         const {
-            jolt,
-            physicsSystem,
+            //physicsSystem,
             bodySystem,
-            debug: physicsDebug,
-            paused
+            debug: physicsDebug
         } = useJolt();
 
         const debug = propDebug || physicsDebug;
@@ -92,16 +94,10 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                     shapeType: shape || null
                 };
                 //put the initial position, rotation, scale, and quaternion in the options
-                if (position)
-                    objectRef.current.position.copy(vec3.three(position));
-                if (rotation)
-                    objectRef.current.rotation.setFromVector3(
-                        vec3.three(rotation)
-                    );
-                const bodyHandle = bodySystem.addBody(
-                    objectRef.current,
-                    options
-                );
+                if (position) objectRef.current.position.copy(vec3.three(position));
+                if (rotation) objectRef.current.rotation.setFromVector3(vec3.three(rotation));
+                //@ts-ignore
+                const bodyHandle = bodySystem.addBody(objectRef.current, options);
                 const body = bodySystem.getBody(bodyHandle);
                 /*setInterval(() => {
                     const body = rigidBodyRef.current.body;
@@ -114,9 +110,8 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         useEffect(() => {
             if (debug && debugMeshRef.current) {
                 // get the debug threeObject for this body
-                const debugObject = getThreeObjectForBody(
-                    rigidBodyRef.current.body
-                );
+                //@ts-ignore
+                const debugObject = getThreeObjectForBody(rigidBodyRef.current.body);
                 debugMeshRef.current.geometry = debugObject.geometry;
                 debugMeshRef.current.material = new THREE.MeshStandardMaterial({
                     color: 0xff0000,
@@ -127,53 +122,30 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 
         // add the contact listeners
         useEffect(() => {
+            const rb = rigidBodyRef.current as BodyState;
             if (rigidBodyRef.current) {
-                if (onContactAdded)
-                    rigidBodyRef.current.addContactListener(
-                        onContactAdded,
-                        'added'
-                    );
-                if (onContactRemoved)
-                    rigidBodyRef.current.addContactListener(
-                        onContactRemoved,
-                        'removed'
-                    );
-                if (onContactPersisted)
-                    rigidBodyRef.current.addContactListener(
-                        onContactPersisted,
-                        'persisted'
-                    );
+                if (onContactAdded) rb.addContactListener(onContactAdded, 'added');
+                if (onContactRemoved) rb.addContactListener(onContactRemoved, 'removed');
+                if (onContactPersisted) rb.addContactListener(onContactPersisted, 'persisted');
             }
             // remove the listeners
             return () => {
                 if (rigidBodyRef.current) {
-                    if (onContactAdded)
-                        rigidBodyRef.current.removeContactListener(
-                            onContactAdded
-                        );
-                    if (onContactRemoved)
-                        rigidBodyRef.current.removeContactListener(
-                            onContactRemoved
-                        );
-                    if (onContactPersisted)
-                        rigidBodyRef.current.removeContactListener(
-                            onContactPersisted
-                        );
+                    if (onContactAdded) rb.removeContactListener(onContactAdded);
+                    if (onContactRemoved) rb.removeContactListener(onContactRemoved);
+                    if (onContactPersisted) rb.removeContactListener(onContactPersisted);
                 }
             };
-        }, [
-            rigidBodyRef.current,
-            onContactAdded,
-            onContactRemoved,
-            onContactPersisted
-        ]);
+        }, [rigidBodyRef.current, onContactAdded, onContactRemoved, onContactPersisted]);
         //not sure these should be set as useEffects or directly in the body
         useEffect(() => {
+            //@ts-ignore
             if (mass) bodySystem.setMass(rigidBodyRef.current.handle, mass);
         }, [mass]);
 
         // the context should update when a new handle is added
-        const contextValue = useMemo(() => {
+        //@ts-ignore
+        const contextValue: RigidBodyContext = useMemo(() => {
             return {
                 object: objectRef.current,
                 type,

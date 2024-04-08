@@ -1,5 +1,5 @@
 // this comes from r3/rapier and hopefully fixes the loading of RidgidBody
-import { DependencyList, useCallback, useEffect, useMemo, useRef } from 'react';
+import { DependencyList, useCallback, useEffect, useRef } from 'react';
 
 /**
  * Initiate an instance and return a safe getter

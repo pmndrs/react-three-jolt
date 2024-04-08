@@ -1,26 +1,31 @@
-import React, { useMemo, useState } from 'react';
-import { useRef, useEffect, forwardRef, memo, Children } from 'react';
+import React, { useState } from 'react';
+import { useRef, useEffect, forwardRef, memo } from 'react';
 import { useThree } from '@react-three/fiber';
-import { useConst, useJolt } from '../hooks';
+import { useJolt } from '../hooks';
 import * as THREE from 'three';
-import { MathUtils } from 'three';
-import { Layer } from '../systems/physics-system';
 import { characterControllerSystem } from '../systems/character-controller';
 import { useCommand } from '../useCommand';
 import { useForwardedRef } from '../hooks/use-forwarded-ref';
 // create a blank context
 export const CharacterControllerContext = React.createContext(undefined!);
-
-export const CharacterController: React.FC<RigidBodyProps> = memo(
+interface CControllerProps {
+    children: any;
+    radius: number;
+    height: number;
+    debug: boolean;
+    rest?: any;
+}
+export const CharacterController: React.FC<CControllerProps> = memo(
     forwardRef((props, forwardedRef) => {
         const {
             children,
             radius = 1,
             height = 2,
             debug = false,
+            //@ts-ignore
             ...objectProps
         } = props;
-        // pass the body via the ref
+        //@ts-ignore pass the body via the ref
         const characterRef = useForwardedRef(forwardedRef);
 
         const objectRef = useRef<THREE.Object3D>(null);
@@ -39,6 +44,7 @@ export const CharacterController: React.FC<RigidBodyProps> = memo(
         // set values and initializers for characterSystem
         useEffect(() => {
             const newCCS = new characterControllerSystem(physicsSystem);
+            //@ts-ignore
             newCCS.threeCharacter = objectRef.current;
             newCCS.setCapsule(radius, height);
 
@@ -48,11 +54,13 @@ export const CharacterController: React.FC<RigidBodyProps> = memo(
         useCommand(
             'run',
             (info) => {
+                // TODO Check this TS error. isInitial should exist
+                //@ts-ignore
                 if (!info.isInitial) return;
                 // console.log('Start running', info);
                 characterSystem!.startRunning();
             },
-            (info) => {
+            () => {
                 //console.log('Stop running', info);
                 characterSystem!.stopRunning();
             }
@@ -70,8 +78,9 @@ export const CharacterController: React.FC<RigidBodyProps> = memo(
         useCommand(
             'jump',
             (info) => {
+                //@ts-ignore
                 if (!info.isInitial) return;
-                characterSystem.jump();
+                if (characterSystem) characterSystem.jump();
             },
             undefined,
             { rate: 0.1, keys: [' '] }
@@ -82,17 +91,19 @@ export const CharacterController: React.FC<RigidBodyProps> = memo(
                 // get the camera direction
                 camera.getWorldQuaternion(cameraRotation);
                 const direction = new THREE.Vector3(
+                    //@ts-ignore
                     info.value.x,
                     0,
+                    //@ts-ignore
                     info.value.y
                 )
                     .applyQuaternion(getHorizontalRotation())
                     .normalize();
 
-                characterSystem.move(direction);
+                if (characterSystem) characterSystem.move(direction);
             },
-            (info) => {
-                characterSystem.move(new THREE.Vector3(0, 0, 0), true);
+            () => {
+                if (characterSystem) characterSystem.move(new THREE.Vector3(0, 0, 0));
             },
             { asVector: true }
         );
@@ -110,17 +121,13 @@ export const CharacterController: React.FC<RigidBodyProps> = memo(
         }, [radius, height]);
 
         return (
+            //@ts-ignore
             <CharacterControllerContext.Provider value={contextValue}>
                 <object3D ref={objectRef}>
-                    <object3D
-                        ref={offsetObject}
-                        position-y={radius + height / 2}>
+                    <object3D ref={offsetObject} position-y={radius + height / 2}>
                         <mesh ref={debugCapsule} visible={debug}>
                             <capsuleGeometry args={[radius, height, 32]} />
-                            <meshStandardMaterial
-                                wireframe={false}
-                                color="red"
-                            />
+                            <meshStandardMaterial wireframe={false} color="red" />
                             <mesh position-z={-1}>
                                 <boxGeometry args={[0.1, 0.5, 1]} />
                                 <meshStandardMaterial color="orange" />

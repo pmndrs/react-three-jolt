@@ -5,6 +5,7 @@ import { useTexture } from '@react-three/drei';
 import { useJolt } from '../hooks';
 
 import {
+    //@ts-ignore
     imageUrlToImageData,
     applyHeightmapToPlane
 } from '../heightField/Generators';
@@ -32,6 +33,7 @@ export function Heightfield({
 
     const { bodySystem } = useJolt();
     // try and load the url as a texture
+    //@ts-ignore
     const urlTexture = useTexture(url);
 
     // if an image is passed use the drei image loader
@@ -40,6 +42,7 @@ export function Heightfield({
         // because this could be updated in a frame loop we do this here
         // if texture use that, otherwise use the url texture
         if (!texture && urlTexture) {
+            //@ts-ignore
             planeRef.current!.material.map = urlTexture;
         }
         planeRef.current.geometry.rotateX(-Math.PI / 2);
@@ -54,11 +57,7 @@ export function Heightfield({
             */
         async function getImageData() {
             if (url) {
-                await applyHeightmapToPlane(
-                    planeRef.current as THREE.Mesh,
-                    url,
-                    displacementScale
-                );
+                await applyHeightmapToPlane(planeRef.current as THREE.Mesh, url, displacementScale);
                 // generate the jolt heightfield with the newly made three heightfield
                 bodySystem.addHeightfield(planeRef.current as THREE.Mesh);
             }

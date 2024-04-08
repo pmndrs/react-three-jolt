@@ -3,11 +3,7 @@ import Jolt from 'jolt-physics';
 import { Raw } from '../../raw';
 import { vec3, quat } from '../../utils';
 import { Layer, PhysicsSystem } from '../physics-system';
-import {
-    VehicleFourWheelSettings,
-    WheelState,
-    createWheelSettings
-} from './wheels';
+import { VehicleFourWheelSettings, WheelState, createWheelSettings } from './wheels';
 
 const FL_WHEEL = 0;
 const FR_WHEEL = 1;
@@ -16,21 +12,23 @@ const BR_WHEEL = 3;
 
 export class VehicleManager {
     physicsSystem: PhysicsSystem;
-    settings: VehicleFourWheelSettings;
-    carBody: Jolt.Body;
-    constraint: Jolt.VehicleConstraint;
+    settings: VehicleFourWheelSettings; //@ts-ignore
+    carBody: Jolt.Body; //@ts-ignore
+    constraint: Jolt.VehicleConstraint; //@ts-ignore
     controller: Jolt.WheeledVehicleController;
 
     // listeners for collision events
-    private preStepListeners = [];
-    private postCollideListeners = [];
-    private postStepListeners = [];
-
+    /*
+  private preStepListeners = [];
+  private postCollideListeners = [];
+  private postStepListeners = [];
+*/
     //listneer for actions
     private actionListeners = [];
 
     //this holds the threejs objects
     threeObject = new THREE.Object3D();
+    //@ts-ignore this is created by a function but TS says it isn't
     debugObject: THREE.Mesh;
     wheels: Map<string, WheelState> = new Map();
 
@@ -61,7 +59,7 @@ export class VehicleManager {
         return this.isDebugging;
     }
 
-    constructor(physicsSystem: PhysicsSystem, settings) {
+    constructor(physicsSystem: PhysicsSystem, settings: any) {
         this.settings = settings;
         this.physicsSystem = physicsSystem;
         this.createBody();
@@ -83,19 +81,14 @@ export class VehicleManager {
         const carBodySettings = new Raw.module.BodyCreationSettings(
             carShape,
             new Raw.module.RVec3(...this.settings.bodyPosition),
-            Raw.module.Quat.prototype.sRotation(
-                new Raw.module.Vec3(0, 1, 0),
-                Math.PI
-            ),
+            Raw.module.Quat.prototype.sRotation(new Raw.module.Vec3(0, 1, 0), Math.PI),
             Raw.module.EMotionType_Dynamic,
             Layer.MOVING
         );
         carBodySettings.mOverrideMassProperties =
             Raw.module.EOverrideMassProperties_CalculateInertia;
-        carBodySettings.mMassPropertiesOverride.mMass =
-            this.settings.vehicleMass!;
-        this.carBody =
-            this.physicsSystem.bodyInterface.CreateBody(carBodySettings);
+        carBodySettings.mMassPropertiesOverride.mMass = this.settings.vehicleMass!;
+        this.carBody = this.physicsSystem.bodyInterface.CreateBody(carBodySettings);
         // TODO: destroy everything
         Raw.module.destroy(carBodySettings);
         /* VERRY VERY IMPORTANT
@@ -134,19 +127,17 @@ export class VehicleManager {
         vehicle.mWheels.clear();
         const wheelsToCreate = ['fl', 'fr', 'bl', 'br'];
         //we are going to hold the wheels for after the constraint is created
-        const wheelHolder = [];
-        wheelsToCreate.forEach((corner, i) => {
+        const wheelHolder: any = [];
+        wheelsToCreate.forEach((corner) => {
             const wheel = createWheelSettings(this.settings, corner);
             vehicle.mWheels.push_back(wheel);
             wheelHolder.push(wheel);
         });
 
         //controller
-        const controllerSettings =
-            new Raw.module.WheeledVehicleControllerSettings();
+        const controllerSettings = new Raw.module.WheeledVehicleControllerSettings();
         controllerSettings.mEngine.mMaxTorque = this.settings.maxEngineTorque!;
-        controllerSettings.mTransmission.mClutchStrength =
-            this.settings.clutchStrength!;
+        controllerSettings.mTransmission.mClutchStrength = this.settings.clutchStrength!;
         vehicle.mController = controllerSettings;
 
         // Front Diff
@@ -154,24 +145,19 @@ export class VehicleManager {
         const frontWheelDrive = new Raw.module.VehicleDifferentialSettings();
         frontWheelDrive.mLeftWheel = FL_WHEEL;
         frontWheelDrive.mRightWheel = FR_WHEEL;
-        frontWheelDrive.mLimitedSlipRatio =
-            this.settings.leftRightLimitedSlipRatio!;
+        frontWheelDrive.mLimitedSlipRatio = this.settings.leftRightLimitedSlipRatio!;
         if (this.settings.fourWheelDrive)
-            frontWheelDrive.mEngineTorqueRatio =
-                this.settings.splitEngineTorqueFront || 0.5;
+            frontWheelDrive.mEngineTorqueRatio = this.settings.splitEngineTorqueFront || 0.5;
         controllerSettings.mDifferentials.push_back(frontWheelDrive);
-        controllerSettings.mDifferentialLimitedSlipRatio =
-            this.settings.frontBackLimitedSlipRatio!;
+        controllerSettings.mDifferentialLimitedSlipRatio = this.settings.frontBackLimitedSlipRatio!;
 
         // Rear Diff
         if (this.settings.fourWheelDrive) {
             const rearWheelDrive = new Raw.module.VehicleDifferentialSettings();
             rearWheelDrive.mLeftWheel = BL_WHEEL;
             rearWheelDrive.mRightWheel = BR_WHEEL;
-            rearWheelDrive.mLimitedSlipRatio =
-                this.settings.leftRightLimitedSlipRatio!;
-            rearWheelDrive.mEngineTorqueRatio =
-                this.settings.splitEngineTorqueRear || 0.5;
+            rearWheelDrive.mLimitedSlipRatio = this.settings.leftRightLimitedSlipRatio!;
+            rearWheelDrive.mEngineTorqueRatio = this.settings.splitEngineTorqueRear || 0.5;
             controllerSettings.mDifferentials.push_back(rearWheelDrive);
         }
 
@@ -191,14 +177,12 @@ export class VehicleManager {
             vehicle.mAntiRollBars.push_back(rearRollBar);
         }
 
-        this.constraint = new Raw.module.VehicleConstraint(
-            this.carBody,
-            vehicle
-        );
+        this.constraint = new Raw.module.VehicleConstraint(this.carBody, vehicle);
         console.log('constraint active', this.constraint.IsActive());
         //NOW we can create the wheelStates
         // TODO this process seems dirty....
-        wheelHolder.forEach((wheel, i) => {
+        //@ts-ignore
+        wheelHolder.forEach((wheel: any, i: number) => {
             const wheelState = new WheelState(this.constraint, i);
             this.wheels.set(wheelsToCreate[i], wheelState);
             this.threeObject.add(wheelState.threeObject);
@@ -208,10 +192,7 @@ export class VehicleManager {
         let tester;
         switch (this.settings.castType) {
             case 'cylinder':
-                tester = new Raw.module.VehicleCollisionTesterCastCylinder(
-                    Layer.MOVING,
-                    0.05
-                );
+                tester = new Raw.module.VehicleCollisionTesterCastCylinder(Layer.MOVING, 0.05);
                 break;
             case 'sphere':
                 tester = new Raw.module.VehicleCollisionTesterCastSphere(
@@ -247,102 +228,88 @@ export class VehicleManager {
             body2,
             subShapeID2
         ) => {
+            //this exists solely to get typescript to stop complainig
+            //@ts-ignore
+            const uselessprop = wheelIndex + tireFrictionDirection + subShapeID2;
+            //@ts-ignore this is a TS bug in wrapPointer
             body2 = Raw.module.wrapPointer(body2, Raw.module.Body);
+            //@ts-ignore
             return Math.sqrt(tireFriction * body2.GetFriction()); // This is the default calculation
         };
         callbacks.OnPreStepCallback = (vehicle, deltaTime, physicsSystem) => {
-            this.triggerListeners(
-                'preStepListeners',
-                vehicle,
-                deltaTime,
-                physicsSystem
-            );
+            this.triggerListeners('preStepListeners', vehicle, deltaTime, physicsSystem);
         };
-        callbacks.OnPostCollideCallback = (
-            vehicle,
-            deltaTime,
-            physicsSystem
-        ) => {
-            this.triggerListeners(
-                'postCollideListeners',
-                vehicle,
-                deltaTime,
-                physicsSystem
-            );
+        callbacks.OnPostCollideCallback = (vehicle, deltaTime, physicsSystem) => {
+            this.triggerListeners('postCollideListeners', vehicle, deltaTime, physicsSystem);
         };
         callbacks.OnPostStepCallback = (vehicle, deltaTime, physicsSystem) => {
-            this.triggerListeners(
-                'postStepListeners',
-                vehicle,
-                deltaTime,
-                physicsSystem
-            );
+            this.triggerListeners('postStepListeners', vehicle, deltaTime, physicsSystem);
         };
         callbacks.SetVehicleConstraint(this.constraint);
     }
     //trigger listeners
-    triggerListeners(listenerType, vehicle, deltaTime, physicsSystem) {
+    triggerListeners(listenerType: any, vehicle: any, deltaTime: any, physicsSystem: any) {
+        //@ts-ignore
         const listeners = this[listenerType];
-        listeners.forEach((listener) => {
+        listeners.forEach((listener: any) => {
             listener(vehicle, deltaTime, physicsSystem);
         });
     }
     // for actions
-    triggerActions(action) {
-        this.actionListeners.forEach((listener) => {
+    triggerActions(action: any) {
+        this.actionListeners.forEach((listener: any) => {
             listener(action);
         });
     }
     // add a listener to the correct type and return a function to remove the listener
-    private addListener(listenerType, listener) {
+    private addListener(listenerType: any, listener: any) {
+        //@ts-ignore
         this[listenerType].push(listener);
         return () => {
-            this[listenerType] = this[listenerType].filter(
-                (l) => l !== listener
-            );
+            //@ts-ignore
+            this[listenerType] = this[listenerType].filter((l: any) => l !== listener);
         };
     }
     //explicit callback shorthands
-    onPreStep(listener) {
+    onPreStep(listener: any) {
         return this.addListener('preStepListeners', listener);
     }
-    onPostCollide(listener) {
+    onPostCollide(listener: any) {
         return this.addListener('postCollideListeners', listener);
     }
-    onPostStep(listener) {
+    onPostStep(listener: any) {
         return this.addListener('postStepListeners', listener);
     }
     // take an action type and filter it
-    onAction(actionType: string, listener) {
-        const newListener = (action) => {
+    onAction(actionType: string, listener: any) {
+        const newListener = (action: any) => {
             if (action === actionType) listener(action, this);
         };
+        //@ts-ignore
         this.actionListeners.push(newListener);
         return () => {
-            this.actionListeners = this.actionListeners.filter(
-                (l) => l !== newListener
-            );
+            this.actionListeners = this.actionListeners.filter((l) => l !== newListener);
         };
     }
     //* Input Handling ====================================
-    move(direction) {
+    move(direction: any) {
         //console.log('move', direction);
         this.moveDirection = direction;
     }
-    setHandBrake(value) {
+    setHandBrake(value: any) {
         this.handBrake = value;
     }
-    setBrake(value) {
+    setBrake(value: any) {
         this.brake = value;
     }
-    triggerTurbo(extraTime?) {
+    triggerTurbo(extraTime?: any) {
         this.turboActive = true;
         this.turboTimeLimit;
         setTimeout(() => {
             this.turboActive = false;
         }, extraTime || this.turboTimeLimit);
     }
-    setPosition(position) {
+    setPosition(position: any) {
         this.physicsSystem.bodyInterface.SetPosition(
             this.carBody.GetID(),
             vec3.jolt(position),
@@ -359,25 +326,19 @@ export class VehicleManager {
         this.physicsSystem.addPostStepListener(this.postPhysicsUpdate);
     }
     */
-    prePhysicsUpdate(deltaTime) {
+    //@ts-ignore deltaTime not used at the moment but it's here if we need it
+    prePhysicsUpdate(deltaTime: number) {
         let forward = this.moveDirection.y;
         const right = this.moveDirection.x;
         let brake = 0;
         let handBrake = 0;
         // if we have reveresed direction
         if (this.previousForward * forward < 0) {
-            const rotation = quat.joltToThree(
-                this.carBody.GetRotation().Conjugated()
-            );
-            const linearVelocity = vec3.joltToThree(
-                this.carBody.GetLinearVelocity()
-            );
+            const rotation = quat.joltToThree(this.carBody.GetRotation().Conjugated());
+            const linearVelocity = vec3.joltToThree(this.carBody.GetLinearVelocity());
             const velocity = linearVelocity.applyQuaternion(rotation).z;
             // if we are moving either direction
-            if (
-                (forward > 0 && velocity < -0.1) ||
-                (forward < 0 && velocity > 0.1)
-            ) {
+            if ((forward > 0 && velocity < -0.1) || (forward < 0 && velocity > 0.1)) {
                 //brake while not stopped
                 forward = 0;
                 brake = 1;
@@ -394,12 +355,11 @@ export class VehicleManager {
             this.physicsSystem.bodyInterface.ActivateBody(this.carBody.GetID());
         }
     }
+    //@ts-ignore
     postPhysicsUpdate(deltaTime) {
         // lets try what happens if we update the render state after the world tick
         this.threeObject.position.copy(vec3.three(this.carBody.GetPosition()));
-        this.threeObject.quaternion.copy(
-            quat.joltToThree(this.carBody.GetRotation())
-        );
+        this.threeObject.quaternion.copy(quat.joltToThree(this.carBody.GetRotation()));
         this.updateWheelTransforms();
     }
     //update the wheels

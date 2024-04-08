@@ -4,17 +4,9 @@ so much and can be reused for things like NPC's */
 import * as THREE from 'three';
 import { MathUtils } from 'three';
 import Jolt from 'jolt-physics';
-import { Raw, initJolt } from '../raw';
-const jolt = Raw.module;
-import { Layer } from './physics-system';
-import {
-    _matrix4,
-    _position,
-    _quaternion,
-    _rotation,
-    _scale,
-    _vector3
-} from '../tmp';
+import { Raw } from '../raw';
+import { Layer, PhysicsSystem } from './physics-system';
+import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
 import { quat, vec3 } from '../utils';
 import { generateBodySettings } from './body-system';
 
@@ -55,13 +47,13 @@ export class characterControllerSystem {
     direction = new THREE.Vector3(0, 0, 0);
     velocity = new THREE.Vector3(0, 0, 0);
 
-    public threeObject;
+    public threeObject: any;
 
     // **Primary Holder Object ***
-    character;
+    character: any;
     //rig anchor
-    anchor;
-    anchorID;
+    anchor: any;
+    anchorID: any;
     // State properties ------------------------------
     isCrouched = false;
     allowSliding = false;
@@ -87,10 +79,10 @@ export class characterControllerSystem {
     //active speed allows variable running speeds
     private activeSpeed = 6;
     // shapes of the character
-    private standingShape;
-    private crouchingShape;
+    private standingShape: any;
+    private crouchingShape: any;
 
-    private characterContactListener;
+    private characterContactListener: any;
     // Rotation properties
     currentRotation = new THREE.Quaternion();
     targetRotation = new THREE.Quaternion();
@@ -101,21 +93,19 @@ export class characterControllerSystem {
     // movement vectors
     private movementInput = new THREE.Vector3();
     private desiredVelocity = new THREE.Vector3();
-    private jumpBlocked = false;
+    //private jumpBlocked = false;
     private jumpCounter = 0;
     private isJumping = false;
 
     // testing props
     oldPosition = new THREE.Vector3();
 
-    constructor(physicsSystem) {
+    constructor(physicsSystem: PhysicsSystem) {
         this.physicsSystem = physicsSystem;
         this.joltInterface = physicsSystem.joltInterface;
         this.bodySystem = physicsSystem.bodySystem;
-        this.objectVsBroadPhaseLayerFilter =
-            this.joltInterface.GetObjectVsBroadPhaseLayerFilter();
-        this.objectLayerPairFilter =
-            this.joltInterface.GetObjectLayerPairFilter();
+        this.objectVsBroadPhaseLayerFilter = this.joltInterface.GetObjectVsBroadPhaseLayerFilter();
+        this.objectLayerPairFilter = this.joltInterface.GetObjectLayerPairFilter();
         this.movingBPFilter = new Raw.module.DefaultBroadPhaseLayerFilter(
             this.objectVsBroadPhaseLayerFilter,
             Layer.MOVING
@@ -129,72 +119,66 @@ export class characterControllerSystem {
         // Set a default shape size (know it will be overwritten by the user
         this.setCapsule(1, 2);
         this.initCharacter();
-        this.physicsSystem.addPreStepListener((deltaTime) =>
+        this.physicsSystem.addPreStepListener((deltaTime: number) =>
             this.prePhysicsUpdate(deltaTime)
         );
     }
     //* Contact Listeners =================================
 
     initCharacterContactListener() {
-        this.characterContactListener =
-            new Raw.module.CharacterContactListenerJS();
+        this.characterContactListener = new Raw.module.CharacterContactListenerJS();
         this.characterContactListener.OnAdjustBodyVelocity = (
-            character,
-            body2,
-            linearVelocity,
-            angularVelocity
+            _character: Jolt.CharacterVirtual,
+            body2: Jolt.Body,
+            linearVelocity: Jolt.Vec3,
+            _angularVelocity: Jolt.Vec3
         ) => {
+            //@ts-ignore wrapPointer TS error
             body2 = Raw.module.wrapPointer(body2, Raw.module.Body);
-            linearVelocity = Raw.module.wrapPointer(
-                linearVelocity,
-                Raw.module.Vec3
-            );
+            //@ts-ignore
+            linearVelocity = Raw.module.wrapPointer(linearVelocity, Raw.module.Vec3);
             // this is where the movement from conveyor belts and other things can be added
         };
         this.characterContactListener.OnContactValidate = (
-            character,
-            bodyID2,
-            subShapeID2
+            character: Jolt.CharacterVirtual,
+            bodyID2: Jolt.BodyID,
+            _subShapeID2: Jolt.SubShapeID
         ) => {
+            //@ts-ignore wrapPointer TS error
             bodyID2 = Raw.module.wrapPointer(bodyID2, Raw.module.Body);
+            //@ts-ignore wrapPointer TS error
             character = Raw.module.wrapPointer(character, Raw.module.Body);
             // this seems to be a space to trigger sensors
             return true;
         };
         this.characterContactListener.OnContactAdded = (
-            character,
-            bodyID2,
-            subShapeID2,
-            contactPosition,
-            contactNormal,
-            settings
+            _character: Jolt.CharacterVirtual,
+            _bodyID2: Jolt.BodyID,
+            _subShapeID2: Jolt.SubShapeID,
+            _contactPosition: Jolt.Vec3,
+            _contactNormal: Jolt.Vec3,
+            _settings: any
         ) => {
             // not using this at the moment
         };
         this.characterContactListener.OnContactSolve = (
-            character,
-            bodyID2,
-            subShapeID2,
-            contactPosition,
-            contactNormal,
-            contactVelocity,
-            contactMaterial,
-            characterVelocity,
-            newCharacterVelocity
+            character: any,
+            _bodyID2: Jolt.BodyID,
+            _subShapeID2: Jolt.SubShapeID,
+            _contactPosition: Jolt.Vec3,
+            contactNormal: Jolt.Vec3,
+            contactVelocity: Jolt.Vec3,
+            _contactMaterial: Jolt.PhysicsMaterial,
+            _characterVelocity: Jolt.Vec3,
+            newCharacterVelocity: Jolt.Vec3
         ) => {
             character = Raw.module.wrapPointer(character, Raw.module.Body);
-            contactVelocity = Raw.module.wrapPointer(
-                contactVelocity,
-                Raw.module.Vec3
-            );
-            newCharacterVelocity = Raw.module.wrapPointer(
-                newCharacterVelocity,
-                Raw.module.Vec3
-            );
-            contactNormal = Raw.module.wrapPointer(
-                contactNormal,
-                Raw.module.Vec3
-            );
+            //@ts-ignore wrapPointer TS error
+            contactVelocity = Raw.module.wrapPointer(contactVelocity, Raw.module.Vec3);
+            //@ts-ignore
+            newCharacterVelocity = Raw.module.wrapPointer(newCharacterVelocity, Raw.module.Vec3);
+            //@ts-ignore
+            contactNormal = Raw.module.wrapPointer(contactNormal, Raw.module.Vec3);
 
             if (
                 !this.allowSliding &&
@@ -236,9 +220,7 @@ export class characterControllerSystem {
         // see if the issue is a shape issue
         this.character.SetShape(
             this.standingShape,
-            1.5 *
-                this.physicsSystem.physicsSystem.GetPhysicsSettings()
-                    .mPenetrationSlop,
+            1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
             this.movingBPFilter,
             this.movingLayerFilter,
             this.bodyFilter,
@@ -256,8 +238,7 @@ export class characterControllerSystem {
         const bodySettings = generateBodySettings(shapeSettings, {
             bodyType: 'rig'
         });
-        const anchor =
-            this.physicsSystem.bodyInterface.CreateBody(bodySettings);
+        const anchor = this.physicsSystem.bodyInterface.CreateBody(bodySettings);
         this.anchorID = anchor.GetID();
         // we have to generate a correct bodyState
         const anchorHandle = this.physicsSystem.bodySystem.addExistingBody(
@@ -271,7 +252,7 @@ export class characterControllerSystem {
         Raw.module.destroy(bodySettings);
     }
     // set the capsule shape for the character
-    setCapsule(radius, height) {
+    setCapsule(radius: number, height: number) {
         this.characterHeightStanding = height;
         this.characterRadiusStanding = radius;
         this.characterHeightCrouching = height * 0.5;
@@ -311,7 +292,7 @@ export class characterControllerSystem {
         // TODO: Destroy all the jolt stuff now its created
     }
 
-    prePhysicsUpdate(deltaTime) {
+    prePhysicsUpdate(deltaTime: number) {
         // locks the character in a up position
         const characterUp = vec3.joltToThree(this.character.GetUp());
         // TODO: consider angular velocity to slightly rotate (wolfram GDC2014)
@@ -320,29 +301,23 @@ export class characterControllerSystem {
         // Most of the next few actions are applying gravity/force to the character
         // prevents odd hovering
         if (!this.enableStickToFloor) {
-            this.updateSettings.mStickToFloorStepDown =
-                Raw.module.Vec3.prototype.sZero();
+            this.updateSettings.mStickToFloorStepDown = Raw.module.Vec3.prototype.sZero();
         } else {
             const vec = characterUp
                 .clone()
-                .multiplyScalar(
-                    -this.updateSettings.mStickToFloorStepDown.Length()
-                );
+                .multiplyScalar(-this.updateSettings.mStickToFloorStepDown.Length());
             this.updateSettings.mStickToFloorStepDown.Set(vec.x, vec.y, vec.z);
         }
 
         if (!this.enableWalkStairs) {
-            this.updateSettings.mWalkStairsStepUp =
-                Raw.module.Vec3.prototype.sZero();
+            this.updateSettings.mWalkStairsStepUp = Raw.module.Vec3.prototype.sZero();
         } else {
             const vec = characterUp
                 .clone()
                 .multiplyScalar(this.updateSettings.mWalkStairsStepUp.Length());
             this.updateSettings.mWalkStairsStepUp.Set(vec.x, vec.y, vec.z);
         }
-        characterUp.multiplyScalar(
-            -this.physicsSystem.physicsSystem.GetGravity().Length()
-        );
+        characterUp.multiplyScalar(-this.physicsSystem.physicsSystem.GetGravity().Length());
 
         this.character.ExtendedUpdate(
             deltaTime,
@@ -356,17 +331,14 @@ export class characterControllerSystem {
         );
 
         // move the three object
-        this.threeCharacter.position.copy(
-            vec3.joltToThree(this.character.GetPosition())
-        );
-        this.threeCharacter.quaternion.copy(
-            quat.joltToThree(this.character.GetRotation())
-        );
+        this.threeCharacter.position.copy(vec3.joltToThree(this.character.GetPosition()));
+        this.threeCharacter.quaternion.copy(quat.joltToThree(this.character.GetRotation()));
         // update the anchor
         this.physicsSystem.bodyInterface.SetPositionAndRotation(
             this.anchorID,
             this.character.GetPosition(),
-            this.character.GetRotation()
+            this.character.GetRotation(),
+            Raw.module.EActivation_Activate
         );
     }
     // Movement Functions ------------------------------
@@ -382,10 +354,7 @@ export class characterControllerSystem {
                 this.currentRotationSlerp = 1;
                 this.isRotating = false;
             }
-            this.currentRotation.slerp(
-                this.targetRotation,
-                this.currentRotationSlerp
-            );
+            this.currentRotation.slerp(this.targetRotation, this.currentRotationSlerp);
 
             this.character.SetRotation(quat.threeToJolt(this.currentRotation));
         }
@@ -396,18 +365,15 @@ export class characterControllerSystem {
         // rotate based on the direction
         if (this.rotateOnMove && direction.length() > 0)
             this.setRotation(
-                new THREE.Quaternion().setFromUnitVectors(
-                    new THREE.Vector3(0, 0, -1),
-                    direction
-                )
+                new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction)
             );
     }
 
     // move the character in space
-    private applyMovement(deltaTime?) {
+    private applyMovement(deltaTime = 1) {
         //TODO: resolve a way to remove this clone
         const movementDirection = this.movementInput.clone();
-        const jump = this.isJumping;
+        //const jump = this.isJumping;
         const _tmpVec3 = new Raw.module.Vec3();
         // can the user defy physics and move while airborne
         // also if the user passes a direction (allows jump without direction input)
@@ -420,13 +386,9 @@ export class characterControllerSystem {
             if (this.enableCharacterInertia) {
                 this.desiredVelocity.multiplyScalar(0.75);
                 //TODO this add is why we need the clone
-                this.desiredVelocity.add(
-                    movementDirection.multiplyScalar(0.25 * this.activeSpeed)
-                );
+                this.desiredVelocity.add(movementDirection.multiplyScalar(0.25 * this.activeSpeed));
             } else {
-                this.desiredVelocity
-                    .copy(movementDirection)
-                    .multiplyScalar(this.activeSpeed);
+                this.desiredVelocity.copy(movementDirection).multiplyScalar(this.activeSpeed);
             }
         } else {
             // While in air we allow sliding
@@ -434,8 +396,7 @@ export class characterControllerSystem {
         }
         // Maintain the up orientation
         _tmpVec3.Set(this.upRotationX, 0, this.upRotationZ);
-        const characterUpRotation =
-            Raw.module.Quat.prototype.sEulerAngles(_tmpVec3);
+        const characterUpRotation = Raw.module.Quat.prototype.sEulerAngles(_tmpVec3);
         this.character.SetUp(characterUpRotation.RotateAxisY());
         // this is overriding our existing rotation
         //this.character.SetRotation(characterUpRotation);
@@ -443,32 +404,22 @@ export class characterControllerSystem {
 
         this.character.UpdateGroundVelocity();
         const characterUp = vec3.joltToThree(this.character.GetUp());
-        const linearVelocity = vec3.joltToThree(
-            this.character.GetLinearVelocity()
-        );
+        const linearVelocity = vec3.joltToThree(this.character.GetLinearVelocity());
         const currentVerticalVelocity = characterUp
             .clone()
             .multiplyScalar(linearVelocity.dot(characterUp));
-        const groundVelocity = vec3.joltToThree(
-            this.character.GetGroundVelocity()
-        );
-        const gravity = vec3.joltToThree(
-            this.physicsSystem.physicsSystem.GetGravity()
-        );
+        const groundVelocity = vec3.joltToThree(this.character.GetGroundVelocity());
+        const gravity = vec3.joltToThree(this.physicsSystem.physicsSystem.GetGravity());
 
         let newVelocity;
-        const movingTowardsGround =
-            currentVerticalVelocity.y - groundVelocity.y < 0.1;
+        const movingTowardsGround = currentVerticalVelocity.y - groundVelocity.y < 0.1;
 
         // If on ground and not moving away from ground
         if (
-            this.character.GetGroundState() ==
-                Raw.module.EGroundState_OnGround && // If on ground
+            this.character.GetGroundState() == Raw.module.EGroundState_OnGround && // If on ground
             (this.enableCharacterInertia
                 ? movingTowardsGround // Inertia enabled: And not moving away from ground
-                : !this.character.IsSlopeTooSteep(
-                      this.character.GetGroundNormal()
-                  ))
+                : !this.character.IsSlopeTooSteep(this.character.GetGroundNormal()))
         ) {
             // reset the jump counter
             this.jumpCounter = 0;
@@ -492,21 +443,15 @@ export class characterControllerSystem {
         }
 
         // Gravity
-        newVelocity.add(
-            gravity.multiplyScalar(deltaTime).applyQuaternion(upRotation)
-        );
+        newVelocity.add(gravity.multiplyScalar(deltaTime | 1).applyQuaternion(upRotation));
 
         if (playerControlsHorizontalVelocity) {
             // Player input
             // console.log('player velocity', this.desiredVelocity);
-            newVelocity.add(
-                this.desiredVelocity.clone().applyQuaternion(upRotation)
-            );
+            newVelocity.add(this.desiredVelocity.clone().applyQuaternion(upRotation));
         } else {
             // Preserve horizontal velocity
-            const currentHorizontalVelocity = linearVelocity.sub(
-                currentVerticalVelocity
-            );
+            const currentHorizontalVelocity = linearVelocity.sub(currentVerticalVelocity);
             newVelocity.add(currentHorizontalVelocity);
         }
 
@@ -517,24 +462,22 @@ export class characterControllerSystem {
         this.character.SetLinearVelocity(_tmpVec3);
         //this.oldPosition = newVelocity.clone();
     }
-
-    setCrouched = (crouched, forceUpdate) => {
+    // TODO Fix this
+    setCrouched = (crouched: boolean, forceUpdate: boolean) => {
         if (crouched != this.isCrouched || forceUpdate) {
             let newShape;
-            let newGeometry;
+            //let newGeometry;
             if (crouched) {
                 newShape = this.crouchingShape;
-                newGeometry = this.threeCrouchingGeometry;
+                //newGeometry = this.threeCrouchingGeometry;
             } else {
                 newShape = this.standingShape;
-                newGeometry = this.threeStandingGeometry;
+                //newGeometry = this.threeStandingGeometry;
             }
             if (
                 this.character.SetShape(
                     newShape,
-                    1.5 *
-                        this.physicsSystem.physicsSystem.GetPhysicsSettings()
-                            .mPenetrationSlop,
+                    1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
                     this.movingBPFilter,
                     this.movingLayerFilter,
                     this.bodyFilter,
@@ -557,7 +500,7 @@ export class characterControllerSystem {
             this.isJumping = false;
         }, 100);
     }
-    startRunning(speed?) {
+    startRunning(speed?: any) {
         const newSpeed = speed || this.characterSpeed * 2;
         this.activeSpeed = newSpeed;
         //notify
@@ -568,20 +511,20 @@ export class characterControllerSystem {
         this.triggerActionListeners('stopRunning');
     }
     // Action Listener Functions ----------------------------
-    addActionListener = (listener) => {
+    addActionListener = (listener: any) => {
+        //@ts-ignore
         this.actionListeners.push(listener);
     };
-    removeActionListener = (listener) => {
-        this.actionListeners = this.actionListeners.filter(
-            (l) => l !== listener
-        );
+    removeActionListener = (listener: any) => {
+        this.actionListeners = this.actionListeners.filter((l) => l !== listener);
     };
-    triggerActionListeners = (action, payload?) => {
+    triggerActionListeners = (action: any, payload?: any) => {
+        //@ts-ignore
         this.actionListeners.forEach((listener) => listener(action, payload));
     };
     // watch function takes an action and a callback and adds the correct listener
-    watch = (action, callback) => {
-        const listener = (a) => {
+    watch = (action: any, callback: any) => {
+        const listener = (a: any) => {
             if (a === action) callback();
         };
         this.addActionListener(listener);

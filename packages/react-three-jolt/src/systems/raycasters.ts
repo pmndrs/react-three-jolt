@@ -4,14 +4,14 @@ import * as THREE from 'three';
 
 import Jolt from 'jolt-physics';
 import { Raw } from '../raw';
-import { vec3, quat } from '../utils';
+import { vec3 } from '../utils';
 
 export class QuerySystem {
     physicsSystem: PhysicsSystem;
     joltPhysicsSystem: Jolt.PhysicsSystem;
     joltInterface: Jolt.JoltInterface;
 
-    constructor(physicsSystem) {
+    constructor(physicsSystem: PhysicsSystem) {
         this.physicsSystem = physicsSystem;
         this.joltPhysicsSystem = physicsSystem.physicsSystem;
         this.joltInterface = physicsSystem.joltInterface;
@@ -41,6 +41,7 @@ export class Raycaster {
 
     //important
     type = 'closest';
+    // @ts-ignore
     collector: CastRayCollector;
     hits: RaycastHit[] = [];
 
@@ -55,9 +56,10 @@ export class Raycaster {
     endColor = '#FE654F';
 
     // store multi debug items until cleared
+    // @ts-ignore
     debugObject: THREE.Object3D;
 
-    constructor(joltPhysicsSystem, joltInterface) {
+    constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         this.joltPhysicsSystem = joltPhysicsSystem;
         this.joltInterface = joltInterface;
         // these two filters mean the ray will cast as if its a dynamic object
@@ -99,12 +101,8 @@ export class Raycaster {
         return this.doCullBackFaces;
     }
     set cullBackFaces(value) {
-        if (value)
-            this.raySettings.mBackFaceMode =
-                Raw.module.EBackFaceMode_IgnoreBackFaces;
-        else
-            this.raySettings.mBackFaceMode =
-                Raw.module.EBackFaceMode_CollideWithBackFaces;
+        if (value) this.raySettings.mBackFaceMode = Raw.module.EBackFaceMode_IgnoreBackFaces;
+        else this.raySettings.mBackFaceMode = Raw.module.EBackFaceMode_CollideWithBackFaces;
     }
 
     //* Methods ---------------------------------------
@@ -130,26 +128,24 @@ export class Raycaster {
         this.type = type;
         switch (type) {
             case 'any':
-                this.collector =
-                    new Raw.module.CastRayAnyHitCollisionCollector();
+                this.collector = new Raw.module.CastRayAnyHitCollisionCollector();
                 break;
             case 'all':
-                this.collector =
-                    new Raw.module.CastRayAllHitCollisionCollector();
+                this.collector = new Raw.module.CastRayAllHitCollisionCollector();
                 break;
             default:
-                this.collector =
-                    new Raw.module.CastRayClosestHitCollisionCollector();
+                this.collector = new Raw.module.CastRayClosestHitCollisionCollector();
                 break;
         }
     }
     // ease of life handler to match how threeJS does setting the raycaster
-    set(origin, direction) {
+    set(origin: THREE.Vector3, direction: THREE.Vector3) {
         this.origin = origin;
         this.direction = direction;
     }
     // do the cast, runs optional handlers and returns the hits
-    cast(successHandler?, failHandler?) {
+    // @ts-ignore early bail return triggers TS
+    cast(successHandler?: any, failHandler?: any) {
         // clear the collector
         this.collector.Reset();
         //clear the hits
@@ -157,13 +153,16 @@ export class Raycaster {
         //run the cast
         this.rawCast();
         //handle results
+        // @ts-ignore jolt collector TS issue
         if (this.collector.HadHit()) {
             if (this.type === 'all') {
                 // multi-hit case
+                // @ts-ignore Jolt TS issue
                 for (let i = 0; i < this.collector.mHits.size(); i++) {
                     const hit = new RaycastHit(
                         this.joltPhysicsSystem,
                         this.ray,
+                        // @ts-ignore jolt TS issue for collector
                         this.collector.mHits.at(i),
                         i
                     );
@@ -176,6 +175,7 @@ export class Raycaster {
                 const hit = new RaycastHit(
                     this.joltPhysicsSystem,
                     this.ray,
+                    // @ts-ignore Jolt TS issue
                     this.collector.mHit,
                     0
                 );
@@ -199,17 +199,22 @@ export class Raycaster {
         if (failHandler) failHandler();
     }
     // ease of life handler to change the origin when casting
-    castFrom(origin, successHandler?, failHandler?) {
+    castFrom(origin: THREE.Vector3, successHandler?: any, failHandler?: any) {
         this.origin = origin;
         return this.cast(successHandler, failHandler);
     }
     // ease of life to cast from the origin to a point
-    castTo(destination, successHandler?, failHandler?) {
+    castTo(destination: THREE.Vector3, successHandler?: any, failHandler?: any) {
         this.direction = destination.clone().sub(this.origin);
         return this.cast(successHandler, failHandler);
     }
     // ease of life to set an origin and point
-    castBetween(origin, destination, successHandler?, failHandler?) {
+    castBetween(
+        origin: THREE.Vector3,
+        destination: THREE.Vector3,
+        successHandler?: any,
+        failHandler?: any
+    ) {
         this.origin = origin;
         this.direction = vec3.three(destination).sub(this.origin);
         return this.cast(successHandler, failHandler);
@@ -218,7 +223,7 @@ export class Raycaster {
     //* Debugging -------------------------------------
     // Not sure I want this on all raycasts, maybe a subclass or hook?
     //set the scene and init the debugger values
-    initDebugging(scene, color?) {
+    initDebugging(scene: THREE.Scene, color?: any) {
         this.debugObject = new THREE.Object3D();
         scene.add(this.debugObject);
         if (color) this.lineColor = color;
@@ -284,10 +289,7 @@ export class Raycaster {
             colors[i * 3 + 2] = color.b;
         });
         // set the geometry attributes
-        geometry.setAttribute(
-            'position',
-            new THREE.BufferAttribute(positions, 3)
-        );
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         geometry.computeBoundingBox();
         // copy the points object
@@ -334,25 +336,30 @@ export class Raycaster {
 //TODO: This might have some bind/apply scope issues
 export class AdvancedRaycaster extends Raycaster {
     collector: Jolt.CastRayCollectorJS = new Raw.module.CastRayCollectorJS();
+    //@ts-ignore
     activeBody: Jolt.Body;
     collisionCount: number = 0;
     hits: RaycastHit[] = [];
-    constructor(joltPhysicsSystem, joltInterface) {
+    constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         super(joltPhysicsSystem, joltInterface);
 
         //preload the reset with our own
     }
     // pass through for the onBody
-    onBody(handler) {
+    onBody(handler: any) {
         this.collector.OnBody = (body) => {
+            //@ts-ignore wrapPointer TS bug
             body = Raw.module.wrapPointer(body, Raw.module.Body);
+            //@ts-ignore
             this.activeBody = body;
             handler(body, this.collector);
         };
     }
     // runs on every hit
-    addHit(handler) {
+    addHit(handler: any) {
+        //@ts-ignore
         this.collector.AddHit = (result: Jolt.RayCastResult) => {
+            //@ts-ignore wrap pointer TS bug
             result = Raw.module.wrapPointer(result, Raw.module.RayCastResult);
             const hit = new RaycastHit(
                 this.joltPhysicsSystem,
@@ -367,7 +374,7 @@ export class AdvancedRaycaster extends Raycaster {
             if (bail) this.collector.UpdateEarlyOutFraction(result.mFraction);
         };
     }
-    onReset(handler?) {
+    onReset(handler?: any) {
         this.collector.Reset = () => {
             this.collisionCount = 0;
             this.hits = [];
@@ -381,7 +388,8 @@ export class AdvancedRaycaster extends Raycaster {
 
     // slight override on the parent class as we have to call override on our
     // raw handler.
-    cast(successHandler?, failHandler?) {
+    //@ts-ignore
+    cast(successHandler?: any, failHandler?: any) {
         this.rawCast();
         this.reset();
         if (this.hits.length > 0) {
@@ -407,10 +415,10 @@ export class RaycastHit {
     index: number;
 
     //not sure how to get these
-    triangleIndex: number;
+    // triangleIndex: number;
     private joltPhysicsSystem: Jolt.PhysicsSystem;
     constructor(
-        joltPhysicsSystem,
+        joltPhysicsSystem: Jolt.PhysicsSystem,
         ray: Jolt.RRayCast,
         mHit: Jolt.RayCastResult,
         index = 0,
@@ -448,13 +456,8 @@ export class RaycastHit {
         const bodyID = new Raw.module.BodyID(this.bodyHandle);
         const shapeID = new Raw.module.SubShapeID();
         shapeID.SetValue(this.shapeIdValue);
-        const body = this.joltPhysicsSystem
-            .GetBodyLockInterfaceNoLock()
-            .TryGetBody(bodyID);
-        const joltNormal = body.GetWorldSpaceSurfaceNormal(
-            shapeID,
-            vec3.jolt(this.position)
-        );
+        const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
+        const joltNormal = body.GetWorldSpaceSurfaceNormal(shapeID, vec3.jolt(this.position));
         const toReturn = vec3.three(joltNormal);
         // destroy jolt items
         Raw.module.destroy(joltNormal);
@@ -462,13 +465,15 @@ export class RaycastHit {
         Raw.module.destroy(bodyID);
         return toReturn;
     }
-
+    //TODO Fix this to work with the bodyID Handle after removing BodyID
+    /*
     get material(): Jolt.PhysicsMaterial {
         const shape = this.joltPhysicsSystem
             .GetBodyInterface()
             .GetShape(this.bodyID);
         return shape.GetMaterial(this.shapeId);
     }
+    */
 }
 
 // Multicast takes an array of positions and casts rays to all of them
@@ -482,11 +487,11 @@ export class Multicaster {
     rays: { origin: THREE.Vector3; destination: THREE.Vector3 }[] = [];
     results: {
         origin: THREE.Vector3;
-        destination?;
-        direction?;
+        destination?: any;
+        direction?: any;
         hits: RaycastHit | RaycastHit[];
     }[] = [];
-    constructor(joltPhysicsSystem, joltInterface) {
+    constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         this.joltPhysicsSystem = joltPhysicsSystem;
         this.joltInterface = joltInterface;
         this.raycaster = new Raycaster(joltPhysicsSystem, joltInterface);
@@ -506,25 +511,22 @@ export class Multicaster {
     }
 
     // set the collector type
-    setCollector(type) {
+    setCollector(type: any) {
         this.raycaster.setCollector(type);
     }
-    // cast with just the positions
-    cast(successHandler?, failHandler?) {
+    //@ts-ignore cast with just the positions
+    cast(successHandler?: any, failHandler?: any) {
         this.hits = [];
         this.positions.forEach((position) => {
-            this.raycaster.castFrom(
-                position,
-                (hit: RaycastHit | RaycastHit[]) => {
-                    if (Array.isArray(hit)) this.hits.push(...hit);
-                    else this.hits.push(hit);
-                    this.results.push({
-                        origin: vec3.three(position).clone(),
-                        direction: this.raycaster.direction.clone(),
-                        hits: hit
-                    });
-                }
-            );
+            this.raycaster.castFrom(position, (hit: RaycastHit | RaycastHit[]) => {
+                if (Array.isArray(hit)) this.hits.push(...hit);
+                else this.hits.push(hit);
+                this.results.push({
+                    origin: vec3.three(position).clone(),
+                    direction: this.raycaster.direction.clone(),
+                    hits: hit
+                });
+            });
         });
         if (this.hits.length > 0) {
             if (successHandler) successHandler(this.results, this.hits);
@@ -532,11 +534,11 @@ export class Multicaster {
         }
         if (failHandler) failHandler();
     }
-    // cast with the rays
-    castRays(successHandler?, failHandler?) {
+    //@ts-ignore cast with the rays
+    castRays(successHandler?: any, failHandler?: any) {
         this.hits = [];
-        this.rays.forEach((ray, i) => {
-            this.raycaster.castBetween(ray.origin, ray.destination, (hit) => {
+        this.rays.forEach((ray) => {
+            this.raycaster.castBetween(ray.origin, ray.destination, (hit: any) => {
                 if (Array.isArray(hit)) this.hits.push(...hit);
                 else this.hits.push(hit);
                 this.results.push({

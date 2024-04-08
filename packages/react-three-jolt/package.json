@@ -44,6 +44,7 @@
     "react-dom": "^18.2.0"
   },
   "dependencies": {
+    "gamepad.js": "^2.1.0",
     "jolt-physics": "^0.22.0"
   },
   "devDependencies": {

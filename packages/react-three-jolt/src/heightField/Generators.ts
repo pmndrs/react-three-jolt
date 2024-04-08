@@ -12,10 +12,7 @@ export function textureToCanvas(texture: THREE.Texture) {
     return canvas;
 }
 
-export async function imageUrlToImageData(
-    url: string,
-    scalingFactor?: number,
-): Promise<ImageData> {
+export async function imageUrlToImageData(url: string, scalingFactor?: number): Promise<ImageData> {
     return new Promise((resolve, reject) => {
         const image = new Image();
         image.onload = () => {
@@ -25,12 +22,8 @@ export async function imageUrlToImageData(
                 reject(new Error('No context'));
                 return;
             }
-            const width = scalingFactor
-                ? image.width * scalingFactor
-                : image.width;
-            const height = scalingFactor
-                ? image.height * scalingFactor
-                : image.height;
+            const width = scalingFactor ? image.width * scalingFactor : image.width;
+            const height = scalingFactor ? image.height * scalingFactor : image.height;
             canvas.width = width;
             canvas.height = height;
             context.drawImage(image, 0, 0, width, height);
@@ -58,7 +51,7 @@ export function textureToImageData(texture: THREE.Texture): ImageData {
         height / 2,
         height / -2,
         1,
-        1000,
+        1000
     );
     const planeGeometry = new THREE.PlaneGeometry(width, height);
     const planeMaterial = new THREE.MeshBasicMaterial({ map: texture });
@@ -79,10 +72,11 @@ export function textureToImageData(texture: THREE.Texture): ImageData {
 export function applyHeightmapImgDataToPlane(
     plane: THREE.Mesh | THREE.PlaneGeometry,
     heightmap: ImageData,
-    maxHeight: number,
+    maxHeight: number
 ) {
     // This is the size data of the image, not the plane
-    const { width, height } = heightmap;
+    // const { width, height } = heightmap;
+    const { width } = heightmap;
     const geometry = plane instanceof THREE.Mesh ? plane.geometry : plane;
     const vertices = geometry.attributes.position.array as Float32Array;
     const vertexCount = vertices.length / 3;
@@ -116,7 +110,7 @@ export function applyHeightmapImgDataToPlane(
 export async function applyHeightmapToPlane(
     plane: THREE.Mesh,
     heightmap: string | THREE.Texture,
-    displacementScale: number,
+    displacementScale: number
 ) {
     let heightmapImgData: ImageData;
     if (typeof heightmap === 'string') {

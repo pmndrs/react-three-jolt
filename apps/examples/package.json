@@ -11,6 +11,7 @@
   "packageManager": "yarn@4.0.2",
   "dependencies": {
     "@react-three/jolt": "0.0.0-development",
+    "leva": "^0.9.35",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "three": "^0.163.0"

@@ -1,15 +1,8 @@
 // creates a jolt constrain given two bodies
-import { Jolt } from 'jolt-physics';
 import { useJolt } from './';
-import { Raw } from '../raw';
-import { useEffect, useMemo, useRef, Ref } from 'react';
-import { useImperativeInstance } from './use-imperative-instance';
-import { PhysicsSystem } from '../systems/physics-system';
-import {
-    Raycaster,
-    AdvancedRaycaster,
-    Multicaster
-} from '../systems/raycasters';
+import { useMemo } from 'react';
+import * as THREE from 'three';
+import { Raycaster, AdvancedRaycaster, Multicaster } from '../';
 
 // helper function to take a list of bodies and add them to the same filter group
 
@@ -18,11 +11,13 @@ export const useRaycaster = (
     direction?: THREE.Vector3 | number[] | null,
     type?: string
 ) => {
-    const { jolt, physicsSystem } = useJolt();
+    const { physicsSystem } = useJolt();
     //const raycaster = useRef<Raycaster | null>(null);
     const raycaster: Raycaster = useMemo(() => {
-        const caster = physicsSystem.getRaycaster();
+        const caster: Raycaster = physicsSystem.getRaycaster();
+        //@ts-ignore
         if (origin) caster.origin = origin;
+        //@ts-ignore
         if (direction) caster.direction = direction;
         if (type) caster.setCollector(type);
 
@@ -48,9 +43,9 @@ export const useRaycaster = (
 export const useAdvancedRaycaster = (
     origin?: THREE.Vector3,
     direction?: THREE.Vector3,
-    type: string
+    type?: string
 ) => {
-    const { jolt, physicsSystem } = useJolt();
+    const { physicsSystem } = useJolt();
     const raycaster: AdvancedRaycaster = useMemo(() => {
         const caster = physicsSystem.getAdvancedRaycaster();
         if (origin) caster.origin = origin;
@@ -67,7 +62,7 @@ export const useMulticaster = (
     direction?: THREE.Vector3,
     type?: string
 ) => {
-    const { jolt, physicsSystem } = useJolt();
+    const { physicsSystem } = useJolt();
     const raycaster: Multicaster = useMemo(() => {
         const caster = physicsSystem.getMulticaster();
         if (origin) caster.origin = origin;

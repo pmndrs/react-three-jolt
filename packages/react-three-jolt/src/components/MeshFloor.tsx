@@ -7,13 +7,15 @@ EXPECT this to fail in a worker.
 However, it is a good example of how to create/use jolt directly so I'm using it
 if You really wanted a body like this, probably use the heigtfield instead
 */
-import { RigidBody } from './RidgedBody';
+//import { RigidBody } from './RidgedBody';
 import { createMeshFloor, createMeshFromShape } from '../utils/meshTools';
 import { useEffect, useRef } from 'react';
 import { useJolt } from '../hooks';
+import * as THREE from 'three';
+import React from 'react';
 
 export const MeshFloor = ({ size = 20, position = [0, 0, 0], ...rest }) => {
-    const meshRef = useRef();
+    const meshRef = useRef<THREE.Mesh>(null);
     const { bodySystem } = useJolt();
 
     useEffect(() => {
@@ -26,7 +28,7 @@ export const MeshFloor = ({ size = 20, position = [0, 0, 0], ...rest }) => {
             meshRef.current.geometry = floorMesh;
             // push the body onto the system
             bodySystem.addExistingBody(meshRef.current, rawBody, {
-                bodyType: 'static',
+                bodyType: 'static'
             });
         }
     }, []);

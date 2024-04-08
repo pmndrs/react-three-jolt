@@ -6,13 +6,17 @@ import * as THREE from 'three';
 import { PhysicsSystem } from './physics-system';
 import { ConstraintSystem } from './constraint-system';
 import { characterControllerSystem } from './character-controller';
-import { vec3, quat, convertNegativeRadians } from '../utils/general';
-import { BodyState } from './body-system';
+//@ts-ignore
+import { vec3, quat, convertNegativeRadians } from '../utils/';
+import { BodyState } from './';
 export class CameraRigManager {
     private physicsSystem: PhysicsSystem;
     private constraintSystem: ConstraintSystem;
+    //@ts-ignore
     private characterSystem: characterControllerSystem;
+    //@ts-ignore
     private character: Jolt.CharacterVirtual;
+    //@ts-ignore
     private anchor: BodyState;
     isAttached = false;
 
@@ -22,18 +26,15 @@ export class CameraRigManager {
     allowSmoothStart = true;
     allowFollowDelay = false;
 
-    private timeRecentering = 0;
-    private isRecentering = false;
-
     // offset off the anchor of the base
     baseOffset = new THREE.Vector3(0, 2, 0);
 
     // base is a point that allows drift
     base: BodyState;
-    // pivot is a point that allows vertical rotation
+    //@ts-ignore pivot is a point that allows vertical rotation
     pivot: BodyState;
 
-    //mount is where the camera lives
+    //@ts-ignore mount is where the camera lives
     mount: BodyState;
 
     //threeJS scene
@@ -48,6 +49,7 @@ export class CameraRigManager {
 
     // cameras ---------------------------------
     cameras: Map<string, THREE.Camera> = new Map();
+    //@ts-ignore
     activeCamera: THREE.Camera;
     target: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
     targetOffset: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
@@ -56,7 +58,7 @@ export class CameraRigManager {
     private cameraChangeListeners = [];
 
     // listener for the loop. we put it here so we can cancel it
-    private loopListener;
+    //private loopListener;
 
     //debugging
     private isDebugging = true;
@@ -70,10 +72,11 @@ export class CameraRigManager {
 
     // holders for rig points
     points = new Map();
+    //@ts-ignore
     collarConstraint: Jolt.HingeConstraint;
     constraints = new Map();
 
-    constructor(scene, physicsSystem) {
+    constructor(scene: THREE.Scene, physicsSystem: PhysicsSystem) {
         this.scene = scene;
         this.physicsSystem = physicsSystem;
         this.constraintSystem = physicsSystem.constraintSystem;
@@ -90,7 +93,7 @@ export class CameraRigManager {
 
     //* Cameras ========================================
     // create a camera
-    createCamera(name, options?) {
+    createCamera(name: string, options?: string) {
         //TODO: not sure aspect ratio needs to be here
         const camera = new THREE.PerspectiveCamera(
             75,
@@ -98,7 +101,7 @@ export class CameraRigManager {
             0.1,
             1000
         );
-        // loop over options and set them
+        //@ts-ignore loop over options and set them
         if (options) for (const key in options) camera[key] = options[key];
         // add to list
         this.addCamera(name, camera);
@@ -115,7 +118,7 @@ export class CameraRigManager {
         this.cameras.set(name, camera);
     }
     // set the active camera
-    setActiveCamera(name) {
+    setActiveCamera(name: string) {
         const newCam = this.cameras.get(name);
         if (newCam) {
             this.activeCamera = newCam;
@@ -123,15 +126,16 @@ export class CameraRigManager {
         }
     }
     // get a camera
-    getCamera(name) {
+    getCamera(name: string) {
         return this.cameras.get(name);
     }
     // remove a camera
-    removeCamera(name) {
+    removeCamera(name: string) {
         this.cameras.delete(name);
     }
     // create a camera change listener
-    onCamera(change) {
+    onCamera(change: any) {
+        //@ts-ignore
         this.cameraChangeListeners.push(change);
         // return a function to remove the listener
         return () => {
@@ -143,14 +147,12 @@ export class CameraRigManager {
     // trigger the camera change listeners
     private triggerCameraChange() {
         console.log('triggering camera change', this.activeCamera);
-        this.cameraChangeListeners.forEach((listener) =>
-            listener(this.activeCamera)
-        );
+        this.cameraChangeListeners.forEach((listener: any) => listener(this.activeCamera));
     }
 
     //attach a camera to a point
     //it does this by making it a child of the threejs object of the point
-    attachCameraToPoint(camera, point) {
+    attachCameraToPoint(camera: THREE.Camera, point: any) {
         point.object.add(camera);
     }
     //* Anchor attachment ===================================
@@ -166,7 +168,7 @@ export class CameraRigManager {
     reAttach() {
         if (this.anchor) this.isAttached = true;
     }
-    attachToCharacter(characterSystem) {
+    attachToCharacter(characterSystem: characterControllerSystem) {
         this.characterSystem = characterSystem;
         this.character = characterSystem.character;
         this.attach(characterSystem.anchor);
@@ -195,24 +197,16 @@ export class CameraRigManager {
 
     createCollar() {
         const collar = this.createRigPoint('collar', { color: '#0098DE' });
-        const joint = this.constraintSystem.addConstraint(
-            'hinge',
-            this.base,
-            collar,
-            {
-                axis: new THREE.Vector3(0, 1, 0),
-                normal: new THREE.Vector3(0, 0, 1),
+        const joint = this.constraintSystem.addConstraint('hinge', this.base, collar, {
+            axis: new THREE.Vector3(0, 1, 0),
+            normal: new THREE.Vector3(0, 0, 1),
 
-                spring: {
-                    strength: 1
-                }
+            spring: {
+                strength: 1
             }
-        );
+        });
         // TODO convert this to the constraint map
-        this.collarConstraint = Raw.module.castObject(
-            joint,
-            Raw.module.HingeConstraint
-        );
+        this.collarConstraint = Raw.module.castObject(joint, Raw.module.HingeConstraint);
     }
 
     //create the camera mount
@@ -228,6 +222,7 @@ export class CameraRigManager {
         };
         const mountHandle = this.physicsSystem.bodySystem.addBody(
             mesh,
+            //@ts-ignore
             options
         );
         const mount = this.physicsSystem.bodySystem.getBody(mountHandle);
@@ -236,9 +231,9 @@ export class CameraRigManager {
         this.scene.add(mesh);
         // little bit of a hack
         //move the mount to where we want
-        const basePosition = this.base.getPosition();
+        const basePosition = this.base.position;
         const mountPosition = basePosition.add(new THREE.Vector3(0, 4, 8));
-        mount!.setPosition(mountPosition);
+        mount!.position = mountPosition;
         this.mount = mount!;
 
         // create the pivot
@@ -285,6 +280,7 @@ export class CameraRigManager {
         this.constraintSystem.addConstraint(
             'fixed',
             this.points.get('collar'),
+            //@ts-ignore
             mount
         );
     }
@@ -292,17 +288,18 @@ export class CameraRigManager {
     // attach to the physics loop
     private attachToLoop() {
         //TODO: consider postStep as there's a slight delay in position even if fixed
-        this.physicsSystem.addPreStepListener((deltaTime, subFrame) =>
+        this.physicsSystem.addPreStepListener((deltaTime: number, subFrame: number) =>
             this.handleUpdate(deltaTime, subFrame)
         );
     }
     // detach from the physics loop
+    //@ts-ignore
     private detachFromLoop() {
         this.physicsSystem.removeStepListener(this.handleUpdate);
     }
 
     // handler for when the frame updates
-    private handleUpdate(deltaTime, subFrame) {
+    private handleUpdate(deltaTime: number, _subFrame: number) {
         //console.log('update in cameraRIgh', deltaTime);
         //if we have an anchor update the base position
         this.updateBase(deltaTime);
@@ -311,19 +308,19 @@ export class CameraRigManager {
     }
 
     // Check if the base should move, if so move it smoothly
-    private updateBase(deltaTime) {
+    private updateBase(_deltaTime: number) {
         //if we have an anchor update the base position
         if (!this.anchor || !this.isAttached) return;
-        const newPosition = this.anchor.getPosition().add(this.baseOffset);
-        this.base.setPosition(newPosition);
+        const newPosition = this.anchor.position.add(this.baseOffset);
+        this.base.position = newPosition;
     }
 
     //udate the camera target position using the offset and direction
     updateTarget() {
         if (!this.anchor || this.collarConstraint == null) return;
         // for now we will just target the anchor position
-        const rotation = this.getCollarRotation();
-        const targetPosition: THREE.Vector3 = this.base.getPosition().clone();
+        //const rotation = this.getCollarRotation();
+        const targetPosition: THREE.Vector3 = this.base.position.clone();
         targetPosition.add(this.targetOffset);
         //console.log('rotation', rotation);
         //console.log('position before axis angle', targetPosition.toArray());
@@ -334,14 +331,14 @@ export class CameraRigManager {
 
     //loop over the cameras and change the target
     updateCameraLookAt() {
-        this.cameras.forEach((camera) => {
+        this.cameras.forEach((_camera) => {
             //camera.lookAt(this.target);
         });
     }
 
     //* Rig Movement ========================================
     // Rotate the collar
-    rotateCollar(angle) {
+    rotateCollar(angle: number) {
         // rotate using the motor
         // we set the state because "look" movement uses velocity
         this.collarConstraint.SetMotorState(Raw.module.EMotorState_Position);
@@ -369,7 +366,7 @@ export class CameraRigManager {
     set yaw(value) {
         this.rotateCollar(THREE.MathUtils.degToRad(value));
     }
-    rotatePivot(angle) {
+    rotatePivot(angle: number) {
         //rotate using the motor
         const pivotConstraint = this.constraints.get('pivot');
         pivotConstraint.SetMotorState(Raw.module.EMotorState_Position);
@@ -391,10 +388,10 @@ export class CameraRigManager {
 
     //TODO move this to the body system
     //create rig points
-    createRigPoint(name, options?): BodyState {
+    createRigPoint(name: string, options?: any): BodyState {
         const {
             color = '#767B91',
-            type = 'sphere',
+            // type = 'sphere',
             motionType
         } = options || {};
         /* / TODO Cylinder throws errors

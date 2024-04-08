@@ -6,10 +6,17 @@ import * as THREE from 'three';
 
 // create a heightfeild type floor
 // from the jolt js example
-export function createMeshFloor(n, cellSize, maxHeight, posX, posY, posZ) {
+export function createMeshFloor(
+    n: number,
+    cellSize: number,
+    _maxHeight: number,
+    posX: number,
+    posY: number,
+    posZ: number
+) {
     const jolt = Raw.module;
     // Create regular grid of triangles
-    const height = function (x, y) {
+    const height = function (x: number, y: number) {
         return Math.sin(x / 2) * Math.cos(y / 3);
     };
     const triangles = new jolt.TriangleList();
@@ -54,7 +61,7 @@ export function createMeshFloor(n, cellSize, maxHeight, posX, posY, posZ) {
         new jolt.Vec3(posX, posY, posZ),
         new jolt.Quat(0, 0, 0, 1),
         jolt.EMotionType_Static,
-        0,
+        0
     );
     return creationSettings;
 }
@@ -72,7 +79,7 @@ export function createMeshFromShape(shape: Jolt.Shape): THREE.BufferGeometry {
         jolt.AABox.prototype.sBiggest(),
         shape.GetCenterOfMass(),
         jolt.Quat.prototype.sIdentity(),
-        scale,
+        scale
     );
     jolt.destroy(scale);
 
@@ -80,7 +87,7 @@ export function createMeshFromShape(shape: Jolt.Shape): THREE.BufferGeometry {
     const vertices = new Float32Array(
         jolt.HEAPF32.buffer,
         triContext.GetVerticesData(),
-        triContext.GetVerticesSize() / Float32Array.BYTES_PER_ELEMENT,
+        triContext.GetVerticesSize() / Float32Array.BYTES_PER_ELEMENT
     );
 
     // Now move the triangle data to a buffer and clone it so that we can free the memory from the C++ heap (which could be limited in size)

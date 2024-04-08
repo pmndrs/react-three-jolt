@@ -2,7 +2,7 @@
 import Jolt from 'jolt-physics';
 import {
     //MathUtils,
-    Matrix4,
+    //    Matrix4,
     Object3D,
     // Quaternion,
     Vector3,
@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { Raw } from '../raw';
 
 import { vec3, quat } from '../utils';
-import { Layer } from './physics-system';
+import { Layer, BodyState } from './';
 import {
     ShapeSystem,
     getShapeSettingsFromObject,
@@ -20,7 +20,6 @@ import {
     createMeshForShape,
     AutoShape
 } from './shape-system';
-import { BodyState } from './body-state';
 
 // TYPES ========================================
 export type BodyType = 'dynamic' | 'static' | 'kinematic' | 'rig';
@@ -34,6 +33,8 @@ export interface GenerateBodyOptions {
     shapeType?: AutoShape;
     activation?: 'activate' | 'deactivate';
     jitter?: THREE.Vector3;
+    mass?: number;
+    size?: THREE.Vector3;
 }
 
 // ================================================
@@ -67,10 +68,7 @@ export class BodySystem {
         let settings = generateBodySettings(object, options);
         // if there are properties in the default, merge them with settings
         if (Object.keys(this.defaultBodySettings).length > 0) {
-            settings = mergeBodyCreationSettings(
-                settings,
-                this.defaultBodySettings
-            );
+            settings = mergeBodyCreationSettings(settings, this.defaultBodySettings);
         }
         const body = this.bodyInterface.CreateBody(settings);
         // remove the settings
@@ -88,21 +86,13 @@ export class BodySystem {
         body: Jolt.Body,
         options?: GenerateBodyOptions
     ): number {
-        const state = new BodyState(
-            object,
-            body,
-            this.joltPhysicsSystem,
-            this,
-            options?.index
-        );
+        const state = new BodyState(object, body, this.joltPhysicsSystem, this, options?.index);
         // generate the handle
         const handle = body.GetID().GetIndexAndSequenceNumber();
         // console.log('adding body', handle, options, state, object, body);
         // add to the correct map
-        if (options?.bodyType === 'static')
-            this.staticBodies.set(handle, state);
-        else if (options?.bodyType === 'kinematic')
-            this.kinematicBodies.set(handle, state);
+        if (options?.bodyType === 'static') this.staticBodies.set(handle, state);
+        else if (options?.bodyType === 'kinematic') this.kinematicBodies.set(handle, state);
         else this.dynamicBodies.set(handle, state);
 
         // allow to add the body but not activate it
@@ -155,8 +145,10 @@ export class BodySystem {
         const shapeSettings = generateHeightfieldShapeFromThree(planeMesh);
         //const position = new Raw.module.Vec3(0, -20, 0); // The image tends towards 'white', so offset it down closer to zero
         const quaternion = new Raw.module.Quat(0, 0, 0, 1);
+        //@ts-ignore
         const shape: Jolt.HeightFieldShape = shapeSettings.Create().Get();
         const size = shapeSettings.mSampleCount;
+        //@ts-ignore  yes it does exist
         const planeWidth = planeMesh.geometry.parameters.width;
         const scale = planeWidth / size;
         const offset = -size * scale * 0.5;
@@ -191,57 +183,56 @@ export class BodySystem {
     }
 
     // Activation Listeners ================================
+    //@ts-ignore
     private initializeActivationListeners() {
         const activationListener = new Raw.module.BodyActivationListenerJS();
+        //@ts-ignore
         activationListener.OnBodyActivated = (bodyId: Jolt.BodyID) => {
+            //@ts-ignore wrapPointer bug
             bodyId = Raw.module.wrapPointer(bodyId, Raw.module.BodyID);
-            this.triggerActivationListeners(
-                bodyId.GetIndexAndSequenceNumber(),
-                true
-            );
+            this.triggerActivationListeners(bodyId.GetIndexAndSequenceNumber());
         };
+        //@ts-ignore
         activationListener.OnBodyDeactivated = (bodyId: Jolt.BodyID) => {
+            //@ts-ignore wrapPointer bug
             bodyId = Raw.module.wrapPointer(bodyId, Raw.module.BodyID);
-            this.triggerActivationListeners(
-                bodyId.GetIndexAndSequenceNumber(),
-                false
-            );
+            this.triggerActivationListeners(bodyId.GetIndexAndSequenceNumber());
         };
 
         this.joltPhysicsSystem.SetBodyActivationListener(activationListener);
     }
-    private triggerActivationListeners(handle: number, state: boolean) {
+    private triggerActivationListeners(handle: number) {
         // go through the body system and trigger the activation listeners{
         const body = this.getBody(handle);
         if (!body) return;
 
-        body.isSleeping = !state;
         body.activationListeners.forEach((listener) => listener(body));
     }
 
     // Contact Listeners ===================================
+    //@ts-ignore
     private initializeContactListeners() {
         const contactListener = new Raw.module.ContactListenerJS();
+        //@ts-ignore
         contactListener.OnContactAdded = (
             body1: Jolt.Body,
             body2: Jolt.Body,
             manifold: Jolt.ContactManifold,
             settings: Jolt.ContactSettings
         ) => {
+            //@ts-ignore
             body1 = Raw.module.wrapPointer(body1, Raw.module.Body);
+            //@ts-ignore
             body2 = Raw.module.wrapPointer(body2, Raw.module.Body);
             const body1Handle = body1.GetID().GetIndexAndSequenceNumber();
             const body2Handle = body2.GetID().GetIndexAndSequenceNumber();
-            manifold = Raw.module.wrapPointer(
-                manifold,
-                Raw.module.ContactManifold
-            );
-            settings = Raw.module.wrapPointer(
-                settings,
-                Raw.module.ContactSettings
-            );
+            //@ts-ignore
+            manifold = Raw.module.wrapPointer(manifold, Raw.module.ContactManifold);
+            //@ts-ignore
+            settings = Raw.module.wrapPointer(settings, Raw.module.ContactSettings);
             // get the contact count, if it doesn't exist we are creating it
             const body1State = this.getBody(body1Handle);
+            //@ts-ignore
             let isContacting = body1State.isContacting(body2Handle);
 
             // check the body contact threshold as we may have JUST been in contact
@@ -249,9 +240,11 @@ export class BodySystem {
             if (isContacting === 0) {
                 const timestamp = Date.now();
                 const lastFinalRemoval =
+                    //@ts-ignore it'll come back
                     body1State!.contactTimestamps.get(body2Handle);
                 if (
                     lastFinalRemoval &&
+                    //@ts-ignore
                     timestamp - lastFinalRemoval < body1State.contactThreshold
                 ) {
                     isContacting = 1;
@@ -279,23 +272,22 @@ export class BodySystem {
                 settings
             );
         };
+        //@ts-ignore
         contactListener.OnContactPersisted = (
             body1: Jolt.Body,
             body2: Jolt.Body,
             manifold: Jolt.ContactManifold,
             settings: Jolt.ContactSettings
         ) => {
+            //@ts-ignore
             body1 = Raw.module.wrapPointer(body1, Raw.module.Body);
+            //@ts-ignore
             body2 = Raw.module.wrapPointer(body2, Raw.module.Body);
-            manifold = Raw.module.wrapPointer(
-                manifold,
-                Raw.module.ContactManifold
-            );
-            settings = Raw.module.wrapPointer(
-                settings,
-                Raw.module.ContactSettings
-            );
-
+            //@ts-ignore
+            manifold = Raw.module.wrapPointer(manifold, Raw.module.ContactManifold);
+            //@ts-ignore
+            settings = Raw.module.wrapPointer(settings, Raw.module.ContactSettings);
+            //@ts-ignore
             const numContacts = this.getBody(
                 body1.GetID().GetIndexAndSequenceNumber()
             ).isContacting(body2.GetID().GetIndexAndSequenceNumber());
@@ -310,13 +302,10 @@ export class BodySystem {
             );
         };
         // removed uses a weird subshapepair argument
-        contactListener.OnContactRemoved = (
-            subShapePair: Jolt.SubShapeIDPair
-        ) => {
-            subShapePair = Raw.module.wrapPointer(
-                subShapePair,
-                Raw.module.SubShapeIDPair
-            );
+        //@ts-ignore
+        contactListener.OnContactRemoved = (subShapePair: Jolt.SubShapeIDPair) => {
+            //@ts-ignore
+            subShapePair = Raw.module.wrapPointer(subShapePair, Raw.module.SubShapeIDPair);
             const numContacts = this.removeContactPair(
                 subShapePair.GetBody1ID().GetIndexAndSequenceNumber(),
                 subShapePair.GetBody2ID().GetIndexAndSequenceNumber()
@@ -327,6 +316,7 @@ export class BodySystem {
                     subShapePair.GetBody1ID().GetIndexAndSequenceNumber()
                 );
                 if (bodyState1)
+                    //@ts-ignore
                     bodyState1.contactTimestamps.set(
                         subShapePair.GetBody2ID().GetIndexAndSequenceNumber(),
                         Date.now()
@@ -365,8 +355,8 @@ export class BodySystem {
             type === 'added'
                 ? body.contactAddedListeners
                 : type === 'persisted'
-                ? body.contactPersistedListeners
-                : body.contactRemovedListeners;
+                  ? body.contactPersistedListeners
+                  : body.contactRemovedListeners;
         if (target.length)
             target.forEach((listener) =>
                 listener(body1, body2, numContacts, context, manifold, settings)
@@ -378,23 +368,28 @@ export class BodySystem {
     // add contact to body
     private addContactToBody(body: BodyState, contact: number) {
         // see if the contact exists, if so increment it
+        //@ts-ignore
         const current = body.contacts.get(contact);
         if (current) {
+            //@ts-ignore
             body.contacts.set(contact, current + 1);
             return current + 1;
         }
         // otherwise set it to 1
+        //@ts-ignore
         body.contacts.set(contact, 1);
         return 1;
     }
     // remove contact from body
     private removeContactFromBody(body: BodyState, contact: number) {
+        //@ts-ignore
         const current = body.contacts.get(contact);
         if (current) {
             if (current === 1) {
+                //@ts-ignore
                 body.contacts.delete(contact);
                 return 0;
-            }
+            } //@ts-ignore
             body.contacts.set(contact, current - 1);
             return current - 1;
         }
@@ -449,9 +444,7 @@ export function generateBodySettings(
     // can I move this into the args?
     const { bodyType = 'dynamic', shapeType } = options;
     // Generate or pass along the shape settings
-    const shapeSettings = isObject
-        ? getShapeSettingsFromObject(object, shapeType)
-        : object;
+    const shapeSettings = isObject ? getShapeSettingsFromObject(object, shapeType) : object;
     if (!shapeSettings) throw new Error('No shape settings found');
     // Due to a Jolt limitation we cant just pass the settings and have to generate the shape here
     const shape = shapeSettings.Create().Get();
@@ -459,8 +452,8 @@ export function generateBodySettings(
     // jolt.destroy(shapeSettings);
 
     // create position and quaternion from three to jolt
-    let position = new THREE.Vector3();
-    let quaternion = new THREE.Quaternion();
+    let position: any = new THREE.Vector3();
+    let quaternion: any = new THREE.Quaternion();
     if (isObject) {
         position.copy(object.position);
         quaternion.copy(object.quaternion);
@@ -505,10 +498,11 @@ export function generateBodySettings(
             layer = Layer.RIG;
             //rigs need to have no gravity
             // TODO fix these type warnings
-            if (!options.bodySettings?.mGravityFactor) {
+            /*
+            if (!options?.mGravityFactor) {
                 if (!options?.bodySettings) options.bodySettings = {};
                 options!.bodySettings.mGravityFactor = 0;
-            }
+            }*/
             break;
 
         default:
@@ -531,13 +525,7 @@ export function generateBodySettings(
     }
     // create the settings
     const settings = mergeBodyCreationSettings(
-        new jolt.BodyCreationSettings(
-            shape,
-            position,
-            quaternion,
-            motionType,
-            layer
-        ),
+        new jolt.BodyCreationSettings(shape, position, quaternion, motionType, layer),
         options.bodySettings
     );
     // Trimesh override to add mass and inertia
@@ -547,19 +535,16 @@ export function generateBodySettings(
             Raw.module.EOverrideMassProperties_MassAndInertiaProvided;
         // if the object is an object we need to get the size from it
         let size;
-        let mass = options.bodySettings?.mass || 200;
+        let mass = options?.mass || 200;
         if (isObject) {
             const box = new THREE.Box3().setFromObject(object);
             size = box.getSize(new Vector3());
         } else {
-            size = options.bodySettings?.size || new THREE.Vector3(1, 1, 1);
+            size = options?.size || new THREE.Vector3(1, 1, 1);
         }
         //size = new jolt.Vec3(1, 1, 1);
         //console.log('trimesh size', size, mass);
-        settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(
-            vec3.jolt(size),
-            mass
-        );
+        settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(vec3.jolt(size), mass);
     }
     // destroy the position and quaternion
     jolt.destroy(position);
@@ -572,7 +557,7 @@ export function generateBodySettings(
 
 // Change a bodies mass settings after already being created
 // src:PhoenixIllusion @ https://github.com/jrouwe/JoltPhysics.js/discussions/112
-export function changeMassInertia(body, mass) {
+export function changeMassInertia(body: Jolt.Body, mass: number) {
     const motionProps = body.GetMotionProperties();
     const massProps = body.GetShape().GetMassProperties();
     const inertia = massProps.mInertia;
@@ -592,7 +577,7 @@ export function changeMassInertia(body, mass) {
 
 // When debugging we need to create a three debug object
 // initially pulled from Jolt Demo,
-export function getThreeObjectForBody(body, color = '#E07A5F') {
+export function getThreeObjectForBody(body: Jolt.Body, color = '#E07A5F') {
     let shape = body.GetShape();
     // lets see if we can get the material color by the shape
     // TODO this isn't in Jolt.js yet.
@@ -610,6 +595,7 @@ export function getThreeObjectForBody(body, color = '#E07A5F') {
     switch (shape.GetSubType()) {
         case Raw.module.EShapeSubType_Box:
             shape = Raw.module.castObject(shape, Raw.module.BoxShape);
+            //@ts-ignore
             extent = vec3.three(shape.GetHalfExtent()).multiplyScalar(2);
             threeObject = new THREE.Mesh(
                 new THREE.BoxGeometry(extent.x, extent.y, extent.z, 1, 1, 1),
@@ -619,6 +605,7 @@ export function getThreeObjectForBody(body, color = '#E07A5F') {
         case Raw.module.EShapeSubType_Sphere:
             shape = Raw.module.castObject(shape, Raw.module.SphereShape);
             threeObject = new THREE.Mesh(
+                //@ts-ignore
                 new THREE.SphereGeometry(shape.GetRadius(), 32, 32),
                 material
             );
@@ -627,7 +614,9 @@ export function getThreeObjectForBody(body, color = '#E07A5F') {
             shape = Raw.module.castObject(shape, Raw.module.CapsuleShape);
             threeObject = new THREE.Mesh(
                 new THREE.CapsuleGeometry(
+                    //@ts-ignore
                     shape.GetRadius(),
+                    //@ts-ignore
                     2 * shape.GetHalfHeightOfCylinder(),
                     20,
                     10
@@ -639,8 +628,11 @@ export function getThreeObjectForBody(body, color = '#E07A5F') {
             shape = Raw.module.castObject(shape, Raw.module.CylinderShape);
             threeObject = new THREE.Mesh(
                 new THREE.CylinderGeometry(
+                    //@ts-ignore
                     shape.GetRadius(),
+                    //@ts-ignore
                     shape.GetRadius(),
+                    //@ts-ignore
                     2 * shape.GetHalfHeight(),
                     20,
                     1

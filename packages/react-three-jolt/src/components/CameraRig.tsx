@@ -3,21 +3,24 @@ import { useThree } from '@react-three/fiber';
 import { useConst, useJolt } from '../hooks';
 import { CameraRigManager } from '../systems/camera-rig-system';
 import { CharacterControllerContext } from './CharacterController';
-import { RigidBody } from './RidgedBody';
+//import { RigidBody } from './RidgedBody';
 import { useCommand } from '../useCommand';
 import * as THREE from 'three';
 export function CameraRig() {
+    //@ts-ignore
     const isAttached = useRef(false);
+    //@ts-ignore
     const settable = useConst('yep');
     const { characterSystem } = useContext(CharacterControllerContext);
-    const { jolt, physicsSystem } = useJolt();
+    const { physicsSystem } = useJolt();
+    //@ts-ignore
     const { camera, scene, controls } = useThree();
     const { set } = useThree(({ get, set }) => ({ get, set }));
 
     const cameraRig = useMemo(() => {
         return new CameraRigManager(scene, physicsSystem);
     }, [physicsSystem]);
-    const updateCamera = (camera) => {
+    const updateCamera = (camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) => {
         set({ camera: camera });
         //controls.update();
     };
@@ -40,20 +43,18 @@ export function CameraRig() {
     });
     useCommand('x', () => {
         console.log('setting pivot to: ', currentRotation.current);
-        cameraRig.rotatePivot(
-            THREE.MathUtils.degToRad(currentRotation.current)
-        );
+        cameraRig.rotatePivot(THREE.MathUtils.degToRad(currentRotation.current));
         currentRotation.current += 90;
     });
 
-    const getRandomRadian = () => {
+    /*    const getRandomRadian = () => {
         return Math.random() * Math.PI * 2;
     };
-
+*/
     useEffect(() => {
         if (!characterSystem) return;
         // create the camera listener first
-        const cameraListener = cameraRig.onCamera((camera) => {
+        const cameraListener = cameraRig.onCamera((camera: THREE.PerspectiveCamera) => {
             console.log('updating camera', camera);
             updateCamera(camera);
         });
@@ -63,6 +64,4 @@ export function CameraRig() {
             cameraListener();
         };
     }, [characterSystem]);
-
-    return <></>;
 }

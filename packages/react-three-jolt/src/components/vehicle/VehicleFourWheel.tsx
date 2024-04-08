@@ -1,10 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useConst, useJolt } from '../../hooks';
-import {
-    VehicleSystem,
-    VehicleFourWheelManager
-} from '../../systems/vehicles/';
+import { VehicleSystem, VehicleFourWheelManager } from '../../systems/vehicles/';
 import { useThree } from '@react-three/fiber';
 import { useCommand } from '../../useCommand';
 type VehicleFourWheelProps = {
@@ -41,12 +38,12 @@ export function VehicleFourWheel(props: VehicleFourWheelProps) {
         let newVehicle;
         switch (type) {
             case 'twoWheel':
-                newVehicle = vehicleSystem.addVehicle(name, {
+                newVehicle = vehicleSystem.addVehicle(name!, {
                     type: 'twoWheel'
                 });
                 break;
             default:
-                newVehicle = vehicleSystem.addVehicle(name);
+                newVehicle = vehicleSystem.addVehicle(name!);
         }
 
         vehicle.current = newVehicle;
@@ -59,12 +56,13 @@ export function VehicleFourWheel(props: VehicleFourWheelProps) {
 
     useEffect(() => {
         if (!controls) return;
-        vehicle.current.onPreStep((vehicleConstraint) => {
+        vehicle.current!.onPreStep((_vehicleConstraint: any) => {
             const bodyPosition = vehicle.current?.position.clone();
             // console.log('controls', controls);
+            //@ts-ignore
             controls.target = bodyPosition;
-            camera.position.add(bodyPosition.clone().sub(oldPosition));
-            oldPosition.copy(bodyPosition);
+            camera.position.add(bodyPosition!.clone().sub(oldPosition));
+            oldPosition.copy(bodyPosition!);
         });
     }, [controls]);
 
@@ -72,6 +70,7 @@ export function VehicleFourWheel(props: VehicleFourWheelProps) {
     // trigger position change
     useEffect(() => {
         if (!vehicle.current) return;
+        //@ts-ignore
         vehicle.current.setPosition(vec3.three(position));
     }, [position]);
 
@@ -80,10 +79,11 @@ export function VehicleFourWheel(props: VehicleFourWheelProps) {
         'move',
         (info) => {
             if (!vehicle.current) return;
+            //@ts-ignore
             const direction = new THREE.Vector3(info.value.x, info.value.y, 0);
             vehicle.current!.move(direction);
         },
-        (info) => {
+        (_info) => {
             vehicle.current!.move(new THREE.Vector3(0, 0, 0));
         },
         { asVector: true, inverted: { y: true } }
