@@ -1165,9 +1165,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@react-three/drei@npm:^9.105.1":
-  version: 9.105.1
-  resolution: "@react-three/drei@npm:9.105.1"
+"@react-three/drei@npm:^9.105.2":
+  version: 9.105.2
+  resolution: "@react-three/drei@npm:9.105.2"
   dependencies:
     "@babel/runtime": "npm:^7.11.2"
     "@mediapipe/tasks-vision": "npm:0.10.8"
@@ -1200,7 +1200,7 @@ __metadata:
   peerDependenciesMeta:
     react-dom:
       optional: true
-  checksum: 10c0/d9cf31df00eb1f596b5d72fc24595c3b8296a31d95bd6afe992cb2baab31ea10df9bf75f1d6ead6df38b462c3107c370c640ef92f7e2763f2017c112d94eb7ca
+  checksum: 10c0/1261f41ecb750c0187dc29fa34b9f091779970d931f3d4b10370a98b72ff14d630a27c01f8a495102cfe819725a8d13b2f89f7ff01421b02b153cfbabcdb3a29
   languageName: node
   linkType: hard
 
@@ -3935,7 +3935,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "examples@workspace:apps/examples"
   dependencies:
-    "@react-three/drei": "npm:^9.105.1"
+    "@react-three/drei": "npm:^9.105.2"
     "@react-three/jolt": "npm:0.0.0-development"
     "@types/react": "npm:^18.2.74"
     "@types/react-dom": "npm:^18.2.24"

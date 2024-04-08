@@ -16,7 +16,7 @@
     "three": "^0.163.0"
   },
   "devDependencies": {
-    "@react-three/drei": "^9.105.1",
+    "@react-three/drei": "^9.105.2",
     "@types/react": "^18.2.74",
     "@types/react-dom": "^18.2.24",
     "@types/three": "^0.163.0",
