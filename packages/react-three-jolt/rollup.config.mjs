@@ -12,7 +12,7 @@ export default [
         output: [
             {
                 //file: `dist/index.mjs`,
-                //dir: 'dist',
+                dir: 'dist',
                 format: 'es',
                 sourcemap: true,
                 exports: 'named'

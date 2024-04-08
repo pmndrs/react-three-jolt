@@ -1,32 +1,15 @@
 import * as THREE from 'three';
-import { Suspense, useEffect, useMemo, useRef } from 'react';
-import { Grid } from '@react-three/drei';
-import { useThree } from '@react-three/fiber';
+import { useEffect, useRef } from 'react';
 
-import { Physics } from './lib/components/Physics';
-import { RigidBody } from './lib/components/RidgedBody';
-import { Floor } from './lib/components/Floor';
-import { MeshFloor } from './lib/components/MeshFloor';
-import { Heightfield } from './lib/components/Heightfield';
-import { CharacterController } from './lib/components/CharacterController';
-import { CameraRig } from './lib/components/CameraRig';
-import { VehicleFourWheel } from './lib/components/vehicle';
-//helpers for example
-import { BoundBoxes } from './BoundBoxes';
 import {
-  useCommand,
-  useCommandState,
-  useGamepadForCameraControls,
-} from './lib/useCommand';
-import { useConst } from './lib/hooks';
+  Physics,
+  RigidBody,
+  Floor,
+  BodyState,
+  InstancedRigidBodyMesh,
+} from '@react-three/jolt';
+import { useConst } from '@react-three/jolt';
 import { useControls } from 'leva';
-
-const mesh = new THREE.Mesh();
-
-// heightfield stuff
-import { HeightfieldManager } from './lib/heightField/heightfieldManager';
-import React from 'react';
-import { BodyState, InstancedRigidBodyMesh } from '@react-three/jolt';
 
 // this is going to be the instancedMesh version
 export default function Experience() {
@@ -37,7 +20,7 @@ export default function Experience() {
   const { count } = useControls({
     count: { value: 100, min: 1, max: 2000, step: 1 },
   });
-  const setColors = (index) => {
+  const setColors = (index: number) => {
     const color = new THREE.Color();
     //loop over the instanceMesh starting at index and set a random color
     for (let i = index; i < instancedRef.current!.length; i++) {
@@ -59,8 +42,10 @@ export default function Experience() {
   // setup the teleporting of shapes
   useEffect(() => {
     if (fountainInterval.current) clearInterval(fountainInterval.current);
+    //@ts-ignore
     fountainInterval.current = setInterval(() => {
       const index = Math.floor(Math.random() * count);
+      //@ts-ignore
       instancedRef.current![index].position = [
         Math.random() * 2,
         10,
@@ -93,6 +78,8 @@ export default function Experience() {
           ref={instancedRef}
           count={count}
           position={[0, 8, 1]}
+          color="#ffffff"
+          rotation={[0, 0, 0]}
         >
           <boxGeometry args={[1, 1, 1]} />
           <meshStandardMaterial color="#F2CC8F" />

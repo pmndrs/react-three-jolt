@@ -6,6 +6,6 @@ export * from './Heightfield';
 export * from './InstancedRigidBody';
 export * from './MeshFloor';
 export * from './Physics';
-export * from './RidgedBody';
+export * from './RigidBody';
 //export * from './Shape';
 export * from './vehicle';

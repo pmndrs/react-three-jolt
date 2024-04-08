@@ -1,6 +1,6 @@
 // Floor component for jolt. it's essentially just a box
 import React from 'react';
-import { RigidBody } from './RidgedBody';
+import { RigidBody } from './RigidBody';
 
 export const Floor = ({ size = 20, position = [0, 0, 0], rotation = [0, 0, 0], ...rest }) => {
     return (

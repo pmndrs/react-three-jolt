@@ -120,7 +120,7 @@ export const App = () => {
                 }}
               >
                 <Routes>
-                  {Object.keys(routes).map((key, index, array) => (
+                  {Object.keys(routes).map((key) => (
                     <Route path={key} key={key} element={routes[key]} />
                   ))}
                 </Routes>

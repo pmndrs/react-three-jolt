@@ -89,7 +89,7 @@ export function RaycastSimpleDemo() {
     origin = raycaster.origin,
     direction = raycaster.origin,
     color = '#D81E5B',
-    hit?: RaycastHit
+    _hit?: RaycastHit
   ) => {
     const line = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([
