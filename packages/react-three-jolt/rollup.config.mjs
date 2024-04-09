@@ -8,7 +8,7 @@ import filesize from 'rollup-plugin-filesize';
 export default [
     {
         input: `./src/index.ts`,
-        external: ['@react-three/fiber', 'three', 'react', 'react-dom'],
+        external: ['@react-three/fiber', 'three', 'react', 'react-dom', 'jolt-physics'],
         inlineDynamicImports: true, // Add this line
         output: [
             {
