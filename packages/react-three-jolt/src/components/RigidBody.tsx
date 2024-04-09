@@ -2,22 +2,19 @@
 import React, {
     createContext,
     memo,
-    // MutableRefObject,
-    //RefObject,
     useEffect,
     useLayoutEffect,
     useMemo,
-    useRef
+    useRef,
+    forwardRef,
+    ReactNode
 } from 'react';
-import { forwardRef, ReactNode } from 'react';
+import * as THREE from 'three';
 import { Object3D } from 'three';
 import { useForwardedRef, useJolt } from '../hooks';
-//import * as THREE from 'three';
 import { getThreeObjectForBody } from '../systems/body-system';
-import * as THREE from 'three';
 import { vec3 } from '../utils';
 import { BodyState } from '../systems';
-//import { useImperativeInstance } from '../hooks/use-imperative-instance';
 
 interface RigidBodyProps {
     children: ReactNode;
@@ -37,6 +34,7 @@ interface RigidBodyProps {
     //TODO: do these work yet?
     scale?: number[];
     mass?: number;
+    // remove
     quaternion?: number[];
 }
 export interface RigidBodyContext {
@@ -62,7 +60,6 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             rotation,
             scale,
             mass,
-
             quaternion,
 
             debug: propDebug,
@@ -74,21 +71,18 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         } = props;
 
         const objectRef = useRef<Object3D>(null);
+        //TODO: Figure out way to put BodyState type on this ref
         const rigidBodyRef = useForwardedRef(forwardedRef);
         const debugMeshRef = useRef<THREE.Mesh>(null);
         // load the jolt stuff
-        const {
-            //physicsSystem,
-            bodySystem,
-            debug: physicsDebug
-        } = useJolt();
-
+        const { bodySystem, debug: physicsDebug } = useJolt();
+        // this allows us to debug on the physics system or the component specifically
         const debug = propDebug || physicsDebug;
         //* Load the body -------------------------------------
+        // TODO: is layoutEffect right over useEffect?
         useLayoutEffect(() => {
             if (objectRef.current) {
                 //handle options from props
-                // for the moment all we care about is bodyType
                 const options = {
                     bodyType: type || 'dynamic', // default to dynamic
                     shapeType: shape || null
@@ -99,12 +93,13 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                 //@ts-ignore
                 const bodyHandle = bodySystem.addBody(objectRef.current, options);
                 const body = bodySystem.getBody(bodyHandle);
-                /*setInterval(() => {
-                    const body = rigidBodyRef.current.body;
-                }, 1000);
-                */
                 rigidBodyRef.current = body;
             }
+            //destroy the rigidBody When this component is unmounted
+            return () => {
+                //@ts-ignore
+                bodySystem.removeBody(rigidBodyRef.current.handle);
+            };
         }, []);
         //*/ Debugging -------------------------------------
         useEffect(() => {
@@ -165,31 +160,3 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         );
     })
 );
-
-// trying with useImperativeInstance
-/*
-        const getRigitBody = useImperativeInstance(
-            () => {
-                //handle options from props
-                // for the moment all we care about is bodyType
-                const options = {
-                    bodyType: type || 'dynamic' // default to dynamic
-                };
-                const bodyHandle = bodySystem.addBody(
-                    objectRef.current,
-                    options
-                );
-                const body = bodySystem.getBody(bodyHandle);
-                rigidBodyRef.current = body;
-                console.log('Body Loaded', bodyHandle, body);
-                return body;
-            },
-            (instance: BodyState) => {
-                bodySystem.removeBody(instance.handle);
-            },
-            []
-        );
-        useEffect(() => {
-            getRigitBody();
-        }, [getRigitBody]);
-        */
