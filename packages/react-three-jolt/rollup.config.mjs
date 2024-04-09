@@ -36,6 +36,11 @@ export default [
                 inlineSources: true
             }),
             filesize()
-        ]
+        ],
+        // disable three-stdlib eval warning for now
+        onwarn: function (warning, warn) {
+            if (warning.code === 'EVAL') return;
+            warn(warning);
+        }
     }
 ];
