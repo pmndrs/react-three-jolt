@@ -7,6 +7,7 @@ import {
   //useJolt,
   useMulticaster,
   useRaycaster,
+  Floor,
 } from '@react-three/jolt';
 import * as THREE from 'three';
 
@@ -163,6 +164,7 @@ export function RaycastSimpleDemo() {
   // draw 5 cubes that land on the floor
   return (
     <>
+      <Floor position={[0, 0, 0]} size={100} />
       <RigidBody position={[0, 1, 0]}>
         <mesh>
           <boxGeometry args={[1, 1, 1]} />

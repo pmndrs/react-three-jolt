@@ -75,6 +75,9 @@ export const Physics: FC<PhysicsProps> = (props) => {
 
     suspend(() => initJolt(), []);
     const jolt = Raw.module;
+    useEffect(() => {
+        console.log('Physics Componment Mounting');
+    }, []);
     const physicsSystem = useConst(() => new PhysicsSystem());
     // we have to pass this here to catch before body creation
     if (defaultBodySettings) physicsSystem.bodySystem.defaultBodySettings = defaultBodySettings;
@@ -82,10 +85,8 @@ export const Physics: FC<PhysicsProps> = (props) => {
     const step = useCallback((dt: number) => {
         physicsSystem.onUpdate(dt);
     }, []);
-    console.log('physics system firing outside effect');
     // cleanup and destruction of system when component unmounts
     useEffect(() => {
-        console.log('Physics Componment Mounting');
         return () => {
             physicsSystem.destroy();
         };
@@ -94,7 +95,8 @@ export const Physics: FC<PhysicsProps> = (props) => {
     // These will be effects for props to send to the correct systems
 
     useEffect(() => {
-        // if (gravity != null) physicsSystem.setGravity(gravity);
+        //@ts-ignore
+        if (gravity != null) physicsSystem.setGravity(gravity);
     }, [gravity]);
 
     const context: JoltContext = useMemo(

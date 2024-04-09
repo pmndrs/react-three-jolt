@@ -123,7 +123,7 @@ export class Raycaster {
     }
     // set the collector
     setCollector(type = 'closest') {
-        console.log('setting collector', type);
+        //console.log('setting collector', type);
         // destroy exising collector
         if (this.collector) Raw.module.destroy(this.collector);
         this.type = type;

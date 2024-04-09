@@ -47,21 +47,6 @@ export interface Demo {
   (props: { children?: ReactNode }): JSX.Element;
 }
 
-const Floor = () => {
-  return (
-    <RigidBody type="static">
-      <Box
-        position={[0, -12.55 - 5, 0]}
-        scale={[200, 10, 200]}
-        rotation={[0, 0, 0]}
-        receiveShadow
-      >
-        <shadowMaterial opacity={0.2} />
-      </Box>
-    </RigidBody>
-  );
-};
-
 const routes: Record<string, ReactNode> = {
   '': <RaycastSimpleDemo />,
   //joints: <Joints />,
@@ -90,37 +75,33 @@ export const App = () => {
       }}
     >
       <Suspense fallback="Loading...">
-        <Canvas shadows dpr={1}>
+        <Canvas shadows dpr={1} camera={{ fov: 45, position: [0, 15, 27] }}>
+          <directionalLight
+            castShadow
+            position={[10, 10, 10]}
+            shadow-camera-bottom={-40}
+            shadow-camera-top={40}
+            shadow-camera-left={-40}
+            shadow-camera-right={40}
+            shadow-mapSize-width={1024}
+            shadow-bias={-0.0001}
+          />
+          <Environment preset="apartment" />
+
+          <OrbitControls enabled={cameraEnabled} />
           <Physics
             paused={paused}
             key={physicsKey}
             interpolate={interpolate}
             debug={debug}
           >
-            <directionalLight
-              castShadow
-              position={[10, 10, 10]}
-              shadow-camera-bottom={-40}
-              shadow-camera-top={40}
-              shadow-camera-left={-40}
-              shadow-camera-right={40}
-              shadow-mapSize-width={1024}
-              shadow-bias={-0.0001}
-            />
-            <Environment preset="apartment" />
-
-            <OrbitControls enabled={cameraEnabled} />
-
             <Routes>
               {Object.keys(routes).map((key) => (
                 <Route path={key} key={key} element={routes[key]} />
               ))}
             </Routes>
-
-            <Floor />
-
-            {perf && <Perf />}
           </Physics>
+          {perf && <Perf position="top-left" minimal className="perf" />}
         </Canvas>
       </Suspense>
 
@@ -137,7 +118,7 @@ export const App = () => {
       >
         {Object.keys(routes).map((key) => (
           <Link key={key} to={key} end>
-            {key.replace(/-/g, ' ') || 'Plinko'}
+            {key.replace(/-/g, ' ') || 'Raycasting: Boxes'}
           </Link>
         ))}
 
