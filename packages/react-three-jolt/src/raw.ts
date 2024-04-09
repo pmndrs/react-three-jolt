@@ -19,7 +19,8 @@ export const initJolt = async (jolt?: typeof Jolt) => {
         const joltInit = await import('jolt-physics');
         // debug module
         //const joltInit = await import('../jolt/jolt-physics.wasm-compat.js');
-
+        console.log('*** JOLT IMPORT SUCESSFUL ***');
         Raw.module = await joltInit.default();
+        console.log('*** JOLT INIT SUCESSFUL ***');
     }
 };

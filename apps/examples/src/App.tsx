@@ -91,46 +91,36 @@ export const App = () => {
     >
       <Suspense fallback="Loading...">
         <Canvas shadows dpr={1}>
-          <StrictMode>
-            <Physics
-              paused={paused}
-              key={physicsKey}
-              interpolate={interpolate}
-              debug={debug}
-            >
-              <directionalLight
-                castShadow
-                position={[10, 10, 10]}
-                shadow-camera-bottom={-40}
-                shadow-camera-top={40}
-                shadow-camera-left={-40}
-                shadow-camera-right={40}
-                shadow-mapSize-width={1024}
-                shadow-bias={-0.0001}
-              />
-              <Environment preset="apartment" />
+          <Physics
+            paused={paused}
+            key={physicsKey}
+            interpolate={interpolate}
+            debug={debug}
+          >
+            <directionalLight
+              castShadow
+              position={[10, 10, 10]}
+              shadow-camera-bottom={-40}
+              shadow-camera-top={40}
+              shadow-camera-left={-40}
+              shadow-camera-right={40}
+              shadow-mapSize-width={1024}
+              shadow-bias={-0.0001}
+            />
+            <Environment preset="apartment" />
 
-              <OrbitControls enabled={cameraEnabled} />
+            <OrbitControls enabled={cameraEnabled} />
 
-              <demoContext.Provider
-                value={{
-                  setDebug,
-                  setPaused,
-                  setCameraEnabled,
-                }}
-              >
-                <Routes>
-                  {Object.keys(routes).map((key) => (
-                    <Route path={key} key={key} element={routes[key]} />
-                  ))}
-                </Routes>
-              </demoContext.Provider>
+            <Routes>
+              {Object.keys(routes).map((key) => (
+                <Route path={key} key={key} element={routes[key]} />
+              ))}
+            </Routes>
 
-              <Floor />
+            <Floor />
 
-              {perf && <Perf />}
-            </Physics>
-          </StrictMode>
+            {perf && <Perf />}
+          </Physics>
         </Canvas>
       </Suspense>
 

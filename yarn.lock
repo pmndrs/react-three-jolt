@@ -4548,6 +4548,7 @@ __metadata:
     eslint: "npm:^9.0.0"
     eslint-plugin-react-hooks: "npm:^4.6.0"
     eslint-plugin-react-refresh: "npm:^0.4.6"
+    jolt-physics: "npm:^0.22.0"
     leva: "npm:^0.9.35"
     prettier: "npm:^3.2.5"
     r3f-perf: "npm:^7.2.1"

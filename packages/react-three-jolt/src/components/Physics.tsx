@@ -4,7 +4,7 @@ import Jolt from 'jolt-physics';
 //import InitJolt from 'jolt-physics/wasm-compat'
 import { suspend } from 'suspend-react';
 import { Raw, initJolt } from '../raw';
-import { type JoltContext, joltContext } from '../context'; 
+import { type JoltContext, joltContext } from '../context';
 import {
     FC,
     ReactNode,
@@ -82,6 +82,14 @@ export const Physics: FC<PhysicsProps> = (props) => {
     const step = useCallback((dt: number) => {
         physicsSystem.onUpdate(dt);
     }, []);
+    console.log('physics system firing outside effect');
+    // cleanup and destruction of system when component unmounts
+    useEffect(() => {
+        console.log('Physics Componment Mounting');
+        return () => {
+            physicsSystem.destroy();
+        };
+    }, [physicsSystem]);
 
     // These will be effects for props to send to the correct systems
 
