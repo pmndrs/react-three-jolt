@@ -5,7 +5,8 @@ import * as THREE from 'three';
 import { MathUtils } from 'three';
 import Jolt from 'jolt-physics';
 import { Raw } from '../raw';
-import { Layer, PhysicsSystem } from './physics-system';
+import { Layer } from '../constants'
+import { PhysicsSystem } from './physics-system';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
 import { quat, vec3 } from '../utils';
 import { generateBodySettings } from './body-system';

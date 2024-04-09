@@ -1,5 +1,5 @@
 // creates a jolt constrain given two bodies
-import { useJolt } from './';
+import { useJolt } from './hooks';
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { Raycaster, AdvancedRaycaster, Multicaster } from '../systems';

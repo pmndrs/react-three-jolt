@@ -5,6 +5,7 @@ export * from './systems';
 export * from './hooks';
 export * from './utils';
 export * from './components';
+export * from './constants';
 
 // move this to own package
 export * from './useCommand';

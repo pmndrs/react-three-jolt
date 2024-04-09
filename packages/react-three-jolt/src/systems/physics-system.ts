@@ -27,15 +27,7 @@ import {
 } from '../tmp';
 import { quat, vec3, anyVec3 } from '../utils';
 import { MathUtils, Quaternion, Vector3 } from 'three';
-
-// constants for the physics system
-export const Layer = {
-  MOVING: 0,
-  NON_MOVING: 1,
-  KINEMATIC: 2,
-  RIG: 3,
-};
-export const NUM_OBJECT_LAYERS = 3;
+import { Layer, NUM_OBJECT_LAYERS } from '../constants';
 
 export class PhysicsSystem {
   // Step Event Listeners

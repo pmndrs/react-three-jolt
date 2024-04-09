@@ -12,7 +12,8 @@ import * as THREE from 'three';
 import { Raw } from '../raw';
 
 import { vec3, quat } from '../utils';
-import { Layer, BodyState } from './';
+import { BodyState } from './body-state';
+import { Layer } from '../constants';
 import {
     ShapeSystem,
     getShapeSettingsFromObject,

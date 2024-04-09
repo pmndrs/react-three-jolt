@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import Jolt from 'jolt-physics';
 import { Raw } from '../../raw';
 import { vec3, quat } from '../../utils';
-import { Layer, PhysicsSystem } from '../physics-system';
+import { PhysicsSystem } from '../physics-system';
+import { Layer } from '../../constants';
 import {
   VehicleFourWheelSettings,
   WheelState,

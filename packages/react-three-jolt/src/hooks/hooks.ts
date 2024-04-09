@@ -1,5 +1,5 @@
 import { useContext, useRef } from 'react';
-import { joltContext } from '../components/Physics';
+import { joltContext } from '../context';
 
 // External Hooks ====================================
 // The core "useJolt" hook is just a wrapper around the joltContext

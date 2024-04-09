@@ -6,7 +6,8 @@ import { vec3, quat } from '../../utils';
 */
 import { PhysicsSystem } from '../physics-system';
 // import { WheelSettings } from './wheels';
-import { VehicleFourWheelManager, VehicleManagerTwoWheels } from './';
+import { VehicleFourWheelManager } from './VehicleManagerFourWheel';
+import { VehicleManagerTwoWheels } from './VehicleManagerTwoWheels';
 
 export class VehicleSystem {
   private physicsSystem;

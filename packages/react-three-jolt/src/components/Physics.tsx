@@ -4,9 +4,8 @@ import Jolt from 'jolt-physics';
 //import InitJolt from 'jolt-physics/wasm-compat'
 import { suspend } from 'suspend-react';
 import { Raw, initJolt } from '../raw';
-
+import { type JoltContext, joltContext } from '../context'; 
 import {
-    createContext,
     FC,
     ReactNode,
     //  ReactNode,
@@ -25,7 +24,6 @@ import FrameStepper from './FrameStepper';
 
 // physics system import
 import { PhysicsSystem } from '../systems/physics-system';
-import { BodySystem } from '../systems/body-system';
 
 // TODO: Move this to a better place
 declare module 'three' {
@@ -46,21 +44,6 @@ export interface SteppingState {
         }
     >;
 }
-
-// Context object
-export interface JoltContext {
-    jolt: typeof Jolt;
-    physicsSystem: PhysicsSystem;
-    bodySystem: BodySystem;
-    joltInterface: Jolt.JoltInterface;
-    //beforeStepCallbacks: WorldStepCallbackSet;
-    //afterStepCallbacks: WorldStepCallbackSet;
-    paused: boolean;
-    debug: boolean;
-    step: (dt: number) => void;
-}
-
-export const joltContext = createContext<JoltContext | undefined>(undefined);
 
 // Core component
 export interface PhysicsProps {

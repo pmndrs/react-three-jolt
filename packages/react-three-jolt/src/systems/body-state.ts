@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { Raw } from '../raw';
 
 import { vec3, quat, anyVec3 } from '../utils';
-import { BodySystem } from '.';
+import type { BodySystem } from './body-system';
 
 // Initital body object copied from r3/rapier's state object
 export class BodyState {

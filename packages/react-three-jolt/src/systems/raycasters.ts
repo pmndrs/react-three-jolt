@@ -1,5 +1,6 @@
 // this system lets us create raycasts, shapecasts, and specific collision tests
-import { Layer, PhysicsSystem } from './physics-system';
+import { PhysicsSystem } from './physics-system';
+import { Layer } from '../constants';
 import * as THREE from 'three';
 
 import Jolt from 'jolt-physics';

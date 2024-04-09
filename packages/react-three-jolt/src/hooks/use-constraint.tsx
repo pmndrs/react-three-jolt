@@ -1,5 +1,5 @@
 // creates a jolt constrain given two bodies
-import { useJolt } from './';
+import { useJolt } from './hooks';
 import { useRef, Ref } from 'react';
 import { useImperativeInstance } from './use-imperative-instance';
 
