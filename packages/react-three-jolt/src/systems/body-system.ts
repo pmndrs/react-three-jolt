@@ -125,6 +125,15 @@ export class BodySystem {
         // get the body so we can process it
         const body = this.getBody(bodyHandle);
         if (!body) return;
+        // check if the body exists in the simulation
+        // first check the simulation is still here (might be removed after physics is removed)
+        if (!this.joltPhysicsSystem) return;
+        if (!this.bodyInterface) return;
+        if (!this.bodyInterface.IsAdded(body.body.GetID())) {
+            console.log('body already removed');
+            return;
+        }
+
         // remove the body from the simulation
         this.bodyInterface.RemoveBody(body.body.GetID());
         // destroy it

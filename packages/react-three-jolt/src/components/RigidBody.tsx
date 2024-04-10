@@ -80,7 +80,8 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         const debug = propDebug || physicsDebug;
         //* Load the body -------------------------------------
         // TODO: is layoutEffect right over useEffect?
-        useLayoutEffect(() => {
+        useEffect(() => {
+            if (!bodySystem) return;
             if (objectRef.current) {
                 //handle options from props
                 const options = {
@@ -100,7 +101,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                 //@ts-ignore
                 bodySystem.removeBody(rigidBodyRef.current.handle);
             };
-        }, []);
+        }, [bodySystem]);
         //*/ Debugging -------------------------------------
         useEffect(() => {
             if (debug && debugMeshRef.current) {

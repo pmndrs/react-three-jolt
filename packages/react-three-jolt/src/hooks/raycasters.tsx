@@ -14,6 +14,7 @@ export const useRaycaster = (
     const { physicsSystem } = useJolt();
     //const raycaster = useRef<Raycaster | null>(null);
     const raycaster: Raycaster = useMemo(() => {
+        if (!physicsSystem) return null;
         const caster: Raycaster = physicsSystem.getRaycaster();
         //@ts-ignore
         if (origin) caster.origin = origin;
@@ -22,7 +23,7 @@ export const useRaycaster = (
         if (type) caster.setCollector(type);
 
         return caster;
-    }, [origin, direction, type]);
+    }, [origin, direction, type, physicsSystem]);
     /* lets try with a memo first
     useImperativeInstance(
         () => {
@@ -47,13 +48,14 @@ export const useAdvancedRaycaster = (
 ) => {
     const { physicsSystem } = useJolt();
     const raycaster: AdvancedRaycaster = useMemo(() => {
+        if (!physicsSystem) return null;
         const caster = physicsSystem.getAdvancedRaycaster();
         if (origin) caster.origin = origin;
         if (direction) caster.direction = direction;
         if (type) caster.setCollector(type);
 
         return caster;
-    }, [origin, direction, type]);
+    }, [origin, direction, type, physicsSystem]);
     return raycaster;
 };
 
@@ -64,11 +66,12 @@ export const useMulticaster = (
 ) => {
     const { physicsSystem } = useJolt();
     const raycaster: Multicaster = useMemo(() => {
+        if (!physicsSystem) return null;
         const caster = physicsSystem.getMulticaster();
         if (origin) caster.origin = origin;
         if (direction) caster.direction = direction;
         if (type) caster.setCollector(type);
         return caster;
-    }, [origin, direction, type]);
+    }, [origin, direction, type, physicsSystem]);
     return raycaster;
 };

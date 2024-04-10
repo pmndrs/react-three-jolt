@@ -18,6 +18,7 @@ export function RaycastSimpleDemo() {
   //const { physicsSystem } = useJolt();
 
   useEffect(() => {
+    if (!raycaster) return;
     setTimeout(() => {
       // setup the raycaster
       const origin = new THREE.Vector3(-5, 1, -1);
@@ -84,7 +85,7 @@ export function RaycastSimpleDemo() {
       //@ts-ignore with anyVec this should be working better
       raycaster.castBetween([-5, 0.4, 20], [5, 1.5, 20]);
     }, 500);
-  }, []);
+  }, [raycaster]);
   // function to draw a ray from a hit
   const drawLine = (
     origin = raycaster.origin,
@@ -127,6 +128,7 @@ export function RaycastSimpleDemo() {
 
   //* Multicasting =================================
   useEffect(() => {
+    if (!multicaster) return;
     setTimeout(() => {
       // set the positions to be above each cube
       const positions = [
@@ -159,7 +161,7 @@ export function RaycastSimpleDemo() {
       //multicaster.hits
       // multicaster.results will also return the results array
     }, 1000);
-  }, []);
+  }, [multicaster]);
 
   // draw 5 cubes that land on the floor
   return (

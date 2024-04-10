@@ -13,13 +13,13 @@ import {
     useEffect,
     useMemo,
     useId
-    //useRef,
-    //useState,
+    useRef,
+    useState,
 } from 'react';
 // to clear weird TS error
 import React from 'react';
 
-import { useConst, useUnmount } from '../hooks';
+import { useConst, useMount, useUnmount } from '../hooks';
 // library imports
 import FrameStepper from './FrameStepper';
 
@@ -57,7 +57,6 @@ export interface PhysicsProps {
     updateLoop?: string;
     debug?: boolean;
 }
-let existingSystem: PhysicsSystem;
 export const Physics: FC<PhysicsProps> = (props) => {
     const {
         defaultBodySettings,
@@ -77,30 +76,43 @@ export const Physics: FC<PhysicsProps> = (props) => {
     suspend(() => initJolt(), []);
     const jolt = Raw.module;
     const pid = useId();
-    useEffect(() => {
-        console.log('Physics Componment Mounting: ', pid);
-    }, []);
-    const physicsSystem = useConst(() => new PhysicsSystem(pid));
-    // we have to pass this here to catch before body creation
-    if (defaultBodySettings) physicsSystem.bodySystem.defaultBodySettings = defaultBodySettings;
+
+    const [physicsSystem, setPhysicsSystem] = useState<PhysicsSystem>();
+    const [contextApi , setContextApi] = useState({});
+
+    useMount(() => {
+        console.log('** Physics Component: ' + pid +' Mounted **');
+        const ps = new PhysicsSystem(pid);
+        // we have to pass this here to catch before body creation
+        if (defaultBodySettings) ps.bodySystem.defaultBodySettings = defaultBodySettings;
+        setPhysicsSystem(ps);
+    });
+
     // setup the step
     const step = useCallback((dt: number) => {
-        physicsSystem.onUpdate(dt);
+        // TODO: does running a conditional cause a performance hit?
+       if(physicsSystem) physicsSystem.onUpdate(dt);
     }, []);
     // cleanup and destruction of system when component unmounts
     useUnmount(() => {
-        physicsSystem.destroy(pid);
+        if(physicsSystem) {
+         console.log('Component ' + pid + ' wanting to destroy physicsSystem: ', physicsSystem)
+            physicsSystem.destroy(pid);
+        }
     });
 
     // These will be effects for props to send to the correct systems
 
     useEffect(() => {
+        if(!physicsSystem) return;
         //@ts-ignore
         if (gravity != null) physicsSystem.setGravity(gravity);
-    }, [gravity]);
+    }, [physicsSystem, gravity]);
 
-    const context: JoltContext = useMemo(
-        () => ({
+    // set the context
+    useEffect(() => {
+        if(!physicsSystem) return;
+        setContextApi({
             jolt,
             physicsSystem,
             bodySystem: physicsSystem.bodySystem,
@@ -108,12 +120,13 @@ export const Physics: FC<PhysicsProps> = (props) => {
             paused,
             debug,
             step
-        }),
+        });
+    },
         [debug, jolt, paused, physicsSystem, step]
     );
 
     return (
-        <joltContext.Provider value={context}>
+        <joltContext.Provider value={contextApi}>
             <FrameStepper type={updateLoop} onStep={step} updatePriority={updatePriority} />
             {children}
         </joltContext.Provider>

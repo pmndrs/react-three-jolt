@@ -9,8 +9,6 @@ export interface JoltContext {
     physicsSystem: PhysicsSystem;
     bodySystem: BodySystem;
     joltInterface: Jolt.JoltInterface;
-    //beforeStepCallbacks: WorldStepCallbackSet;
-    //afterStepCallbacks: WorldStepCallbackSet;
     paused: boolean;
     debug: boolean;
     step: (dt: number) => void;
