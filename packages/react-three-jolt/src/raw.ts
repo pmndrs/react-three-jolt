@@ -4,7 +4,7 @@
 
 import type Jolt from 'jolt-physics';
 
-export const Raw = { module: null! as typeof Jolt };
+export const Raw = { module: null! as typeof Jolt, joltInterfaces: new Map() };
 
 export const free = (value: unknown) => {
     Raw.module.destroy(value);

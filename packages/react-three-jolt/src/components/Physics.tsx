@@ -11,14 +11,15 @@ import {
     //  ReactNode,
     useCallback,
     useEffect,
-    useMemo
+    useMemo,
+    useId
     //useRef,
     //useState,
 } from 'react';
 // to clear weird TS error
 import React from 'react';
 
-import { useConst } from '../hooks';
+import { useConst, useUnmount } from '../hooks';
 // library imports
 import FrameStepper from './FrameStepper';
 
@@ -56,7 +57,7 @@ export interface PhysicsProps {
     updateLoop?: string;
     debug?: boolean;
 }
-
+let existingSystem: PhysicsSystem;
 export const Physics: FC<PhysicsProps> = (props) => {
     const {
         defaultBodySettings,
@@ -75,10 +76,11 @@ export const Physics: FC<PhysicsProps> = (props) => {
 
     suspend(() => initJolt(), []);
     const jolt = Raw.module;
+    const pid = useId();
     useEffect(() => {
-        console.log('Physics Componment Mounting');
+        console.log('Physics Componment Mounting: ', pid);
     }, []);
-    const physicsSystem = useConst(() => new PhysicsSystem());
+    const physicsSystem = useConst(() => new PhysicsSystem(pid));
     // we have to pass this here to catch before body creation
     if (defaultBodySettings) physicsSystem.bodySystem.defaultBodySettings = defaultBodySettings;
     // setup the step
@@ -86,11 +88,9 @@ export const Physics: FC<PhysicsProps> = (props) => {
         physicsSystem.onUpdate(dt);
     }, []);
     // cleanup and destruction of system when component unmounts
-    useEffect(() => {
-        return () => {
-            physicsSystem.destroy();
-        };
-    }, [physicsSystem]);
+    useUnmount(() => {
+        physicsSystem.destroy(pid);
+    });
 
     // These will be effects for props to send to the correct systems
 

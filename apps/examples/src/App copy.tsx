@@ -106,12 +106,11 @@ export const App = () => {
             interpolate={interpolate}
             debug={debug}
           >
-            <RigidBody type="static">
-              <mesh>
-                <boxGeometry args={[1, 1, 1]} />
-                <meshStandardMaterial color="red" />
-              </mesh>
-            </RigidBody>
+            <Routes>
+              {Object.keys(routes).map((key) => (
+                <Route path={key} key={key} element={routes[key]} />
+              ))}
+            </Routes>
           </Physics>
           {perf && <Perf position="top-left" minimal className="perf" />}
         </Canvas>

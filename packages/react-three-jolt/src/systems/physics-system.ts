@@ -59,20 +59,10 @@ export class PhysicsSystem {
         previousState: new Map()
     };
 
-    // Public methods ------------------------------
-
-    //TODO: should this replace onInit?
-    constructor() {
-        this.onInit();
-    }
-
-    onInit(): void {
-        if (this.isInit) {
-            console.warn('PhysicsSystem already initialized');
-            return;
-        }
+    maxInterfaces = 3;
+    constructor(pid = '0') {
         const jolt = Raw.module;
-        console.log('*** R3/Jolt PhysicsSystem created ***');
+        console.log('*** R3/Jolt PhysicsSystem Initialized ***');
         this.isInit = true;
         /* setup collisions and broadphase */
         const objectFilter = new jolt.ObjectLayerPairFilterTable(NUM_OBJECT_LAYERS);
@@ -103,24 +93,45 @@ export class PhysicsSystem {
             NUM_OBJECT_LAYERS
         );
 
+        // if the interface alread exists use it, otherwise make a new one
+        if (Raw.joltInterfaces.has(pid)) {
+            this.joltInterface = Raw.joltInterfaces.get(pid);
+        } else {
+            // we need to check ourselves and limit interfaces for memory reasons
+            if (Raw.joltInterfaces.size > this.maxInterfaces - 1) {
+                // throw a warning about excess
+                console.warn('*** WARNING: Excess Jolt Interfaces Attempted ***');
+                console.log('Using first initialized interface');
+                const interfaces = Raw.joltInterfaces.values();
+                this.joltInterface = interfaces.next().value;
+            } else {
+                this.joltInterface = new jolt.JoltInterface(settings);
+                Raw.joltInterfaces.set(pid, this.joltInterface);
+            }
+        }
         /* get interfaces */
-        this.joltInterface = new jolt.JoltInterface(settings);
+
         this.physicsSystem = this.joltInterface.GetPhysicsSystem();
         this.bodyInterface = this.physicsSystem.GetBodyInterface();
-        this.constraintSystem = new ConstraintSystem(this);
+
         /* cleanup */
         jolt.destroy(settings);
         jolt.destroy(BP_LAYER_NON_MOVING);
         jolt.destroy(BP_LAYER_MOVING);
 
         // start the chain of systems/services
+        this.constraintSystem = new ConstraintSystem(this);
         this.bodySystem = new BodySystem(this.physicsSystem);
     }
 
-    destroy(): void {
-        Raw.module.destroy(this.joltInterface);
-        console.log('*** PhysicsSystem destroyed ***');
-        this.isInit = false;
+    destroy(pid = '0'): void {
+        console.log('Request to destroy PhysicsSystem', pid);
+        // check if it exists in the global
+        if (Raw.joltInterfaces.has(pid)) {
+            Raw.module.destroy(this.joltInterface);
+            Raw.joltInterfaces.delete(pid);
+            console.log('*** PhysicsSystem:' + pid + ' destroyed ***');
+        }
     }
     // TODO: Loops and steps seems messy
     onUpdate(delta: number): void {

@@ -147,3 +147,24 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
         );
     })
 );
+/* this is a snippet of something I made in response to a rapier question
+we might want it here too
+const createRapierInstanceArray(instanceMatrix: THREE.instanceMatrix)  {
+    const tempInstancedMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({color: 0xff0000}), instanceMatrix.count);
+    tempInstancedMesh.instanceMatrix = instanceMatrix;
+    const tempMatrix = new THREE.Matrix4();
+    const tempPosition = new THREE.Vector3();
+    const tempQuaternion = new THREE.Quaternion();
+    const tempScale = new THREE.Vector3();
+    const tempRotation = new THREE.Euler();
+    const instances = [];
+    for (let i = 0; i < tempInstancedMesh.count; i++) {
+        tempInstancedMesh.getMatrixAt(i, tempMatrix);
+        tempMatrix.decompose(tempPosition, tempQuaternion, tempScale);
+        tempRotation.setFromQuaternion(tempQuaternion);
+        instances.push({key: instance+ i, position: tempPosition, rotation: tempRotation.array, scale: tempScale});
+    }
+    
+    return instances;
+}
+*/
