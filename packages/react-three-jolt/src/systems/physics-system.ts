@@ -41,8 +41,6 @@ export class PhysicsSystem {
     public debug = false;
     public interpolate = true;
 
-    private isInit = false;
-
     // This lets us interpolate between physics steps
     // TODO: is storing the body in the map better than the handle?
     private steppingState: {
@@ -63,7 +61,6 @@ export class PhysicsSystem {
     constructor(pid = '0') {
         const jolt = Raw.module;
         console.log('*** R3/Jolt PhysicsSystem Initialized ***');
-        this.isInit = true;
         /* setup collisions and broadphase */
         const objectFilter = new jolt.ObjectLayerPairFilterTable(NUM_OBJECT_LAYERS);
         objectFilter.EnableCollision(Layer.NON_MOVING, Layer.MOVING);

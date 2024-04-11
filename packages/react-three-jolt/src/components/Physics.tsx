@@ -4,22 +4,22 @@ import Jolt from 'jolt-physics';
 //import InitJolt from 'jolt-physics/wasm-compat'
 import { suspend } from 'suspend-react';
 import { Raw, initJolt } from '../raw';
-import { type JoltContext, joltContext } from '../context';
+import { joltContext } from '../context';
 import {
     FC,
     ReactNode,
     //  ReactNode,
     useCallback,
     useEffect,
-    useMemo,
-    useId
-    useRef,
-    useState,
+    //useMemo,
+    useId,
+    // useRef,
+    useState
 } from 'react';
 // to clear weird TS error
 import React from 'react';
 
-import { useConst, useMount, useUnmount } from '../hooks';
+import { useMount, useUnmount } from '../hooks';
 // library imports
 import FrameStepper from './FrameStepper';
 
@@ -78,10 +78,10 @@ export const Physics: FC<PhysicsProps> = (props) => {
     const pid = useId();
 
     const [physicsSystem, setPhysicsSystem] = useState<PhysicsSystem>();
-    const [contextApi , setContextApi] = useState({});
+    const [contextApi, setContextApi] = useState({});
 
     useMount(() => {
-        console.log('** Physics Component: ' + pid +' Mounted **');
+        console.log('** Physics Component: ' + pid + ' Mounted **');
         const ps = new PhysicsSystem(pid);
         // we have to pass this here to catch before body creation
         if (defaultBodySettings) ps.bodySystem.defaultBodySettings = defaultBodySettings;
@@ -91,12 +91,12 @@ export const Physics: FC<PhysicsProps> = (props) => {
     // setup the step
     const step = useCallback((dt: number) => {
         // TODO: does running a conditional cause a performance hit?
-       if(physicsSystem) physicsSystem.onUpdate(dt);
+        if (physicsSystem) physicsSystem.onUpdate(dt);
     }, []);
     // cleanup and destruction of system when component unmounts
     useUnmount(() => {
-        if(physicsSystem) {
-         console.log('Component ' + pid + ' wanting to destroy physicsSystem: ', physicsSystem)
+        if (physicsSystem) {
+            console.log('Component ' + pid + ' wanting to destroy physicsSystem: ', physicsSystem);
             physicsSystem.destroy(pid);
         }
     });
@@ -104,14 +104,14 @@ export const Physics: FC<PhysicsProps> = (props) => {
     // These will be effects for props to send to the correct systems
 
     useEffect(() => {
-        if(!physicsSystem) return;
+        if (!physicsSystem) return;
         //@ts-ignore
         if (gravity != null) physicsSystem.setGravity(gravity);
     }, [physicsSystem, gravity]);
 
     // set the context
     useEffect(() => {
-        if(!physicsSystem) return;
+        if (!physicsSystem) return;
         setContextApi({
             jolt,
             physicsSystem,
@@ -121,10 +121,13 @@ export const Physics: FC<PhysicsProps> = (props) => {
             debug,
             step
         });
-    },
-        [debug, jolt, paused, physicsSystem, step]
-    );
-
+    }, [debug, jolt, paused, physicsSystem, step]);
+    if (!contextApi.physicsSystem) {
+        console.log('no physicsSystem, children shouldnt load');
+        return null;
+    } else {
+        console.log('physicsSystem exists, children should load', contextApi);
+    }
     return (
         <joltContext.Provider value={contextApi}>
             <FrameStepper type={updateLoop} onStep={step} updatePriority={updatePriority} />

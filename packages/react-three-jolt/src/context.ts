@@ -14,4 +14,4 @@ export interface JoltContext {
     step: (dt: number) => void;
 }
 
-export const joltContext = createContext<JoltContext | undefined>(undefined);
+export const joltContext = createContext<any>(undefined);

@@ -3,7 +3,7 @@ import React, {
     createContext,
     memo,
     useEffect,
-    useLayoutEffect,
+    //  useLayoutEffect,
     useMemo,
     useRef,
     forwardRef,
@@ -76,6 +76,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         const debugMeshRef = useRef<THREE.Mesh>(null);
         // load the jolt stuff
         const { bodySystem, debug: physicsDebug } = useJolt();
+        console.log('Body System in RB raw:', bodySystem);
         // this allows us to debug on the physics system or the component specifically
         const debug = propDebug || physicsDebug;
         //* Load the body -------------------------------------
