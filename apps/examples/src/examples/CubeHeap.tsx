@@ -7,19 +7,22 @@ import {
   Floor,
   BodyState,
   InstancedRigidBodyMesh,
+  useJolt,
 } from '@react-three/jolt';
-import { useConst } from '@react-three/jolt';
+import { useConst, useSetInterval } from '@react-three/jolt';
 import { useControls } from 'leva';
 
 // this is going to be the instancedMesh version
-export default function Experience() {
+export function CubeHeap() {
   const instancedRef = useRef<BodyState[]>(null);
   const previousCount = useRef(0);
-
   const fountainInterval = useRef(null);
+  //controls
   const { count } = useControls({
-    count: { value: 100, min: 1, max: 2000, step: 1 },
+    count: { value: 200, min: 1, max: 2000, step: 1 },
   });
+
+  // Utils -------------------------------------
   const setColors = (index: number) => {
     const color = new THREE.Color();
     //loop over the instanceMesh starting at index and set a random color
@@ -39,53 +42,52 @@ export default function Experience() {
     setColors(index);
   }, [instancedRef, count]);
 
+  // get a cancelable interval
+  const intervals = useSetInterval();
+
   // setup the teleporting of shapes
   useEffect(() => {
-    if (fountainInterval.current) clearInterval(fountainInterval.current);
+    if (fountainInterval.current)
+      intervals.clearInterval(fountainInterval.current);
     //@ts-ignore
-    fountainInterval.current = setInterval(() => {
+    fountainInterval.current = intervals.setInterval(() => {
       const index = Math.floor(Math.random() * count);
       //@ts-ignore
       instancedRef.current![index].position = [
         Math.random() * 2,
-        10,
+        20,
         Math.random() * 2,
       ];
     }, 1000 / 60);
   }, [instancedRef, count]);
 
+  const { physicsSystem, bodySystem } = useJolt();
+
   // body settings so shapes bounce
-  const defaultBodySettings = useConst({
+  bodySystem.defaultBodySettings = useConst({
     mRestitution: 0.7,
   });
+  // adjust the gravity
+  physicsSystem.setGravity(20);
   return (
     <>
-      <directionalLight
-        castShadow
-        position={[1, 2, 3]}
-        intensity={4.5}
-        shadow-normalBias={0.04}
-      />
-      <ambientLight intensity={1.5} />
-      <Physics gravity={20} defaultBodySettings={defaultBodySettings}>
-        <RigidBody position={[5, 10, 3]}>
-          <mesh>
-            <sphereGeometry args={[1, 32, 32]} />
-            <meshStandardMaterial color="#FF0000" />
-          </mesh>
-        </RigidBody>
-        <InstancedRigidBodyMesh
-          ref={instancedRef}
-          count={count}
-          position={[0, 8, 1]}
-          color="#ffffff"
-          rotation={[0, 0, 0]}
-        >
-          <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="#F2CC8F" />
-        </InstancedRigidBodyMesh>
-        <Floor position={[0, 0, 0]} size={100} />
-      </Physics>
+      <RigidBody position={[5, 10, 3]}>
+        <mesh>
+          <sphereGeometry args={[1, 32, 32]} />
+          <meshStandardMaterial color="#FF0000" />
+        </mesh>
+      </RigidBody>
+      <InstancedRigidBodyMesh
+        ref={instancedRef}
+        count={count}
+        position={[0, 18, 1]}
+        color="#ffffff"
+        rotation={[0, 0, 0]}
+      >
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="#F2CC8F" />
+      </InstancedRigidBodyMesh>
+      <Floor position={[0, 0, 0]} size={100} />
     </>
   );
 }

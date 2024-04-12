@@ -146,6 +146,7 @@ export class BodySystem {
         this.bodyInterface.RemoveBody(bodyID);
         // destroy it
         this.bodyInterface.DestroyBody(bodyID);
+        console.log('Body Removed');
         // remove it from threeJS by removing it from it's parent
         // only if its not an instanced mesh
         if (!bodyState.isInstance) bodyState.object.parent?.remove(bodyState.object);

@@ -33,6 +33,7 @@ import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
 import { JustBoxes } from './examples/JustBoxes';
 import { HeightfieldDemo } from './examples/Heightfield';
+import { CubeHeap } from './examples/CubeHeap';
 
 //try to import a local module of jolt
 import initJolt from './jolt/Distribution/jolt-physics.wasm-compat.js';
@@ -102,17 +103,12 @@ export function ControlWrapper(props: any) {
 
 const routes = {
   '': {
-    position: [-10, 5, 15],
-    target: [0, 1, 10],
-    background: '#3d405b',
-    element: <JustBoxes />,
-  },
-  Raycasts: {
     position: [2, 5, 30],
     target: [0, 1, 10],
     background: '#f0544f',
     element: <RaycastSimpleDemo />,
   },
+
   RaycastMany: {
     position: [0, 0, 5],
     target: [0, 0, 0],
@@ -124,6 +120,20 @@ const routes = {
     target: [0, 0, 0],
     background: '#3d405b',
     element: <HeightfieldDemo />,
+  },
+  // just for current dev purposes
+  CubeHeap: {
+    position: [2, 25, 51],
+    target: [0, 1, 10],
+    background: '#3d405b',
+    element: <CubeHeap />,
+  },
+  // just for current dev purposes
+  Boxes: {
+    position: [-10, 5, 15],
+    target: [0, 1, 10],
+    background: '#3d405b',
+    element: <JustBoxes />,
   },
   clear: { position: [5, 15, 5], background: '#81b29a', element: <Clear /> },
 };
@@ -170,7 +180,7 @@ export const App = () => {
         <Canvas
           shadows
           dpr={1}
-          camera={{ fov: 45, position: cameraProps?.position }}
+          camera={{ near: 1, fov: 45, position: cameraProps?.position }}
         >
           <color attach="background" args={[background]} />
           <directionalLight
@@ -220,7 +230,7 @@ export const App = () => {
       >
         {Object.keys(routes).map((key) => (
           <Link key={key} to={key} end>
-            {key.replace(/-/g, ' ') || 'Boxes'}
+            {key.replace(/-/g, ' ') || 'Raycaster'}
           </Link>
         ))}
 

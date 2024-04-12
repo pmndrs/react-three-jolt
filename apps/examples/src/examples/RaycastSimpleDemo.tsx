@@ -2,22 +2,30 @@ import { useEffect, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
 import {
   RigidBody,
-  //Raycaster,
+  Raycaster,
   RaycastHit,
-  //useJolt,
+  useJolt,
   useMulticaster,
   useRaycaster,
   Floor,
   useSetTimeout,
   useUnmount,
+  useConst,
 } from '@react-three/jolt';
 import * as THREE from 'three';
 
 export function RaycastSimpleDemo() {
-  const raycaster = useRaycaster();
+  const raycaster: Raycaster = useRaycaster();
   const multicaster = useMulticaster();
   const { scene } = useThree();
+  const { bodySystem } = useJolt();
   const debugObject = useRef(new THREE.Object3D());
+
+  // Reset the restitution
+  // body settings so shapes bounce
+  bodySystem.defaultBodySettings = useConst({
+    mRestitution: 0.1,
+  });
 
   const timeouts = useSetTimeout();
   useEffect(() => {

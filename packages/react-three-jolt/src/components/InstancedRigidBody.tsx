@@ -12,7 +12,7 @@ import React, {
 import { forwardRef, ReactNode } from 'react';
 import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
-import { useForwardedRef, useJolt } from '../hooks';
+import { useForwardedRef, useJolt, useUnmount } from '../hooks';
 import { BodyState } from '../';
 interface InstancedRigidBodyMeshProps {
     children: ReactNode;
@@ -137,6 +137,19 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
                 );
                 */
         };
+        // cleanup
+        useUnmount(() => {
+            console.log('instanceMesh cleanup');
+            // remove the instancedMesh from the scene
+            if (instancedMeshRef.current) {
+                instancedMeshRef.current.parent.remove(instancedMeshRef.current);
+            }
+            // remove the instances from the physics system
+            const instances: any = instanceStates.current || [];
+            instances.forEach((instance: BodyState) => {
+                instance.destroy();
+            });
+        });
 
         return (
             <>
