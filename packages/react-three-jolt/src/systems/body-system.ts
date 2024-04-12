@@ -122,7 +122,7 @@ export class BodySystem {
         );
     }
     removeBody(bodyHandle: number) {
-        console.log('Trying to remove body', bodyHandle);
+        //console.log('Trying to remove body', bodyHandle);
         // get the body so we can process it
         const bodyState = this.getBody(bodyHandle);
         if (!bodyState) return;
@@ -138,7 +138,7 @@ export class BodySystem {
         }
 
         if (!this.bodyInterface.IsAdded(bodyID)) {
-            console.log('body already removed');
+            // console.log('body already removed');
             return;
         }
 
@@ -154,7 +154,7 @@ export class BodySystem {
         this.dynamicBodies.delete(bodyHandle);
         this.staticBodies.delete(bodyHandle);
         this.kinematicBodies.delete(bodyHandle);
-        console.log('Removed body', bodyHandle);
+        // console.log('Removed body', bodyHandle);
     }
 
     // There's probably a better pattern, but im making my own function for this

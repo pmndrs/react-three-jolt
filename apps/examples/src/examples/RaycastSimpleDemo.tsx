@@ -37,7 +37,6 @@ export function RaycastSimpleDemo() {
       // draw the initial ray using custom function
       drawLine(origin, direction);
       // cast and respond with handlers
-      console.log('Cast 1', raycaster);
       raycaster.cast(
         (hit: RaycastHit) => {
           console.log('first hit', hit.bodyHandle, hit);
@@ -54,7 +53,6 @@ export function RaycastSimpleDemo() {
       //@ts-ignore with anyVec this should be working better
       raycaster.origin = [-5, 1, 4];
       // cast with values
-      console.log('Cast 2', raycaster);
       const hittwo = raycaster.cast();
       if (hittwo) drawHit(hittwo as RaycastHit);
       drawLine(raycaster.origin, raycaster.direction);
@@ -66,15 +64,11 @@ export function RaycastSimpleDemo() {
       raycaster.cullBackFaces = false;
       // set the raycaster to take all hits
       raycaster.setCollector('all');
-      console.log('after setCollector', raycaster);
       drawLine(raycaster.origin, raycaster.direction);
       // cast with array in the handler
       //raycaster.cast((hits) => hits.forEach((hit) => drawHit(hit)));
-      console.log('Cast 3', raycaster);
       raycaster.cast();
-      console.log('After cast 3', raycaster);
       // call off raycaster hits internal array
-      console.log('Looping HIts');
       raycaster.hits.forEach((hit: RaycastHit) => drawHit(hit));
 
       //* Cast 4 ------------------------------
@@ -87,7 +81,6 @@ export function RaycastSimpleDemo() {
       // Move to the 4th cube and cast at the same time
       //todo check on this type error
       //@ts-ignore with anyVec this should be working better
-      console.log('Cast 4', raycaster);
       raycaster.castFrom([-5, 1, 14]);
 
       //* Cast 5 ------------------------------
@@ -97,7 +90,6 @@ export function RaycastSimpleDemo() {
       // change the ray to be between two SPECIFIC points, NOT a direction
       //todo check on this type error
       //@ts-ignore with anyVec this should be working better
-      console.log('Cast 5', raycaster);
       raycaster.castBetween([-5, 0.4, 20], [5, 1.5, 20]);
     }, 500);
   }, [raycaster]);
@@ -178,7 +170,7 @@ export function RaycastSimpleDemo() {
   }, [multicaster]);
 
   useUnmount(() => {
-    console.log('Raycast Simple Demo unmounting...');
+    // console.log('Raycast Simple Demo unmounting...');
     scene.remove(debugObject.current);
   });
 

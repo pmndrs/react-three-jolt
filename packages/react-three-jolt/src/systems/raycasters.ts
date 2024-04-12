@@ -93,7 +93,7 @@ export class Raycaster {
         Raw.module.destroy(this.bodyFilter);
         Raw.module.destroy(this.shapeFilter);
         Raw.module.destroy(this.collector);
-        console.log('Raycaster destroyed    ');
+        //console.log('Raycaster destroyed    ');
     }
 
     //* Getters and Setters ----------------------------
@@ -124,7 +124,7 @@ export class Raycaster {
 
     rawCast() {
         if (!this.active) return;
-        console.log('Raw Casting...');
+        // console.log('Raw Casting...');
         this.joltPhysicsSystem
             .GetNarrowPhaseQuery()
             .CastRay(
@@ -139,7 +139,7 @@ export class Raycaster {
     }
     // set the collector
     setCollector(type = 'closest') {
-        console.log('setting collector', type);
+        //console.log('setting collector', type);
         // destroy exising collector
         if (this.collector) Raw.module.destroy(this.collector);
         this.type = type;
