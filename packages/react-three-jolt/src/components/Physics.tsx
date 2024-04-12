@@ -132,6 +132,9 @@ export const Physics: FC<PhysicsProps> = (props) => {
             debug,
             step
         });
+        // set the paused and debug state on the physics system
+        if (physicsSystem.debug !== debug) physicsSystem.debug = debug;
+        if (physicsSystem.paused !== paused) physicsSystem.paused = paused;
     }, [debug, jolt, paused, physicsSystem, step]);
 
     //@ts-ignore
