@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
 import {
   RigidBody,
@@ -8,6 +8,8 @@ import {
   useMulticaster,
   useRaycaster,
   Floor,
+  useSetTimeout,
+  useUnmount,
 } from '@react-three/jolt';
 import * as THREE from 'three';
 
@@ -15,11 +17,16 @@ export function RaycastSimpleDemo() {
   const raycaster = useRaycaster();
   const multicaster = useMulticaster();
   const { scene } = useThree();
-  //const { physicsSystem } = useJolt();
+  const debugObject = useRef(new THREE.Object3D());
 
+  const timeouts = useSetTimeout();
   useEffect(() => {
     if (!raycaster) return;
-    setTimeout(() => {
+
+    // put the debug object onto the scene
+    scene.add(debugObject.current);
+
+    timeouts.setTimeout(() => {
       // setup the raycaster
       const origin = new THREE.Vector3(-5, 1, -1);
       const direction = new THREE.Vector3(10, 0, 2);
@@ -30,6 +37,7 @@ export function RaycastSimpleDemo() {
       // draw the initial ray using custom function
       drawLine(origin, direction);
       // cast and respond with handlers
+      console.log('Cast 1', raycaster);
       raycaster.cast(
         (hit: RaycastHit) => {
           console.log('first hit', hit.bodyHandle, hit);
@@ -46,6 +54,7 @@ export function RaycastSimpleDemo() {
       //@ts-ignore with anyVec this should be working better
       raycaster.origin = [-5, 1, 4];
       // cast with values
+      console.log('Cast 2', raycaster);
       const hittwo = raycaster.cast();
       if (hittwo) drawHit(hittwo as RaycastHit);
       drawLine(raycaster.origin, raycaster.direction);
@@ -57,11 +66,15 @@ export function RaycastSimpleDemo() {
       raycaster.cullBackFaces = false;
       // set the raycaster to take all hits
       raycaster.setCollector('all');
+      console.log('after setCollector', raycaster);
       drawLine(raycaster.origin, raycaster.direction);
       // cast with array in the handler
       //raycaster.cast((hits) => hits.forEach((hit) => drawHit(hit)));
+      console.log('Cast 3', raycaster);
       raycaster.cast();
+      console.log('After cast 3', raycaster);
       // call off raycaster hits internal array
+      console.log('Looping HIts');
       raycaster.hits.forEach((hit: RaycastHit) => drawHit(hit));
 
       //* Cast 4 ------------------------------
@@ -74,6 +87,7 @@ export function RaycastSimpleDemo() {
       // Move to the 4th cube and cast at the same time
       //todo check on this type error
       //@ts-ignore with anyVec this should be working better
+      console.log('Cast 4', raycaster);
       raycaster.castFrom([-5, 1, 14]);
 
       //* Cast 5 ------------------------------
@@ -83,13 +97,14 @@ export function RaycastSimpleDemo() {
       // change the ray to be between two SPECIFIC points, NOT a direction
       //todo check on this type error
       //@ts-ignore with anyVec this should be working better
+      console.log('Cast 5', raycaster);
       raycaster.castBetween([-5, 0.4, 20], [5, 1.5, 20]);
     }, 500);
   }, [raycaster]);
   // function to draw a ray from a hit
   const drawLine = (
-    origin = raycaster.origin,
-    direction = raycaster.origin,
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
     color = '#D81E5B',
     _hit?: RaycastHit
   ) => {
@@ -100,7 +115,7 @@ export function RaycastSimpleDemo() {
       ]),
       new THREE.LineBasicMaterial({ color })
     );
-    scene.add(line);
+    debugObject.current.add(line);
   };
   const drawHit = (hit: RaycastHit) => {
     // draw the normal
@@ -123,13 +138,12 @@ export function RaycastSimpleDemo() {
     points.push(center.clone().add(new THREE.Vector3(0, 0, size)));
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const line = new THREE.LineSegments(geometry, material);
-    scene.add(line);
+    debugObject.current.add(line);
   };
-
   //* Multicasting =================================
   useEffect(() => {
     if (!multicaster) return;
-    setTimeout(() => {
+    timeouts.setTimeout(() => {
       // set the positions to be above each cube
       const positions = [
         [0, 10, 0],
@@ -162,6 +176,11 @@ export function RaycastSimpleDemo() {
       // multicaster.results will also return the results array
     }, 1000);
   }, [multicaster]);
+
+  useUnmount(() => {
+    console.log('Raycast Simple Demo unmounting...');
+    scene.remove(debugObject.current);
+  });
 
   // draw 5 cubes that land on the floor
   return (

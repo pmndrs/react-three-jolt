@@ -14,13 +14,10 @@ export const initJolt = async (jolt?: typeof Jolt) => {
     if (Raw.module !== null) return;
 
     if (jolt) {
+        console.log('** Setting Raw to local Jolt **');
         Raw.module = await jolt();
     } else {
         const joltInit = await import('jolt-physics');
-        // debug module
-        //const joltInit = await import('../jolt/jolt-physics.wasm-compat.js');
-        console.log('*** JOLT IMPORT SUCESSFUL ***');
         Raw.module = await joltInit.default();
-        console.log('*** JOLT INIT SUCESSFUL ***');
     }
 };

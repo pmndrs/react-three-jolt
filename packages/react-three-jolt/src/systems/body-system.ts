@@ -122,30 +122,39 @@ export class BodySystem {
         );
     }
     removeBody(bodyHandle: number) {
+        console.log('Trying to remove body', bodyHandle);
         // get the body so we can process it
-        const body = this.getBody(bodyHandle);
-        if (!body) return;
+        const bodyState = this.getBody(bodyHandle);
+        if (!bodyState) return;
         // check if the body exists in the simulation
         // first check the simulation is still here (might be removed after physics is removed)
         if (!this.joltPhysicsSystem) return;
         if (!this.bodyInterface) return;
-        if (!this.bodyInterface.IsAdded(body.body.GetID())) {
+        const bodyID = bodyState.body.GetID();
+        const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
+        if (!body) {
+            console.warn('body getter failed during delete', bodyHandle);
+            return;
+        }
+
+        if (!this.bodyInterface.IsAdded(bodyID)) {
             console.log('body already removed');
             return;
         }
 
         // remove the body from the simulation
-        this.bodyInterface.RemoveBody(body.body.GetID());
+        this.bodyInterface.RemoveBody(bodyID);
         // destroy it
-        this.bodyInterface.DestroyBody(body.body.GetID());
+        this.bodyInterface.DestroyBody(bodyID);
         // remove it from threeJS by removing it from it's parent
         // only if its not an instanced mesh
-        if (!body.isInstance) body.object.parent?.remove(body.object);
+        if (!bodyState.isInstance) bodyState.object.parent?.remove(bodyState.object);
         // remove it from the maps
 
         this.dynamicBodies.delete(bodyHandle);
         this.staticBodies.delete(bodyHandle);
         this.kinematicBodies.delete(bodyHandle);
+        console.log('Removed body', bodyHandle);
     }
 
     // There's probably a better pattern, but im making my own function for this

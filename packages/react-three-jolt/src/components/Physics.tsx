@@ -56,6 +56,7 @@ export interface PhysicsProps {
     updatePriority?: any;
     updateLoop?: string;
     debug?: boolean;
+    module?: any;
 }
 export const Physics: FC<PhysicsProps> = (props) => {
     const {
@@ -65,15 +66,21 @@ export const Physics: FC<PhysicsProps> = (props) => {
         gravity = [0, -9.81, 0],
 
         paused = false,
+        debug = false,
         //interpolate = true,
         updatePriority,
         updateLoop = 'follow',
-        debug = false
+
+        //possible module or path?
+        module
     } = props;
 
     // =================================================
-
-    suspend(() => initJolt(), []);
+    //* Module initialization
+    //if the user passed a module path try to load it
+    if (module) suspend(async () => initJolt(module), []);
+    else suspend(() => initJolt(), []);
+    // =================================================
     const jolt = Raw.module;
     const pid = useId();
 
@@ -96,7 +103,7 @@ export const Physics: FC<PhysicsProps> = (props) => {
     // cleanup and destruction of system when component unmounts
     useUnmount(() => {
         if (physicsSystem) {
-            console.log('Component ' + pid + ' wanting to destroy physicsSystem: ', physicsSystem);
+            // console.log('Component ' + pid + ' wanting to destroy physicsSystem: ', physicsSystem);
             physicsSystem.destroy(pid);
         }
     });
@@ -122,12 +129,10 @@ export const Physics: FC<PhysicsProps> = (props) => {
             step
         });
     }, [debug, jolt, paused, physicsSystem, step]);
-    if (!contextApi.physicsSystem) {
-        console.log('no physicsSystem, children shouldnt load');
-        return null;
-    } else {
-        console.log('physicsSystem exists, children should load', contextApi);
-    }
+
+    //@ts-ignore
+    if (!contextApi || !contextApi.physicsSystem) return null;
+
     return (
         <joltContext.Provider value={contextApi}>
             <FrameStepper type={updateLoop} onStep={step} updatePriority={updatePriority} />

@@ -5,14 +5,18 @@ import { Physics, RigidBody } from '@react-three/jolt';
 import { Perf } from 'r3f-perf';
 import {
   ReactNode,
-  StrictMode,
+  //StrictMode,
   Suspense,
   createContext,
   useContext,
+  //useEffect,
   useState,
 } from 'react';
 import { NavLink, NavLinkProps, Route, Routes } from 'react-router-dom';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
+import { JustBoxes } from './examples/JustBoxes.js';
+//try to import a local module of jolt
+import initJolt from './jolt/Debug/jolt-physics.wasm-compat.js';
 const demoContext = createContext<{
   setDebug?(f: boolean): void;
   setPaused?(f: boolean): void;
@@ -56,7 +60,7 @@ export function Clear() {
 }
 
 const routes: Record<string, ReactNode> = {
-  '': <RaycastSimpleDemo />,
+  '': <JustBoxes />,
   'Raycast Advanced': <RaycastSimpleDemo />,
   'Raycast Simple': <RaycastSimpleDemo />,
   clear: <Clear />,
@@ -101,6 +105,7 @@ export const App = () => {
 
           <OrbitControls enabled={cameraEnabled} />
           <Physics
+            module={initJolt}
             paused={paused}
             key={physicsKey}
             interpolate={interpolate}
@@ -111,6 +116,9 @@ export const App = () => {
                 <Route path={key} key={key} element={routes[key]} />
               ))}
             </Routes>
+            {/*<RigidBody type="Static" position={[0, 3, 0]}>
+              <Box args={[5, 2, 5]} />
+            </RigidBody> */}
           </Physics>
           {perf && <Perf position="top-left" minimal className="perf" />}
         </Canvas>

@@ -1,5 +1,5 @@
 // creates a jolt constrain given two bodies
-import { useJolt } from './hooks';
+import { useJolt, useUnmount } from './hooks';
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { Raycaster, AdvancedRaycaster, Multicaster } from '../systems';
@@ -36,6 +36,10 @@ export const useRaycaster = (
         []
     );
     */
+    useUnmount(() => {
+        console.log('hook destroying raycaster');
+        raycaster.destroy();
+    });
     return raycaster;
 };
 
@@ -69,5 +73,9 @@ export const useMulticaster = (
         if (type) caster.setCollector(type);
         return caster;
     }, [origin, direction, type, physicsSystem]);
+
+    useUnmount(() => {
+        raycaster.raycaster.destroy();
+    });
     return raycaster;
 };

@@ -45,6 +45,8 @@ export class Raycaster {
     // @ts-ignore
     collector: CastRayCollector;
     hits: RaycastHit[] = [];
+    hasCast = false;
+    active = true;
 
     // For debugging. Still not sure this belongs on the class or as a subclass/hook
     isDebugging = false;
@@ -74,11 +76,24 @@ export class Raycaster {
         );
 
         // initialize the ray origin and destination
-        this.ray.mOrigin = new Raw.module.Vec3(0, 0, 0);
-        this.ray.mDirection = new Raw.module.Vec3(10, 10, 10);
+        this.ray.mOrigin.Set(0, 0, 0);
+        this.ray.mDirection.Set(10, 10, 10);
 
         // initialize the collector
         this.setCollector();
+    }
+    // Cleanup ---------------------------------------
+    destroy() {
+        this.active = false;
+        this.stopDebugging();
+        Raw.module.destroy(this.ray);
+        Raw.module.destroy(this.raySettings);
+        Raw.module.destroy(this.bpFilter);
+        Raw.module.destroy(this.objectFilter);
+        Raw.module.destroy(this.bodyFilter);
+        Raw.module.destroy(this.shapeFilter);
+        Raw.module.destroy(this.collector);
+        console.log('Raycaster destroyed    ');
     }
 
     //* Getters and Setters ----------------------------
@@ -86,17 +101,15 @@ export class Raycaster {
         return vec3.three(this.ray.mOrigin);
     }
     set origin(value: anyVec3) {
-        const newVec = vec3.jolt(value);
-        this.ray.mOrigin = newVec;
-        Raw.module.destroy(newVec);
+        const newVec = vec3.three(value);
+        this.ray.mOrigin.Set(newVec.x, newVec.y, newVec.z);
     }
     get direction(): THREE.Vector3 {
         return vec3.three(this.ray.mDirection);
     }
     set direction(value: anyVec3) {
-        const newVec = vec3.jolt(value);
-        this.ray.mDirection = newVec;
-        Raw.module.destroy(newVec);
+        const newVec = vec3.three(value);
+        this.ray.mDirection.Set(newVec.x, newVec.y, newVec.z);
     }
     get cullBackFaces() {
         return this.doCullBackFaces;
@@ -108,7 +121,10 @@ export class Raycaster {
 
     //* Methods ---------------------------------------
     //this has no callback, it just triggers the ray and you have to process it
+
     rawCast() {
+        if (!this.active) return;
+        console.log('Raw Casting...');
         this.joltPhysicsSystem
             .GetNarrowPhaseQuery()
             .CastRay(
@@ -123,7 +139,7 @@ export class Raycaster {
     }
     // set the collector
     setCollector(type = 'closest') {
-        //console.log('setting collector', type);
+        console.log('setting collector', type);
         // destroy exising collector
         if (this.collector) Raw.module.destroy(this.collector);
         this.type = type;
@@ -148,7 +164,8 @@ export class Raycaster {
     // @ts-ignore early bail return triggers TS
     cast(successHandler?: any, failHandler?: any) {
         // clear the collector
-        this.collector.Reset();
+        if (this.hasCast && this.type != 'closest') this.collector.Reset();
+        this.hasCast = true;
         //clear the hits
         this.hits = [];
         //run the cast
@@ -231,6 +248,7 @@ export class Raycaster {
         this.isDebugging = true;
     }
     stopDebugging() {
+        if (!this.isDebugging) return;
         // get the parent of our debug object, then remove ourselves
         const parent = this.debugObject.parent;
         if (parent) parent.remove(this.debugObject);
@@ -439,7 +457,8 @@ export class RaycastHit {
         this.position = vec3.three(joltPosition);
         // destroy things
         Raw.module.destroy(joltPosition);
-        Raw.module.destroy(mHit);
+        // maybe dont do this as its a reference?
+        //Raw.module.destroy(mHit);
     }
     //* the more complex  values we set as getters and arent stored on the object
     get distance(): number {
@@ -456,14 +475,19 @@ export class RaycastHit {
     get impactNormal(): THREE.Vector3 {
         const bodyID = new Raw.module.BodyID(this.bodyHandle);
         const shapeID = new Raw.module.SubShapeID();
+        const position = vec3.jolt(this.position);
+        let toReturn = new THREE.Vector3();
         shapeID.SetValue(this.shapeIdValue);
         const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
-        const joltNormal = body.GetWorldSpaceSurfaceNormal(shapeID, vec3.jolt(this.position));
-        const toReturn = vec3.three(joltNormal);
-        // destroy jolt items
-        Raw.module.destroy(joltNormal);
-        Raw.module.destroy(shapeID);
-        Raw.module.destroy(bodyID);
+        if (body) {
+            const joltNormal = body.GetWorldSpaceSurfaceNormal(shapeID, position);
+            toReturn = vec3.three(joltNormal);
+            //Raw.module.destroy(joltNormal);
+        }
+        // destroy remaining jolt items
+        //Raw.module.destroy(shapeID);
+        // Raw.module.destroy(bodyID);
+        //Raw.module.destroy(position);
         return toReturn;
     }
     //TODO Fix this to work with the bodyID Handle after removing BodyID
