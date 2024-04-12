@@ -121,7 +121,7 @@ export class BodySystem {
             this.kinematicBodies.get(handle)
         );
     }
-    removeBody(bodyHandle: number) {
+    removeBody(bodyHandle: number, ignoreThree = false) {
         //console.log('Trying to remove body', bodyHandle);
         // get the body so we can process it
         const bodyState = this.getBody(bodyHandle);
@@ -146,10 +146,9 @@ export class BodySystem {
         this.bodyInterface.RemoveBody(bodyID);
         // destroy it
         this.bodyInterface.DestroyBody(bodyID);
-        console.log('Body Removed');
         // remove it from threeJS by removing it from it's parent
-        // only if its not an instanced mesh
-        if (!bodyState.isInstance) bodyState.object.parent?.remove(bodyState.object);
+        // only if its not an instanced mesh or explicitly told to ignore.
+        if (!bodyState.isInstance || ignoreThree) bodyState.object.parent?.remove(bodyState.object);
         // remove it from the maps
 
         this.dynamicBodies.delete(bodyHandle);
@@ -178,11 +177,6 @@ export class BodySystem {
             planeMesh.position.z + offset
         );
 
-        // temp test to clear memory error
-        /* const shapeSize = new Raw.module.Vec3(6, 6, 6);
-        const shapeSettings = new Raw.module.BoxShapeSettings(shapeSize);
-        const shape = shapeSettings.Create().Get();
-        */
         const creationSettings = new Raw.module.BodyCreationSettings(
             shape,
             position,
@@ -191,7 +185,13 @@ export class BodySystem {
             Layer.NON_MOVING
         );
         const body = this.bodyInterface.CreateBody(creationSettings);
+        // cleanup before returning
         this.jolt.destroy(shapeSettings);
+        this.jolt.destroy(creationSettings);
+        //TODO: One of these causes a crash.
+        // this.jolt.destroy(position);
+        //this.jolt.destroy(quaternion);
+        //this.jolt.destroy(shape);
         return this.addExistingBody(planeMesh, body, { bodyType: 'static' });
     }
     // Body Modification ===================================

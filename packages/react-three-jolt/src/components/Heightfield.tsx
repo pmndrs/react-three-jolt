@@ -2,7 +2,7 @@ import { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
 
-import { useJolt } from '../hooks';
+import { useJolt, useUnmount } from '../hooks';
 
 import {
     //@ts-ignore
@@ -10,6 +10,7 @@ import {
     applyHeightmapToPlane
 } from '../heightField/Generators';
 import React from 'react';
+import { BodyState } from 'src';
 
 type HeightfieldProps = {
     url?: string;
@@ -30,6 +31,7 @@ export function Heightfield({
     ...props
 }: HeightfieldProps) {
     const planeRef = useRef<THREE.Mesh>(null);
+    const activeBody: React.MutableRefObject<BodyState | null> = useRef(null);
 
     const { bodySystem } = useJolt();
     // try and load the url as a texture
@@ -47,23 +49,24 @@ export function Heightfield({
         }
         planeRef.current.geometry.rotateX(-Math.PI / 2);
 
-        /* copilot generated code
-        if (texture) {
-            const loader = new THREE.TextureLoader();
-            loader.load(texture, (texture) => {
-                urlTexture.image = texture.image;
-                urlTexture.needsUpdate = true;
-            });
-            */
+        // TODO: why did I do this async?
         async function getImageData() {
             if (url) {
                 await applyHeightmapToPlane(planeRef.current as THREE.Mesh, url, displacementScale);
+                // succeeded, if there's an existing body, remove it but keep the three object
+                if (activeBody.current) bodySystem.removeBody(activeBody.current, true);
+
                 // generate the jolt heightfield with the newly made three heightfield
-                bodySystem.addHeightfield(planeRef.current as THREE.Mesh);
+                activeBody.current = bodySystem.addHeightfield(planeRef.current as THREE.Mesh);
             }
         }
         getImageData();
     }, [url, urlTexture, texture, displacementScale, bodySystem]);
+    useUnmount(() => {
+        if (activeBody.current) {
+            bodySystem.removeBody(activeBody.current);
+        }
+    });
 
     return (
         <>

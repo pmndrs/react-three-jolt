@@ -137,8 +137,8 @@ export class BodyState {
 
     //* Direct Manipulation ===================================
     // destroy the body
-    destroy() {
-        this.bodySystem.removeBody(this.handle);
+    destroy(ignoreThree?: boolean) {
+        this.bodySystem.removeBody(this.handle, ignoreThree);
     }
     // probably only used for instances
     getMatrix(matrix: Matrix4) {
