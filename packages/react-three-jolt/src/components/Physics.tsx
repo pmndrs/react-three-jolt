@@ -63,7 +63,7 @@ export const Physics: FC<PhysicsProps> = (props) => {
         defaultBodySettings,
         // TODO: determine and apply/remove these defaults
         children,
-        gravity = [0, -9.81, 0],
+        gravity,
 
         paused = false,
         debug = false,
@@ -112,9 +112,10 @@ export const Physics: FC<PhysicsProps> = (props) => {
 
     useEffect(() => {
         if (!physicsSystem) return;
+        console.log('setting gravity from component');
         //@ts-ignore
         if (gravity != null) physicsSystem.setGravity(gravity);
-    }, [physicsSystem, gravity]);
+    }, [gravity, physicsSystem]);
 
     // set the context
     useEffect(() => {

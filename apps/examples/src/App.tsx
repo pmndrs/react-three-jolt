@@ -1,7 +1,13 @@
 // Base demo copied from r3/rapier
-import { Box, Environment, OrbitControls } from '@react-three/drei';
-import { Canvas } from '@react-three/fiber';
-import { Physics, RigidBody } from '@react-three/jolt';
+import * as THREE from 'three';
+import {
+  Box,
+  Environment,
+  OrbitControls,
+  CameraControls,
+} from '@react-three/drei';
+import { Canvas, useThree } from '@react-three/fiber';
+import { Physics, RigidBody, vec3 } from '@react-three/jolt';
 import { Perf } from 'r3f-perf';
 import {
   ReactNode,
@@ -9,14 +15,27 @@ import {
   Suspense,
   createContext,
   useContext,
+  useEffect,
+  useRef,
   //useEffect,
   useState,
 } from 'react';
-import { NavLink, NavLinkProps, Route, Routes } from 'react-router-dom';
+import {
+  NavLink,
+  NavLinkProps,
+  Route,
+  Routes,
+  useLocation,
+} from 'react-router-dom';
+
+//* All the examples ------------------------------
+import { RaycastManyDemo } from './examples/RaycastManyDemo';
+
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
-import { JustBoxes } from './examples/JustBoxes.js';
+import { JustBoxes } from './examples/JustBoxes';
+
 //try to import a local module of jolt
-import initJolt from './jolt/Debug/jolt-physics.wasm-compat.js';
+import initJolt from './jolt/Distribution/jolt-physics.wasm-compat.js';
 const demoContext = createContext<{
   setDebug?(f: boolean): void;
   setPaused?(f: boolean): void;
@@ -59,38 +78,95 @@ export function Clear() {
   );
 }
 
-const routes: Record<string, ReactNode> = {
-  '': <JustBoxes />,
-  'Raycast Advanced': <RaycastSimpleDemo />,
-  'Raycast Simple': <RaycastSimpleDemo />,
-  clear: <Clear />,
-  //joints: <Joints />,
-  // cubeHeap: <ComponentsExample />,
+//* Controls Wrapper. We have to do this to get root state
+export function ControlWrapper(props: any) {
+  const { position = [0, 10, 10], target = [0, 1, 0], ...rest } = props;
+  const { controls } = useThree();
+  useEffect(() => {
+    const newPosition = vec3.three(position);
+    const newTarget = vec3.three(target);
+    if (controls)
+      //@ts-ignore can't get the types to work here
+      controls.setLookAt(
+        newPosition.x,
+        newPosition.y,
+        newPosition.z,
+        newTarget.x,
+        newTarget.y,
+        newTarget.z,
+        true
+      );
+  }, [position]);
+  return <CameraControls makeDefault {...rest} />;
+}
+
+const routes = {
+  '': {
+    position: [-10, 5, 15],
+    target: [0, 1, 10],
+    background: '#3d405b',
+    element: <JustBoxes />,
+  },
+  Raycasts: {
+    position: [2, 5, 30],
+    target: [0, 1, 10],
+    background: '#c6d8d3',
+    element: <RaycastSimpleDemo />,
+  },
+  RaycastMany: {
+    position: [0, 0, 5],
+    target: [0, 0, 0],
+    background: '#3d405b',
+    element: <RaycastManyDemo />,
+  },
+  clear: { position: [5, 15, 5], background: '#81b29a', element: <Clear /> },
 };
 
 export const App = () => {
+  // state
   const [debug, setDebug] = useState<boolean>(false);
   const [perf, setPerf] = useState<boolean>(false);
   const [paused, setPaused] = useState<boolean>(false);
   const [interpolate, setInterpolate] = useState<boolean>(true);
   const [physicsKey, setPhysicsKey] = useState<number>(0);
-  const [cameraEnabled, setCameraEnabled] = useState<boolean>(true);
 
+  // visuals
+  const [background, setBackground] = useState<string>('#3d405b');
+  const [cameraProps, setCameraProps] = useState<{
+    position: any;
+    target: any;
+  } | null>(null);
+  const location = useLocation();
+
+  // this triggers a reset of the physics world
   const updatePhysicsKey = () => {
     setPhysicsKey((current) => current + 1);
   };
+
+  // when the route changes move the camera
+  useEffect(() => {
+    // set the camera position
+    //@ts-ignore
+    const route = routes[location.pathname.replace('/', '')];
+    setCameraProps({ position: route.position, target: route.target });
+    setBackground(route.background);
+  }, [location]);
 
   return (
     <div
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'linear-gradient(blue, white)',
         fontFamily: 'sans-serif',
       }}
     >
       <Suspense fallback="Loading...">
-        <Canvas shadows dpr={1} camera={{ fov: 45, position: [0, 15, 27] }}>
+        <Canvas
+          shadows
+          dpr={1}
+          camera={{ fov: 45, position: cameraProps?.position }}
+        >
+          <color attach="background" args={[background]} />
           <directionalLight
             castShadow
             position={[10, 10, 10]}
@@ -103,17 +179,21 @@ export const App = () => {
           />
           <Environment preset="apartment" />
 
-          <OrbitControls enabled={cameraEnabled} />
+          <ControlWrapper
+            position={cameraProps?.position}
+            target={cameraProps?.target}
+          />
           <Physics
             module={initJolt}
             paused={paused}
             key={physicsKey}
             interpolate={interpolate}
             debug={debug}
+            gravity={22}
           >
             <Routes>
               {Object.keys(routes).map((key) => (
-                <Route path={key} key={key} element={routes[key]} />
+                <Route path={key} key={key} element={routes[key].element} />
               ))}
             </Routes>
             {/*<RigidBody type="Static" position={[0, 3, 0]}>
@@ -137,7 +217,7 @@ export const App = () => {
       >
         {Object.keys(routes).map((key) => (
           <Link key={key} to={key} end>
-            {key.replace(/-/g, ' ') || 'Raycasting: Boxes'}
+            {key.replace(/-/g, ' ') || 'Boxes'}
           </Link>
         ))}
 
