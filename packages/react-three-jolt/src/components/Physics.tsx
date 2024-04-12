@@ -96,10 +96,13 @@ export const Physics: FC<PhysicsProps> = (props) => {
     });
 
     // setup the step
-    const step = useCallback((dt: number) => {
-        // TODO: does running a conditional cause a performance hit?
-        if (physicsSystem) physicsSystem.onUpdate(dt);
-    }, []);
+    const step = useCallback(
+        (dt: number) => {
+            // TODO: does running a conditional cause a performance hit?
+            if (physicsSystem) physicsSystem.onUpdate(dt);
+        },
+        [physicsSystem]
+    );
     // cleanup and destruction of system when component unmounts
     useUnmount(() => {
         if (physicsSystem) {

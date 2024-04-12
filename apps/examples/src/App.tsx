@@ -30,9 +30,9 @@ import {
 
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
-
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
 import { JustBoxes } from './examples/JustBoxes';
+import { HeightfieldDemo } from './examples/Heightfield';
 
 //try to import a local module of jolt
 import initJolt from './jolt/Distribution/jolt-physics.wasm-compat.js';
@@ -118,6 +118,12 @@ const routes = {
     target: [0, 0, 0],
     background: '#3d405b',
     element: <RaycastManyDemo />,
+  },
+  Heightfield: {
+    position: [150, 110, 150],
+    target: [0, 0, 0],
+    background: '#3d405b',
+    element: <HeightfieldDemo />,
   },
   clear: { position: [5, 15, 5], background: '#81b29a', element: <Clear /> },
 };

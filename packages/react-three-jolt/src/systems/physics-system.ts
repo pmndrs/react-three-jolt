@@ -236,7 +236,6 @@ export class PhysicsSystem {
         this.currentSubframe = (this.currentSubframe + 1) % 4;
     }
     private fixedTimeStep(delta: number, timeStep: number, interpolate: boolean): void {
-        //console.log('fixedTimeStep', delta, timeStep, interpolate);
         // don't step time forwards if paused
         // Increase accumulator
         this.steppingState.accumulator += delta;
