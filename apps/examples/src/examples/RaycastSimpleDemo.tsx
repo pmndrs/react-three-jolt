@@ -177,35 +177,35 @@ export function RaycastSimpleDemo() {
   // draw 5 cubes that land on the floor
   return (
     <>
-      <Floor position={[0, 0, 0]} size={100} />
+      <Floor position={[0, 0, 0]} color={'#fdf0d5'} size={100} />
       <RigidBody position={[0, 1, 0]}>
-        <mesh>
+        <mesh castShadow>
           <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="green" />
+          <meshStandardMaterial color="#311847" />
         </mesh>
       </RigidBody>
       <RigidBody position={[0, 1, 5]}>
-        <mesh>
+        <mesh castShadow>
           <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="green" />
+          <meshStandardMaterial color="#311847" />
         </mesh>
       </RigidBody>
       <RigidBody position={[0, 1, 10]}>
-        <mesh>
+        <mesh castShadow>
           <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="green" />
+          <meshStandardMaterial color="#311847" />
         </mesh>
       </RigidBody>
       <RigidBody position={[0, 1, 15]}>
-        <mesh>
+        <mesh castShadow>
           <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="green" />
+          <meshStandardMaterial color="#311847" />
         </mesh>
       </RigidBody>
       <RigidBody position={[0, 1, 20]} rotation={[0, 0.5, 0]}>
-        <mesh>
+        <mesh castShadow>
           <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="green" />
+          <meshStandardMaterial color="#311847" />
         </mesh>
       </RigidBody>
     </>

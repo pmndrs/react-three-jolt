@@ -110,7 +110,7 @@ const routes = {
   Raycasts: {
     position: [2, 5, 30],
     target: [0, 1, 10],
-    background: '#c6d8d3',
+    background: '#f0544f',
     element: <RaycastSimpleDemo />,
   },
   RaycastMany: {
@@ -202,9 +202,6 @@ export const App = () => {
                 <Route path={key} key={key} element={routes[key].element} />
               ))}
             </Routes>
-            {/*<RigidBody type="Static" position={[0, 3, 0]}>
-              <Box args={[5, 2, 5]} />
-            </RigidBody> */}
           </Physics>
           {perf && <Perf position="top-left" minimal className="perf" />}
         </Canvas>
@@ -258,13 +255,13 @@ const Link = (props: NavLinkProps) => {
     <NavLink
       {...props}
       style={({ isActive }) => ({
-        border: '2px solid blue',
+        border: '2px solid #311847',
         textTransform: 'capitalize',
         borderRadius: 4,
         padding: 4,
-        background: isActive ? 'blue' : 'transparent',
+        background: isActive ? '#311847' : 'transparent',
         textDecoration: 'none',
-        color: isActive ? 'white' : 'blue',
+        color: isActive ? 'white' : '#311847',
       })}
     />
   );

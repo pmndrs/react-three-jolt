@@ -15,7 +15,7 @@ export const Floor = (props: any) => {
 
     return (
         <RigidBody position={position} rotation={rotation} type="static">
-            <mesh scale-y={1} material={material} {...rest}>
+            <mesh receiveShadow scale-y={1} material={material} {...rest}>
                 <boxGeometry args={[size, 0.5, size]} />
             </mesh>
         </RigidBody>
