@@ -37,6 +37,7 @@ import { CubeHeap } from './examples/CubeHeap';
 
 //try to import a local module of jolt
 import initJolt from './jolt/Distribution/jolt-physics.wasm-compat.js';
+import ShapeFountain from './examples/ShapeFountain';
 const demoContext = createContext<{
   setDebug?(f: boolean): void;
   setPaused?(f: boolean): void;
@@ -134,6 +135,12 @@ const routes = {
     target: [0, 1, 10],
     background: '#3d405b',
     element: <JustBoxes />,
+  },
+  ShapeFountain: {
+    position: [-10, 5, 15],
+    target: [0, 1, 10],
+    background: '#3d405b',
+    element: <ShapeFountain />,
   },
   clear: { position: [5, 15, 5], background: '#81b29a', element: <Clear /> },
 };
