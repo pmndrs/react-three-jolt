@@ -1,6 +1,6 @@
 import { useRef, useEffect } from 'react';
 import * as THREE from 'three';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useFrame } from '@react-three/fiber';
 
 import {
   RigidBody,
@@ -18,7 +18,7 @@ const _matrix = new THREE.Matrix4();
 const _axis = new THREE.Vector3();
 
 export function RaycastManyDemo({ count = 150, color = '#F4F1DE' }) {
-  const instancedMarkersRef = useRef<THREE.InstancedMesh>();
+  const instancedMarkersRef = useRef<THREE.InstancedMesh>(null);
   const linesRef = useRef<THREE.LineSegments>(null);
   const maxCount = 3000;
   //todo: change this with leva later
@@ -191,7 +191,7 @@ export function RaycastManyDemo({ count = 150, color = '#F4F1DE' }) {
       </lineSegments>
       <instancedMesh
         ref={instancedMarkersRef}
-        args={[null, null, 2 * maxCount]}
+        args={[undefined, undefined, 2 * maxCount]}
       >
         <sphereGeometry />
         <meshBasicMaterial color={color} />

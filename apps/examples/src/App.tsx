@@ -1,22 +1,17 @@
 // Base demo copied from r3/rapier
-import * as THREE from 'three';
-import {
-  Box,
-  Environment,
-  OrbitControls,
-  CameraControls,
-} from '@react-three/drei';
+//import * as THREE from 'three';
+import { Environment, CameraControls } from '@react-three/drei';
 import { Canvas, useThree } from '@react-three/fiber';
-import { Physics, RigidBody, vec3 } from '@react-three/jolt';
+import { Physics, vec3 } from '@react-three/jolt';
 import { Perf } from 'r3f-perf';
 import {
-  ReactNode,
+  //ReactNode,
   //StrictMode,
   Suspense,
   createContext,
   useContext,
   useEffect,
-  useRef,
+  //useRef,
   //useEffect,
   useState,
 } from 'react';
@@ -67,18 +62,6 @@ const ToggleButton = ({
   </button>
 );
 
-export interface Demo {
-  (props: { children?: ReactNode }): JSX.Element;
-}
-export function Clear() {
-  return (
-    <mesh>
-      <boxGeometry args={[1, 2, 3]} />
-      <meshStandardMaterial color="black" />
-    </mesh>
-  );
-}
-
 //* Controls Wrapper. We have to do this to get root state
 export function ControlWrapper(props: any) {
   const { position = [0, 10, 10], target = [0, 1, 0], ...rest } = props;
@@ -100,8 +83,16 @@ export function ControlWrapper(props: any) {
   }, [position]);
   return <CameraControls makeDefault {...rest} />;
 }
+type Routes = {
+  [key: string]: {
+    position?: number[];
+    target?: number[];
+    background?: string;
+    element: JSX.Element;
+  };
+};
 
-const routes = {
+const routes: Routes = {
   '': {
     position: [2, 5, 30],
     target: [0, 1, 10],
@@ -135,7 +126,6 @@ const routes = {
     background: '#3d405b',
     element: <JustBoxes />,
   },
-  clear: { position: [5, 15, 5], background: '#81b29a', element: <Clear /> },
 };
 
 export const App = () => {
@@ -165,7 +155,7 @@ export const App = () => {
     //@ts-ignore
     const route = routes[location.pathname.replace('/', '')];
     setCameraProps({ position: route.position, target: route.target });
-    setBackground(route.background);
+    setBackground(route.background || '#3d405b');
   }, [location]);
 
   return (

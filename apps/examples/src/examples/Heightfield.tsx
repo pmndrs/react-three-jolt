@@ -1,4 +1,4 @@
-import { RigidBody, Heightfield, useConst, useJolt } from '@react-three/jolt';
+import { RigidBody, Heightfield, useJolt } from '@react-three/jolt';
 
 export function HeightfieldDemo() {
   // contact listeners
@@ -6,7 +6,7 @@ export function HeightfieldDemo() {
     body1: number,
     body2: number,
     numListeners?: number,
-    context: 'string'
+    context?: 'new' | 'final'
   ) => {
     if (context == 'new')
       console.log(
@@ -33,7 +33,7 @@ export function HeightfieldDemo() {
     body1: number,
     body2: number,
     numListeners?: number,
-    context: string
+    context?: 'new' | 'final'
   ) => {
     if (context == 'final')
       console.log(

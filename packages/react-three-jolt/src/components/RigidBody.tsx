@@ -30,6 +30,7 @@ interface RigidBodyProps {
     type?: string;
     shape?: string;
     debug?: boolean;
+    ref?: any;
 
     //TODO: do these work yet?
     scale?: number[];
