@@ -14,18 +14,18 @@
 <p align="center">
 ⚠️ This library is under development. All APIs are subject to change. ⚠️
 <br />
-For contributions, please read the <a href="https://github.com/pmndrs/react-three-rapier/blob/main/packages/react-three-jolt/CONTRIBUTING.md">🪧 Contribution Guide</a>.
+For contributions, please read the <a href="https://github.com/pmndrs/react-three-jolt/blob/demo/DEVELOPMENT.md">🪧 Development Guide</a>.
 <br/>
 </p>
 
 ---
 
-JOLT is a highly capable real-time Physics Engine designed for games and VR applications built for use in Horizon Forbidden West.
+[The Jolt Physics Engine](https://github.com/jrouwe/JoltPhysics) a highly capable, real-time Physics Engine designed for games and VR applications built for use in Horizon Forbidden West.
 
-`react-three/jolt` (or `r3/jolt`) is a wrapper library around the [Jolt Physics Engine](https://github.com/jrouwe/JoltPhysics), designed to slot seamlessly into a `react-three/fiber` pipeline. 
+`react-three/jolt` (or `r3/jolt`) is a wrapper library designed to slot seamlessly into a `react-three/fiber` pipeline. 
 
 
-The core library is written in C++ with active support in many other platforms such as Rust and a dedicated WASM Library. The WASM version also has many different options for building worth exploring.
+The core library is written in C++ with active support in many  platforms (Windows/Mac/Linux/Android/iOS) and engines such as [Gadot](https://github.com/godot-jolt/godot-jolt) as well as a [dedicated WASM/JS Library](https://github.com/jrouwe/JoltPhysics.js). The WASM version also has many different options for building worth exploring.
 
 The goal of this library is to allow quick and easy access to a world-class physics simulation without some of the complexity or pitfalls. Jolt is very powerful and flexible, sometimes at the cost of usability.
 
