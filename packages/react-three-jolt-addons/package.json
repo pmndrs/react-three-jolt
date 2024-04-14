@@ -8,7 +8,7 @@
     "react",
     "three"
   ],
-  "version": "0.0.0-development",
+  "version": "0.0.1",
   "author": "Dennis Smolek",
   "contributors": [
     "Dennis Smolek",
@@ -67,6 +67,5 @@
     "three": "^0.163.0",
     "typescript": "^5.4.4",
     "vitest": "^1.5.0"
-  },
-  "packageManager": "yarn@4.0.2"
+  }
 }

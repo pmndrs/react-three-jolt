@@ -11,9 +11,9 @@
   "packageManager": "yarn@4.0.2",
   "dependencies": {
     "@react-three/drei": "^9.105.1",
-    "@react-three/jolt": "0.0.0-development",
-    "@react-three/jolt-addons": "0.0.0-development",
-    "@react-three/jolt-controllers": "0.0.0-development",
+    "@react-three/jolt": "0.0.1",
+    "@react-three/jolt-addons": "0.0.1",
+    "@react-three/jolt-controllers": "0.0.1",
     "leva": "^0.9.35",
     "r3f-perf": "^7.2.1",
     "react": "^18.2.0",
