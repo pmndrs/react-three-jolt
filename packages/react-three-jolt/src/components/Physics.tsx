@@ -79,8 +79,11 @@ export const Physics: FC<PhysicsProps> = (props) => {
     // =================================================
     //* Module initialization
     //if the user passed a module path try to load it
-    if (module) suspend(async () => initJolt(module), []);
-    else suspend(() => initJolt(), []);
+    if (module) {
+        suspend(() => initJolt(module), ["jolt", module]);
+    } else {
+        suspend(() => initJolt(), ["jolt"]);
+    }
     // =================================================
     const jolt = Raw.module;
     const pid = useId();
