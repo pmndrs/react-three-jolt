@@ -14,7 +14,7 @@
 <p align="center">
 ⚠️ This library is under development. All APIs are subject to change. ⚠️
 <br />
-For contributions, please read the <a href="https://github.com/pmndrs/react-three-jolt/blob/demo/DEVELOPMENT.md">🪧 Development Guide</a>.
+For contributions, please read the <a href="https://github.com/pmndrs/react-three-jolt/blob/main/DEVELOPMENT.md">🪧 Development Guide</a>.
 <br/>
   There are 4 phases planned for this library. We are currently in:  <em> Phase 0 (Pre-Alpha) </em>
   <br>
