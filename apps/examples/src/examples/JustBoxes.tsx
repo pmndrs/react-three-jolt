@@ -1,4 +1,5 @@
-import { RigidBody, Floor } from '@react-three/jolt';
+import { RigidBody } from '@react-three/jolt';
+import { Floor } from '../components/Floor';
 
 export function JustBoxes() {
   //const { physicsSystem } = useJolt();

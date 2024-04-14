@@ -1,7 +1,4 @@
-// Floor component for jolt. it's essentially just a box
-import React from 'react';
-import { RigidBody } from './RigidBody';
-//import { useEffect } from 'react';
+import { RigidBody } from '@react-three/jolt';
 import * as THREE from 'three';
 
 export const Floor = (props: any) => {

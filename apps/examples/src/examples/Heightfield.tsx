@@ -129,7 +129,6 @@ export function HeightfieldDemo() {
         </RigidBody>
       ))}
       <Heightfield url="heightmaps/wp1024.png" size={512} />
-      {/* <Floor size="150" position={[0, 0, 0]} /> */}
     </>
   );
 }

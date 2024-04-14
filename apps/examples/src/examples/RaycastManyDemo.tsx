@@ -1,14 +1,13 @@
-import { useRef, useEffect } from 'react';
-import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-
 import {
-  RigidBody,
-  useRaycaster,
-  Raycaster,
   RaycastHit,
+  Raycaster,
+  RigidBody,
+  useCommand,
+  useRaycaster,
 } from '@react-three/jolt';
-import { useCommand } from '@react-three/jolt';
+import { useEffect, useRef } from 'react';
+import * as THREE from 'three';
 
 // prop holders
 const _position = new THREE.Vector3();

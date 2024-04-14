@@ -1,18 +1,18 @@
-import { useEffect, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
 import {
-  RigidBody,
-  Raycaster,
   RaycastHit,
+  Raycaster,
+  RigidBody,
+  useConst,
   useJolt,
   useMulticaster,
   useRaycaster,
-  Floor,
   useSetTimeout,
   useUnmount,
-  useConst,
 } from '@react-three/jolt';
+import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { Floor } from '../components/Floor';
 
 export function RaycastSimpleDemo() {
   const raycaster: Raycaster = useRaycaster();

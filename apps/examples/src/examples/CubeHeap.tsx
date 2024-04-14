@@ -1,15 +1,15 @@
-import * as THREE from 'three';
-import { useEffect, useRef } from 'react';
-
 import {
-  RigidBody,
-  Floor,
   BodyState,
   InstancedRigidBodyMesh,
+  RigidBody,
+  useConst,
   useJolt,
+  useSetInterval,
 } from '@react-three/jolt';
-import { useConst, useSetInterval } from '@react-three/jolt';
 import { useControls } from 'leva';
+import { useEffect, useRef } from 'react';
+import * as THREE from 'three';
+import { Floor } from '../components/Floor';
 
 // this is going to be the instancedMesh version
 export function CubeHeap() {
