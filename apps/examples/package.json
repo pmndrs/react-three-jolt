@@ -11,8 +11,13 @@
   "packageManager": "yarn@4.0.2",
   "dependencies": {
     "@react-three/jolt": "0.0.0-development",
+    "drei": "^2.2.21",
+    "jolt-physics": "^0.22.0",
+    "leva": "^0.9.35",
+    "r3f-perf": "^7.2.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.3",
     "three": "^0.163.0"
   },
   "devDependencies": {

@@ -40,6 +40,12 @@ To run the examples, you can run the following:
 > yarn dev
 ```
 
+_Sidenote: to get HMR to work while running examples, open a seperate terminal to the react-three-jolt package and run:_
+
+```sh
+yarn build -w
+```
+
 ## Versioning
 
 This project uses `@changesets/cli` to manage versioning and releases.
