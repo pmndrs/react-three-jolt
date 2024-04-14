@@ -1,14 +1,14 @@
 // main items of the camera rigs
-import { Raw } from '../raw';
+import { Raw } from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 // mostly for the types
-import { PhysicsSystem } from './physics-system';
-import { ConstraintSystem } from './constraint-system';
+import { PhysicsSystem } from '@react-three/jolt';
+import { ConstraintSystem } from '@react-three/jolt';
 import { characterControllerSystem } from './character-controller';
 //@ts-ignore
 import { vec3, quat, convertNegativeRadians } from '../utils/';
-import { BodyState } from './';
+import { BodyState } from '@react-three/jolt';
 export class CameraRigManager {
     private physicsSystem: PhysicsSystem;
     private constraintSystem: ConstraintSystem;

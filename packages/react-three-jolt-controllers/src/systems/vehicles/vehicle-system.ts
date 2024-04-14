@@ -4,7 +4,7 @@ import type Jolt from 'jolt-physics';
 import { Raw } from '../../raw';
 import { vec3, quat } from '../../utils';
 */
-import { PhysicsSystem } from '../physics-system';
+import { PhysicsSystem } from '@react-three/jolt';
 // import { WheelSettings } from './wheels';
 import { VehicleFourWheelManager } from './VehicleManagerFourWheel';
 import { VehicleManagerTwoWheels } from './VehicleManagerTwoWheels';
@@ -114,8 +114,8 @@ export class VehicleSystem {
                 vehicle = new VehicleFourWheelManager(this.physicsSystem, settings);
                 break;
         }
-        //console.log('adding vehicle', name, vehicle);
         this.vehicles.set(name, vehicle);
+        console.log('vehicle added, current list:', this.vehicles);
         return vehicle;
     }
 

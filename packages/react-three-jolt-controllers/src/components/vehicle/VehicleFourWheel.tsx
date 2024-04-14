@@ -1,16 +1,15 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { useConst, useJolt } from '../../hooks';
+import { useConst, useJolt, vec3 } from '@react-three/jolt';
 import { VehicleSystem, VehicleFourWheelManager } from '../../systems/vehicles/';
 import { useThree } from '@react-three/fiber';
-import { useCommand } from '../../useCommand';
+import { useCommand } from '@react-three/jolt';
 type VehicleFourWheelProps = {
     children?: React.ReactNode;
     position?: THREE.Vector3 | number[];
     type?: string;
     name?: string;
 };
-import { vec3 } from '../../utils';
 
 //TODO make this a general vehicle component
 export function VehicleFourWheel(props: VehicleFourWheelProps) {
@@ -18,14 +17,13 @@ export function VehicleFourWheel(props: VehicleFourWheelProps) {
     let { name } = props;
     // set the name if not passed
     if (!name) {
-        if (type)
-            switch (type) {
-                case 'twoWheel':
-                    name = 'bike';
-                    break;
-                default:
-                    name = 'car';
-            }
+        switch (type) {
+            case 'twoWheel':
+                name = 'bike';
+                break;
+            default:
+                name = 'car';
+        }
     }
     const { physicsSystem } = useJolt();
     const { scene, camera, controls } = useThree();
@@ -38,12 +36,12 @@ export function VehicleFourWheel(props: VehicleFourWheelProps) {
         let newVehicle;
         switch (type) {
             case 'twoWheel':
-                newVehicle = vehicleSystem.addVehicle(name!, {
+                newVehicle = vehicleSystem.addVehicle(name, {
                     type: 'twoWheel'
                 });
                 break;
             default:
-                newVehicle = vehicleSystem.addVehicle(name!);
+                newVehicle = vehicleSystem.addVehicle(name);
         }
 
         vehicle.current = newVehicle;

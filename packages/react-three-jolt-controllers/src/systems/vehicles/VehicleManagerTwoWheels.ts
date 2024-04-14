@@ -1,9 +1,7 @@
 import * as THREE from 'three';
 import type Jolt from 'jolt-physics';
-import { Raw } from '../../raw';
-import { vec3, quat } from '../../utils';
-import { PhysicsSystem } from '../physics-system';
-import { Layer } from '../../constants';
+import { Layer, Raw, vec3, quat, PhysicsSystem } from '@react-three/jolt';
+
 import {
     VehicleFourWheelSettings,
     WheelState

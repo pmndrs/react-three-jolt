@@ -1,19 +1,20 @@
 import React, { useState } from 'react';
 import { useRef, useEffect, forwardRef, memo } from 'react';
 import { useThree } from '@react-three/fiber';
-import { useJolt } from '../hooks';
+import { useJolt } from '@react-three/jolt';
 import * as THREE from 'three';
 import { characterControllerSystem } from '../systems/character-controller';
-import { useCommand } from '../useCommand';
-import { useForwardedRef } from '../hooks/use-forwarded-ref';
+import { useCommand } from '@react-three/jolt';
+import { useForwardedRef } from '@react-three/jolt';
 // create a blank context
 export const CharacterControllerContext = React.createContext(undefined!);
 interface CControllerProps {
-    children: any;
-    radius: number;
-    height: number;
-    debug: boolean;
+    children?: any;
+    radius?: number;
+    height?: number;
+    debug?: boolean;
     rest?: any;
+    position?: any;
 }
 export const CharacterController: React.FC<CControllerProps> = memo(
     forwardRef((props, forwardedRef) => {

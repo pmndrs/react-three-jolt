@@ -11,6 +11,7 @@ export type HeightfieldProps = {
     height?: number;
     size?: number;
     displacementScale?: number;
+    position?: any;
 };
 
 export function Heightfield({

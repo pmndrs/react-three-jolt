@@ -4,12 +4,8 @@ so much and can be reused for things like NPC's */
 import * as THREE from 'three';
 import { MathUtils } from 'three';
 import type Jolt from 'jolt-physics';
-import { Raw } from '../raw';
-import { Layer } from '../constants';
-import { PhysicsSystem } from './physics-system';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
-import { quat, vec3 } from '../utils';
-import { generateBodySettings } from './body-system';
+import { Raw, Layer, PhysicsSystem, quat, vec3, generateBodySettings } from '@react-three/jolt';
 
 export class characterControllerSystem {
     joltInterface: Jolt.JoltInterface;

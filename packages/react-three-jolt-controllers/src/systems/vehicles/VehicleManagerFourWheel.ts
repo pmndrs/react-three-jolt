@@ -4,7 +4,7 @@ import type Jolt from 'jolt-physics';
 import { Raw } from '../../raw';
 import { vec3, quat } from '../../utils';
 */
-import { PhysicsSystem } from '../physics-system';
+import { PhysicsSystem } from '@react-three/jolt';
 import {
     VehicleFourWheelSettings
     // WheelState,

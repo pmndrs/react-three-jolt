@@ -1,11 +1,12 @@
 import { useMemo, useContext, useEffect, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
-import { useConst, useJolt } from '../hooks';
+import { useConst, useJolt } from '@react-three/jolt';
 import { CameraRigManager } from '../systems/camera-rig-system';
 import { CharacterControllerContext } from './CharacterController';
 //import { RigidBody } from './RidgedBody';
-import { useCommand } from '../useCommand';
+import { useCommand } from '@react-three/jolt';
 import * as THREE from 'three';
+import React from 'react';
 export function CameraRig() {
     //@ts-ignore
     const isAttached = useRef(false);
@@ -64,4 +65,6 @@ export function CameraRig() {
             cameraListener();
         };
     }, [characterSystem]);
+
+    return <></>;
 }

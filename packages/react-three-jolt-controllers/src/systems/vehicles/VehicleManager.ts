@@ -1,9 +1,6 @@
 import * as THREE from 'three';
 import type Jolt from 'jolt-physics';
-import { Raw } from '../../raw';
-import { vec3, quat } from '../../utils';
-import { PhysicsSystem } from '../physics-system';
-import { Layer } from '../../constants';
+import { Raw, vec3, quat, PhysicsSystem, Layer } from '@react-three/jolt';
 import { VehicleFourWheelSettings, WheelState, createWheelSettings } from './wheels';
 
 const FL_WHEEL = 0;
@@ -19,11 +16,13 @@ export class VehicleManager {
     controller: Jolt.WheeledVehicleController;
 
     // listeners for collision events
-    /*
-  private preStepListeners = [];
-  private postCollideListeners = [];
-  private postStepListeners = [];
-*/
+    //@ts-ignore these get added to dynamicly. ts is wrong
+    private preStepListeners = [];
+    //@ts-ignore
+    private postCollideListeners = [];
+    //@ts-ignore
+    private postStepListeners = [];
+
     //listneer for actions
     private actionListeners = [];
 
