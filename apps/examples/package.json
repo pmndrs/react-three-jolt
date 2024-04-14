@@ -10,7 +10,7 @@
   },
   "packageManager": "yarn@4.0.2",
   "dependencies": {
-    "@react-three/drei": "^9.105.1",
+    "@react-three/drei": "^9.105.4",
     "@react-three/jolt": "0.0.1",
     "@react-three/jolt-addons": "0.0.1",
     "@react-three/jolt-controllers": "0.0.1",

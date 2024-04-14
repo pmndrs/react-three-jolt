@@ -1603,9 +1603,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@react-three/drei@npm:^9.105.1":
-  version: 9.105.1
-  resolution: "@react-three/drei@npm:9.105.1"
+"@react-three/drei@npm:^9.105.4":
+  version: 9.105.4
+  resolution: "@react-three/drei@npm:9.105.4"
   dependencies:
     "@babel/runtime": "npm:^7.11.2"
     "@mediapipe/tasks-vision": "npm:0.10.8"
@@ -1638,7 +1638,7 @@ __metadata:
   peerDependenciesMeta:
     react-dom:
       optional: true
-  checksum: 10c0/d9cf31df00eb1f596b5d72fc24595c3b8296a31d95bd6afe992cb2baab31ea10df9bf75f1d6ead6df38b462c3107c370c640ef92f7e2763f2017c112d94eb7ca
+  checksum: 10c0/d22189988c6bdfd9e193b914a14c02a4aee865b2d4ee1f741ce133ea3db50aa4960433b1824dca3f36c3df3ac05d82688825878826a054b2553ea2324d4defad
   languageName: node
   linkType: hard
 
@@ -4070,7 +4070,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "examples@workspace:apps/examples"
   dependencies:
-    "@react-three/drei": "npm:^9.105.1"
+    "@react-three/drei": "npm:^9.105.4"
     "@react-three/jolt": "npm:0.0.1"
     "@react-three/jolt-addons": "npm:0.0.1"
     "@react-three/jolt-controllers": "npm:0.0.1"
