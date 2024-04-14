@@ -3,7 +3,7 @@ import { PhysicsSystem } from './physics-system';
 import { Layer } from '../constants';
 import * as THREE from 'three';
 
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 import { Raw } from '../raw';
 import { anyVec3, vec3 } from '../utils';
 

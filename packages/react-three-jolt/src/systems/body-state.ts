@@ -1,5 +1,5 @@
 // This class holds the bodies and the management of them
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 import {
     //MathUtils,
     Matrix4,

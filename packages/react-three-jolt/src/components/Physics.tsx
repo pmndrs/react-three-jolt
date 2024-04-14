@@ -1,6 +1,6 @@
 // This is the core component that manages and stores the simulation
 import * as THREE from 'three';
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 //import InitJolt from 'jolt-physics/wasm-compat'
 import { suspend } from 'suspend-react';
 import { Raw, initJolt } from '../raw';

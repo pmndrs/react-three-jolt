@@ -1,6 +1,6 @@
 // main items of the camera rigs
 import { Raw } from '../raw';
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 // mostly for the types
 import { PhysicsSystem } from './physics-system';

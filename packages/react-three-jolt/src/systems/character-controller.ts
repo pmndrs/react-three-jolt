@@ -3,7 +3,7 @@ so much and can be reused for things like NPC's */
 
 import * as THREE from 'three';
 import { MathUtils } from 'three';
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 import { Raw } from '../raw';
 import { Layer } from '../constants';
 import { PhysicsSystem } from './physics-system';

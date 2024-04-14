@@ -1,7 +1,7 @@
 //various Jolt/Three tools for meshes
 // I HATE we need to import this raw module
 import { Raw } from '../raw';
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 
 // create a heightfeild type floor

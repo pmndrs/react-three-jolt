@@ -1,4 +1,4 @@
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { Raw } from '../raw';
 import { Vector3Tuple, Vector4Tuple } from '../types';

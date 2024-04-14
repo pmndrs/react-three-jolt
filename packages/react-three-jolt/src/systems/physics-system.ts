@@ -11,7 +11,7 @@ we'll expose various parts of the system through the physics component and conte
 import { invalidate } from '@react-three/fiber';
 import * as THREE from 'three';
 
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 import { Raw } from '../raw';
 import { BodySystem } from './body-system';
 import { BodyState } from './body-state';

@@ -5,7 +5,7 @@
 // Inital code ffrom Isaac's Jolt Sketch:
 //https://github.com/isaac-mason/sketches/blob/main/src/sketches/jolt-physics/jolt-react-api/three-to-jolt.ts
 
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { BufferGeometry, Mesh, Object3D, Vector3 } from 'three';
 import { SphereGeometry, BoxGeometry, CapsuleGeometry, CylinderGeometry } from 'three';

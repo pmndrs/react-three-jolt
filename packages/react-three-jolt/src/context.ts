@@ -1,4 +1,4 @@
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 import { createContext } from 'react';
 import type { BodySystem } from './systems/body-system';
 import type { PhysicsSystem } from './systems/physics-system';

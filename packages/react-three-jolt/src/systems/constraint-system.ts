@@ -1,7 +1,7 @@
 // class to control and manage constraints
 // designed to be used from the body system although it can be accessed directly
 
-import Jolt from 'jolt-physics';
+import type Jolt from 'jolt-physics';
 import { Raw } from '../raw';
 // @ts-ignore
 import { vec3, quat } from '../utils';
