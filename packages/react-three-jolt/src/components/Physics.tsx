@@ -21,7 +21,7 @@ import React from 'react';
 
 import { useMount, useUnmount } from '../hooks';
 // library imports
-import FrameStepper from './FrameStepper';
+import { FrameStepper } from './FrameStepper';
 
 // physics system import
 import { PhysicsSystem } from '../systems/physics-system';
@@ -47,17 +47,18 @@ export interface SteppingState {
 }
 
 // Core component
-export interface PhysicsProps {
+export type PhysicsProps = {
     defaultBodySettings?: any;
     children: ReactNode;
     gravity?: number | THREE.Vector3;
     paused?: boolean;
     interpolate?: boolean;
     updatePriority?: any;
-    updateLoop?: string;
+    updateLoop?: 'follow' | 'independent';
     debug?: boolean;
     module?: any;
-}
+};
+
 export const Physics: FC<PhysicsProps> = (props) => {
     const {
         defaultBodySettings,
