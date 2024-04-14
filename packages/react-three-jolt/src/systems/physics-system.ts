@@ -60,7 +60,7 @@ export class PhysicsSystem {
     maxInterfaces = 3;
     constructor(pid = '0') {
         const jolt = Raw.module;
-        console.log('*** R3/Jolt PhysicsSystem Initialized ***');
+        //console.log('*** R3/Jolt PhysicsSystem Initialized ***');
         /* setup collisions and broadphase */
         const objectFilter = new jolt.ObjectLayerPairFilterTable(NUM_OBJECT_LAYERS);
         objectFilter.EnableCollision(Layer.NON_MOVING, Layer.MOVING);
@@ -122,12 +122,12 @@ export class PhysicsSystem {
     }
 
     destroy(pid = '0'): void {
-        console.log('Request to destroy PhysicsSystem', pid);
+        // console.log('Request to destroy PhysicsSystem', pid);
         // check if it exists in the global
         if (Raw.joltInterfaces.has(pid)) {
             Raw.module.destroy(this.joltInterface);
             Raw.joltInterfaces.delete(pid);
-            console.log('*** PhysicsSystem:' + pid + ' destroyed ***');
+            // console.log('*** PhysicsSystem:' + pid + ' destroyed ***');
         }
     }
     // TODO: Loops and steps seems messy
@@ -325,6 +325,6 @@ export class PhysicsSystem {
         const newGravity: anyVec3 =
             typeof gravity === 'number' ? new Raw.module.Vec3(0, -gravity, 0) : gravity;
         this.physicsSystem.SetGravity(vec3.jolt(newGravity));
-        console.log('gravity set', typeof gravity, vec3.three(newGravity));
+        if (this.debug) console.log('gravity set', typeof gravity, vec3.three(newGravity));
     }
 }

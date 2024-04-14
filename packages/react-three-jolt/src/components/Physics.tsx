@@ -80,9 +80,9 @@ export const Physics: FC<PhysicsProps> = (props) => {
     //* Module initialization
     //if the user passed a module path try to load it
     if (module) {
-        suspend(() => initJolt(module), ["jolt", module]);
+        suspend(() => initJolt(module), ['jolt', module]);
     } else {
-        suspend(() => initJolt(), ["jolt"]);
+        suspend(() => initJolt(), ['jolt']);
     }
     // =================================================
     const jolt = Raw.module;
@@ -92,7 +92,7 @@ export const Physics: FC<PhysicsProps> = (props) => {
     const [contextApi, setContextApi] = useState<JoltContext>();
 
     useMount(() => {
-        console.log('** Physics Component: ' + pid + ' Mounted **');
+        if (debug) console.log('** Physics Component: ' + pid + ' Mounted **');
         const ps = new PhysicsSystem(pid);
         // we have to pass this here to catch before body creation
         if (defaultBodySettings) ps.bodySystem.defaultBodySettings = defaultBodySettings;
@@ -109,17 +109,13 @@ export const Physics: FC<PhysicsProps> = (props) => {
     );
     // cleanup and destruction of system when component unmounts
     useUnmount(() => {
-        if (physicsSystem) {
-            // console.log('Component ' + pid + ' wanting to destroy physicsSystem: ', physicsSystem);
-            physicsSystem.destroy(pid);
-        }
+        if (physicsSystem) physicsSystem.destroy(pid);
     });
 
     // These will be effects for props to send to the correct systems
 
     useEffect(() => {
         if (!physicsSystem) return;
-        console.log('setting gravity from component');
         //@ts-ignore
         if (gravity != null) physicsSystem.setGravity(gravity);
     }, [gravity, physicsSystem]);
