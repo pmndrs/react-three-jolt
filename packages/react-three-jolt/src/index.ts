@@ -1,6 +1,5 @@
 import * as _fiber from '@react-three/fiber';
 
-export * from './placeholder';
 export * from './systems';
 export * from './hooks';
 export * from './utils';

@@ -17,6 +17,7 @@ export async function imageUrlToImageData(url: string, scalingFactor?: number): 
         const image = new Image();
         image.onload = () => {
             const canvas = document.createElement('canvas');
+
             const context = canvas.getContext('2d');
             if (!context) {
                 reject(new Error('No context'));
