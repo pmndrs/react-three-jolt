@@ -158,7 +158,7 @@ export class BodySystem {
     }
 
     // There's probably a better pattern, but im making my own function for this
-    public addHeightfield(planeMesh: THREE.Mesh) {
+    public addHeightfield(planeMesh: THREE.Mesh): number {
         //const position = vec3.threeToJolt(planeMesh.position);
         // const quaternion = quat.threeToJolt(planeMesh.quaternion);
         const shapeSettings = generateHeightfieldShapeFromThree(planeMesh);

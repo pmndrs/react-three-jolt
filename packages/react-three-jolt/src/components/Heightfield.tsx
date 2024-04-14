@@ -1,6 +1,5 @@
 import { useTexture } from '@react-three/drei';
 import React, { useEffect, useRef } from 'react';
-import { BodyState } from 'src';
 import * as THREE from 'three';
 import { applyHeightmapToPlane } from '../heightField/Generators';
 import { useJolt, useUnmount } from '../hooks';
@@ -24,7 +23,7 @@ export function Heightfield({
     ...props
 }: HeightfieldProps) {
     const planeRef = useRef<THREE.Mesh>(null);
-    const activeBody: React.MutableRefObject<BodyState | null> = useRef(null);
+    const activeBody: React.MutableRefObject<number | null> = useRef(null);
 
     const { bodySystem } = useJolt();
     // try and load the url as a texture
@@ -66,12 +65,7 @@ export function Heightfield({
         <>
             <mesh ref={planeRef} {...props}>
                 <planeGeometry args={[width, height, size - 1, size - 1]} />
-                <meshStandardMaterial
-                    transparent={true}
-                    //opacity={0.2}
-                    color="#8F2D56"
-                    side={THREE.DoubleSide}
-                />
+                <meshStandardMaterial transparent={true} color="#8F2D56" side={THREE.DoubleSide} />
             </mesh>
         </>
     );

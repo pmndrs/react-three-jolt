@@ -3,8 +3,7 @@ import { createContext } from 'react';
 import type { BodySystem } from './systems/body-system';
 import type { PhysicsSystem } from './systems/physics-system';
 
-// Context object
-export interface JoltContext {
+export type JoltContext = {
     jolt: typeof Jolt;
     physicsSystem: PhysicsSystem;
     bodySystem: BodySystem;
@@ -12,6 +11,6 @@ export interface JoltContext {
     paused: boolean;
     debug: boolean;
     step: (dt: number) => void;
-}
+};
 
-export const joltContext = createContext<any>(undefined);
+export const joltContext = createContext<JoltContext>(null!);

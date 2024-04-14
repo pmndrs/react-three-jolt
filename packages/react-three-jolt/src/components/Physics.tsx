@@ -4,7 +4,7 @@ import Jolt from 'jolt-physics';
 //import InitJolt from 'jolt-physics/wasm-compat'
 import { suspend } from 'suspend-react';
 import { Raw, initJolt } from '../raw';
-import { joltContext } from '../context';
+import { JoltContext, joltContext } from '../context';
 import {
     FC,
     ReactNode,
@@ -86,7 +86,7 @@ export const Physics: FC<PhysicsProps> = (props) => {
     const pid = useId();
 
     const [physicsSystem, setPhysicsSystem] = useState<PhysicsSystem>();
-    const [contextApi, setContextApi] = useState({});
+    const [contextApi, setContextApi] = useState<JoltContext>();
 
     useMount(() => {
         console.log('** Physics Component: ' + pid + ' Mounted **');
@@ -138,7 +138,6 @@ export const Physics: FC<PhysicsProps> = (props) => {
         if (physicsSystem.paused !== paused) physicsSystem.paused = paused;
     }, [debug, jolt, paused, physicsSystem, step]);
 
-    //@ts-ignore
     if (!contextApi || !contextApi.physicsSystem) return null;
 
     return (
