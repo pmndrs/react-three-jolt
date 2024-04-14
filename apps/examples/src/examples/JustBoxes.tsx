@@ -1,5 +1,5 @@
 import { RigidBody } from '@react-three/jolt';
-import { Floor } from '../components/Floor';
+import { Floor } from '@react-three/jolt-addons';
 
 export function JustBoxes() {
   //const { physicsSystem } = useJolt();
@@ -7,7 +7,10 @@ export function JustBoxes() {
   // draw 5 cubes that land on the floor
   return (
     <>
-      <Floor position={[0, 0, 0]} size={100} />
+      <Floor position={[0, 0, 0]} size={100}>
+        <meshStandardMaterial />
+      </Floor>
+
       <RigidBody position={[0, 1, 0]}>
         <mesh>
           <boxGeometry args={[1, 1, 1]} />

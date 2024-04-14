@@ -5,6 +5,7 @@ import path from 'path';
 import filesize from 'rollup-plugin-filesize';
 
 const external = [
+    '@react-three/jolt',
     'jolt-physics',
     '@react-three/fiber',
     '@react-three/drei',

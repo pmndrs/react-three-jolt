@@ -10,9 +10,9 @@ import {
   useSetTimeout,
   useUnmount,
 } from '@react-three/jolt';
+import { Floor } from '@react-three/jolt-addons';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { Floor } from '../components/Floor';
 
 export function RaycastSimpleDemo() {
   const raycaster: Raycaster = useRaycaster();
@@ -185,7 +185,10 @@ export function RaycastSimpleDemo() {
   // draw 5 cubes that land on the floor
   return (
     <>
-      <Floor position={[0, 0, 0]} color={'#fdf0d5'} size={100} />
+      <Floor position={[0, 0, 0]} size={100}>
+        <meshStandardMaterial color="#fdf0d5" />
+      </Floor>
+
       <RigidBody position={[0, 1, 0]}>
         <mesh castShadow>
           <boxGeometry args={[1, 1, 1]} />

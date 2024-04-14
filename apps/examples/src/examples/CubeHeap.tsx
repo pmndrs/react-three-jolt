@@ -6,10 +6,10 @@ import {
   useJolt,
   useSetInterval,
 } from '@react-three/jolt';
+import { Floor } from '@react-three/jolt-addons';
 import { useControls } from 'leva';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { Floor } from '../components/Floor';
 
 // this is going to be the instancedMesh version
 export function CubeHeap() {
@@ -86,7 +86,10 @@ export function CubeHeap() {
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial color="#F2CC8F" />
       </InstancedRigidBodyMesh>
-      <Floor position={[0, 0, 0]} size={100} />
+
+      <Floor position={[0, 0, 0]} size={100}>
+        <meshStandardMaterial />
+      </Floor>
     </>
   );
 }
