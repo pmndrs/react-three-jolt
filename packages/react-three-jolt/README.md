@@ -44,7 +44,7 @@ Just like everything in R3F must be within the `<Canvas>` Everything in R3/Jolt 
 ```tsx
 <Physics gravity={10} debug={doDebug} paused={isPaused} defaultBodySettings={defaultBodySettings} >
 
-</Pysics>
+</Physics>
 ```
 
 One way it is different however is much of the logic actually lies in a PhysicsSystem class that has it’s own api so you can make changes to the entire system without directly adjusting the component. 
@@ -155,7 +155,7 @@ useEffect(() => {
 
 return (
     <>
-        <RigidBody ref="myBody"></RigidBody>
+        <RigidBody ref={myBody}></RigidBody>
     </>
 );
 ```
