@@ -1688,7 +1688,7 @@ __metadata:
   resolution: "@react-three/jolt-addons@workspace:packages/react-three-jolt-addons"
   dependencies:
     "@react-three/fiber": "npm:8.16.1"
-    "@react-three/jolt": "npm:0.0.0-development"
+    "@react-three/jolt": "npm:0.0.1"
     "@react-three/test-renderer": "npm:^8.2.1"
     "@rollup/plugin-commonjs": "npm:^25.0.7"
     "@rollup/plugin-node-resolve": "npm:^15.0.1"
@@ -1720,7 +1720,7 @@ __metadata:
   resolution: "@react-three/jolt-controllers@workspace:packages/react-three-jolt-controllers"
   dependencies:
     "@react-three/fiber": "npm:8.16.1"
-    "@react-three/jolt": "npm:0.0.0-development"
+    "@react-three/jolt": "npm:0.0.1"
     "@react-three/test-renderer": "npm:^8.2.1"
     "@rollup/plugin-commonjs": "npm:^25.0.7"
     "@rollup/plugin-node-resolve": "npm:^15.0.1"
@@ -1746,19 +1746,6 @@ __metadata:
     react-dom: ^18.2.0
   languageName: unknown
   linkType: soft
-
-"@react-three/jolt@npm:0.0.0-development":
-  version: 0.0.0-development
-  resolution: "@react-three/jolt@npm:0.0.0-development"
-  dependencies:
-    jolt-physics: "npm:^0.22.0"
-  peerDependencies:
-    "@react-three/fiber": ">=8.9.0"
-    react: ^18.2.0
-    react-dom: ^18.2.0
-  checksum: 10c0/8699d9b49447f857daa6b382db515ed89859f6fa269a66f0c1f67cf05525fb648b12faa53a5befd001391b782f4ee6a544fa475e337253f57dc87a7f39a78447
-  languageName: node
-  linkType: hard
 
 "@react-three/jolt@npm:0.0.1, @react-three/jolt@workspace:packages/react-three-jolt":
   version: 0.0.0-use.local

@@ -44,7 +44,7 @@
     "react-dom": "^18.2.0"
   },
   "dependencies": {
-    "@react-three/jolt": "0.0.0-development"
+    "@react-three/jolt": "0.0.1"
   },
   "devDependencies": {
     "@react-three/fiber": "8.16.1",
