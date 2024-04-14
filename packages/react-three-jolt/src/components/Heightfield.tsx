@@ -1,18 +1,11 @@
-import { useRef, useEffect } from 'react';
-import * as THREE from 'three';
 import { useTexture } from '@react-three/drei';
-
+import React, { useEffect, useRef } from 'react';
+import { BodyState } from 'src';
+import * as THREE from 'three';
+import { applyHeightmapToPlane } from '../heightField/Generators';
 import { useJolt, useUnmount } from '../hooks';
 
-import {
-    //@ts-ignore
-    imageUrlToImageData,
-    applyHeightmapToPlane
-} from '../heightField/Generators';
-import React from 'react';
-import { BodyState } from 'src';
-
-type HeightfieldProps = {
+export type HeightfieldProps = {
     url?: string;
     texture?: string;
     width?: number;
@@ -62,6 +55,7 @@ export function Heightfield({
         }
         getImageData();
     }, [url, urlTexture, texture, displacementScale, bodySystem]);
+
     useUnmount(() => {
         if (activeBody.current) {
             bodySystem.removeBody(activeBody.current);
