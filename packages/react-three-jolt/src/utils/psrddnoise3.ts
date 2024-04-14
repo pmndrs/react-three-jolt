@@ -25,23 +25,21 @@ export function psrddnoise(
     alpha: number,
     gradient: Vec3,
     dg: Vec3,
-    dg2: Vec3,
+    dg2: Vec3
 ) {
     const M: Mat3 = [
         [0.0, 1.0, 1.0],
         [1.0, 0.0, 1.0],
-        [1.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0]
     ];
 
     const Mi: Mat3 = [
         [-0.5, 0.5, 0.5],
         [0.5, -0.5, 0.5],
-        [0.5, 0.5, -0.5],
+        [0.5, 0.5, -0.5]
     ];
     // these maps are nuts
-    const uvw = M.map((row) =>
-        row.reduce((acc, val, index) => acc + val * x[index], 0),
-    );
+    const uvw = M.map((row) => row.reduce((acc, val, index) => acc + val * x[index], 0));
 
     let i0 = uvw.map(Math.floor);
     const f0 = uvw.map((val) => val - Math.floor(val));
@@ -57,18 +55,10 @@ export function psrddnoise(
     let i2 = i0.map((val, index) => val + o2[index]);
     let i3 = i0.map((val) => val + 1);
 
-    const v0 = Mi.map((row) =>
-        row.reduce((acc, val, index) => acc + val * i0[index], 0),
-    );
-    const v1 = Mi.map((row) =>
-        row.reduce((acc, val, index) => acc + val * i1[index], 0),
-    );
-    const v2 = Mi.map((row) =>
-        row.reduce((acc, val, index) => acc + val * i2[index], 0),
-    );
-    const v3 = Mi.map((row) =>
-        row.reduce((acc, val, index) => acc + val * i3[index], 0),
-    );
+    const v0 = Mi.map((row) => row.reduce((acc, val, index) => acc + val * i0[index], 0));
+    const v1 = Mi.map((row) => row.reduce((acc, val, index) => acc + val * i1[index], 0));
+    const v2 = Mi.map((row) => row.reduce((acc, val, index) => acc + val * i2[index], 0));
+    const v3 = Mi.map((row) => row.reduce((acc, val, index) => acc + val * i3[index], 0));
 
     const x0 = x.map((val, index) => val - v0[index]);
     const x1 = x.map((val, index) => val - v1[index]);
@@ -80,25 +70,14 @@ export function psrddnoise(
         const vy = [v0[1], v1[1], v2[1], v3[1]];
         const vz = [v0[2], v1[2], v2[2], v3[2]];
 
-        if (period[0] > 0)
-            vx.forEach((val, index) => (vx[index] = val % period[0]));
-        if (period[1] > 0)
-            vy.forEach((val, index) => (vy[index] = val % period[1]));
-        if (period[2] > 0)
-            vz.forEach((val, index) => (vz[index] = val % period[2]));
+        if (period[0] > 0) vx.forEach((val, index) => (vx[index] = val % period[0]));
+        if (period[1] > 0) vy.forEach((val, index) => (vy[index] = val % period[1]));
+        if (period[2] > 0) vz.forEach((val, index) => (vz[index] = val % period[2]));
 
-        i0 = M.map((row) =>
-            row.reduce((acc, val, index) => acc + val * vx[index], 0),
-        );
-        i1 = M.map((row) =>
-            row.reduce((acc, val, index) => acc + val * vy[index], 0),
-        );
-        i2 = M.map((row) =>
-            row.reduce((acc, val, index) => acc + val * vz[index], 0),
-        );
-        i3 = M.map((row) =>
-            row.reduce((acc, val, index) => acc + val * vz[index], 0),
-        );
+        i0 = M.map((row) => row.reduce((acc, val, index) => acc + val * vx[index], 0));
+        i1 = M.map((row) => row.reduce((acc, val, index) => acc + val * vy[index], 0));
+        i2 = M.map((row) => row.reduce((acc, val, index) => acc + val * vz[index], 0));
+        i3 = M.map((row) => row.reduce((acc, val, index) => acc + val * vz[index], 0));
 
         i0.forEach((val, index) => (i0[index] = Math.floor(val + 0.5)));
         i1.forEach((val, index) => (i1[index] = Math.floor(val + 0.5)));
@@ -107,11 +86,9 @@ export function psrddnoise(
     }
 
     const hash = permute(
-        permute(
-            permute([i0[2], i1[2], i2[2], i3[2]]).map(
-                (val, index) => val + i0[index],
-            ),
-        ).map((val, index) => val + i0[index]),
+        permute(permute([i0[2], i1[2], i2[2], i3[2]]).map((val, index) => val + i0[index])).map(
+            (val, index) => val + i0[index]
+        )
     );
 
     const theta = hash.map((val) => val * 3.883222077);
@@ -132,18 +109,10 @@ export function psrddnoise(
         const py = St.map((val) => val * sz_prime[0]);
         const pz = sz_prime;
 
-        const Ctp = St.map(
-            (val, index) => val * Sp[index] - Ct[index] * Cp[index],
-        );
-        const qx = Ctp.map(
-            (val, index) => val * St[index] + Sp[index] * sz[index],
-        );
-        const qy = Ctp.map(
-            (val, index) => val * -Ct[index] + Cp[index] * sz[index],
-        );
-        const qz = py.map(
-            (val, index) => -(val * Cp[index] + px[index] * Sp[index]),
-        );
+        const Ctp = St.map((val, index) => val * Sp[index] - Ct[index] * Cp[index]);
+        const qx = Ctp.map((val, index) => val * St[index] + Sp[index] * sz[index]);
+        const qy = Ctp.map((val, index) => val * -Ct[index] + Cp[index] * sz[index]);
+        const qz = py.map((val, index) => -(val * Cp[index] + px[index] * Sp[index]));
 
         const Sa = Math.sin(alpha);
         const Ca = Math.cos(alpha);
@@ -166,7 +135,7 @@ export function psrddnoise(
         0.5 - x0.reduce((acc, val) => acc + val * val, 0),
         0.5 - x1.reduce((acc, val) => acc + val * val, 0),
         0.5 - x2.reduce((acc, val) => acc + val * val, 0),
-        0.5 - x3.reduce((acc, val) => acc + val * val, 0),
+        0.5 - x3.reduce((acc, val) => acc + val * val, 0)
     ];
 
     const w2 = w.map((val) => val * val);
@@ -176,49 +145,25 @@ export function psrddnoise(
 
     const n = dot(w3, gdotx);
 
-    const dw = w2
-        .map((val) => -6.0 * val)
-        .map((val, index) => val * gdotx[index]);
-    const dn0 = g0
-        .map((val) => w3[0] * val)
-        .map((val, index) => val + dw[0] * x0[index]);
-    const dn1 = g1
-        .map((val) => w3[1] * val)
-        .map((val, index) => val + dw[1] * x1[index]);
-    const dn2 = g2
-        .map((val) => w3[2] * val)
-        .map((val, index) => val + dw[2] * x2[index]);
-    const dn3 = g3
-        .map((val) => w3[3] * val)
-        .map((val, index) => val + dw[3] * x3[index]);
-    gradient = dn0.map(
-        (val, index) => 39.5 * (val + dn1[index] + dn2[index] + dn3[index]),
-    );
+    const dw = w2.map((val) => -6.0 * val).map((val, index) => val * gdotx[index]);
+    const dn0 = g0.map((val) => w3[0] * val).map((val, index) => val + dw[0] * x0[index]);
+    const dn1 = g1.map((val) => w3[1] * val).map((val, index) => val + dw[1] * x1[index]);
+    const dn2 = g2.map((val) => w3[2] * val).map((val, index) => val + dw[2] * x2[index]);
+    const dn3 = g3.map((val) => w3[3] * val).map((val, index) => val + dw[3] * x3[index]);
+    gradient = dn0.map((val, index) => 39.5 * (val + dn1[index] + dn2[index] + dn3[index]));
 
     const dw2 = w.map((val) => 24.0 * val * gdotx);
-    const dga0 =
-        dw2[0] * x0[0] * x0[0] - 6.0 * w2[0] * (gdotx[0] + 2.0 * g0[0] * x0[0]);
-    const dga1 =
-        dw2[1] * x1[0] * x1[0] - 6.0 * w2[1] * (gdotx[1] + 2.0 * g1[0] * x1[0]);
-    const dga2 =
-        dw2[2] * x2[0] * x2[0] - 6.0 * w2[2] * (gdotx[2] + 2.0 * g2[0] * x2[0]);
-    const dga3 =
-        dw2[3] * x3[0] * x3[0] - 6.0 * w2[3] * (gdotx[3] + 2.0 * g3[0] * x3[0]);
-    dg = dga0.map(
-        (val, index) => 35.0 * (val + dga1[index] + dga2[index] + dga3[index]),
-    );
+    const dga0 = dw2[0] * x0[0] * x0[0] - 6.0 * w2[0] * (gdotx[0] + 2.0 * g0[0] * x0[0]);
+    const dga1 = dw2[1] * x1[0] * x1[0] - 6.0 * w2[1] * (gdotx[1] + 2.0 * g1[0] * x1[0]);
+    const dga2 = dw2[2] * x2[0] * x2[0] - 6.0 * w2[2] * (gdotx[2] + 2.0 * g2[0] * x2[0]);
+    const dga3 = dw2[3] * x3[0] * x3[0] - 6.0 * w2[3] * (gdotx[3] + 2.0 * g3[0] * x3[0]);
+    dg = dga0.map((val, index) => 35.0 * (val + dga1[index] + dga2[index] + dga3[index]));
 
-    const dgb0 =
-        dw2[0] * x0[0] * x0[1] - 6.0 * w2[0] * (g0[0] * x0[1] + g0[1] * x0[0]);
-    const dgb1 =
-        dw2[1] * x1[0] * x1[1] - 6.0 * w2[1] * (g1[0] * x1[1] + g1[1] * x1[0]);
-    const dgb2 =
-        dw2[2] * x2[0] * x2[1] - 6.0 * w2[2] * (g2[0] * x2[1] + g2[1] * x2[0]);
-    const dgb3 =
-        dw2[3] * x3[0] * x3[1] - 6.0 * w2[3] * (g3[0] * x3[1] + g3[1] * x3[0]);
-    dg2 = dgb0.map(
-        (val, index) => 39.5 * (val + dgb1[index] + dgb2[index] + dgb3[index]),
-    );
+    const dgb0 = dw2[0] * x0[0] * x0[1] - 6.0 * w2[0] * (g0[0] * x0[1] + g0[1] * x0[0]);
+    const dgb1 = dw2[1] * x1[0] * x1[1] - 6.0 * w2[1] * (g1[0] * x1[1] + g1[1] * x1[0]);
+    const dgb2 = dw2[2] * x2[0] * x2[1] - 6.0 * w2[2] * (g2[0] * x2[1] + g2[1] * x2[0]);
+    const dgb3 = dw2[3] * x3[0] * x3[1] - 6.0 * w2[3] * (g3[0] * x3[1] + g3[1] * x3[0]);
+    dg2 = dgb0.map((val, index) => 39.5 * (val + dgb1[index] + dgb2[index] + dgb3[index]));
 
     return 39.5 * n;
 }

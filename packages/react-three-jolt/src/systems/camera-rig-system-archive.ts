@@ -143,9 +143,7 @@ export class CameraRigManager {
     // trigger the camera change listeners
     private triggerCameraChange() {
         console.log('triggering camera change', this.activeCamera);
-        this.cameraChangeListeners.forEach((listener) =>
-            listener(this.activeCamera)
-        );
+        this.cameraChangeListeners.forEach((listener) => listener(this.activeCamera));
     }
 
     //attach a camera to a point
@@ -195,24 +193,16 @@ export class CameraRigManager {
 
     createCollar() {
         const collar = this.createRigPoint('collar', { color: '#0098DE' });
-        const joint = this.constraintSystem.addConstraint(
-            'hinge',
-            this.base,
-            collar,
-            {
-                axis: new THREE.Vector3(0, 1, 0),
-                normal: new THREE.Vector3(0, 0, 1),
+        const joint = this.constraintSystem.addConstraint('hinge', this.base, collar, {
+            axis: new THREE.Vector3(0, 1, 0),
+            normal: new THREE.Vector3(0, 0, 1),
 
-                spring: {
-                    strength: 1
-                }
+            spring: {
+                strength: 1
             }
-        );
+        });
         // TODO convert this to the constraint map
-        this.collarConstraint = Raw.module.castObject(
-            joint,
-            Raw.module.HingeConstraint
-        );
+        this.collarConstraint = Raw.module.castObject(joint, Raw.module.HingeConstraint);
     }
 
     //create the camera mount
@@ -225,10 +215,7 @@ export class CameraRigManager {
                 mGravityFactor: 0
             }
         };
-        const mountHandle = this.physicsSystem.bodySystem.addBody(
-            mesh,
-            options
-        );
+        const mountHandle = this.physicsSystem.bodySystem.addBody(mesh, options);
         const mount = this.physicsSystem.bodySystem.getBody(mountHandle);
         //change the mass
         this.physicsSystem.bodySystem.setMass(mountHandle, 0.00001);
@@ -341,10 +328,7 @@ export class CameraRigManager {
         this.timeRecentering += deltaTime;
         const newPosition = !this.allowFollowDelay
             ? anchorPosition
-            : basePosition.lerp(
-                  anchorPosition,
-                  smoothFactor * deltaTime * this.cameraFollowSpeed
-              );
+            : basePosition.lerp(anchorPosition, smoothFactor * deltaTime * this.cameraFollowSpeed);
         this.base.setPosition(newPosition);
     }
 
@@ -441,11 +425,7 @@ export class CameraRigManager {
     //TODO move this to the body system
     //create rig points
     createRigPoint(name, options?): BodyState {
-        const {
-            color = '#767B91',
-            type = 'sphere',
-            motionType
-        } = options || {};
+        const { color = '#767B91', type = 'sphere', motionType } = options || {};
         /* / TODO Cylinder throws errors
         const geometry =
             type == 'sphere'

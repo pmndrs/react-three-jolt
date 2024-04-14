@@ -1,72 +1,73 @@
 {
-  "name": "@react-three/jolt",
-  "description": "Jolt physics in React",
-  "keywords": [
-    "physics",
-    "jolt-physics",
-    "react-three-fiber",
-    "react",
-    "three"
-  ],
-  "version": "0.0.1",
-  "author": "Dennis Smolek",
-  "contributors": [
-    "Dennis Smolek",
-    "Isaac Mason <isaac@isaacmason.com>"
-  ],
-  "license": "MIT",
-  "homepage": "https://github.com/pmndrs/react-three-jolt",
-  "bugs": {
-    "url": "https://github.com/pmndrs/react-three-jolt/issues"
-  },
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+    "name": "@react-three/jolt",
+    "description": "Jolt physics in React",
+    "keywords": [
+        "physics",
+        "jolt-physics",
+        "react-three-fiber",
+        "react",
+        "three"
+    ],
+    "version": "0.0.1",
+    "author": "Dennis Smolek",
+    "contributors": [
+        "Dennis Smolek",
+        "Isaac Mason <isaac@isaacmason.com>"
+    ],
+    "license": "MIT",
+    "homepage": "https://github.com/pmndrs/react-three-jolt",
+    "bugs": {
+        "url": "https://github.com/pmndrs/react-three-jolt/issues"
+    },
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs",
+            "require": "./dist/index.cjs"
+        }
+    },
+    "files": [
+        "dist/**",
+        "README.md",
+        "LICENSE"
+    ],
+    "scripts": {
+        "test": "vitest run --coverage",
+        "build": "tsc && rollup --config rollup.config.mjs",
+        "format": "prettier --write ."
+    },
+    "peerDependencies": {
+        "@react-three/fiber": ">=8.9.0",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0"
+    },
+    "dependencies": {
+        "gamepad.js": "^2.1.0",
+        "jolt-physics": "^0.22.0"
+    },
+    "devDependencies": {
+        "@react-three/fiber": "8.16.1",
+        "@react-three/test-renderer": "^8.2.1",
+        "@rollup/plugin-commonjs": "^25.0.7",
+        "@rollup/plugin-node-resolve": "^15.0.1",
+        "@rollup/plugin-typescript": "^11.1.6",
+        "@types/three": "^0.163.0",
+        "@typescript-eslint/eslint-plugin": "^6.10.0",
+        "@typescript-eslint/parser": "^7.5.0",
+        "@vitest/coverage-v8": "^1.4.0",
+        "eslint": "^9.0.0",
+        "happy-dom": "^14.7.0",
+        "prettier": "^3.1.0",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "rollup": "^4.14.0",
+        "rollup-plugin-copy": "^3.5.0",
+        "rollup-plugin-filesize": "^10.0.0",
+        "three": "^0.163.0",
+        "typescript": "^5.4.4",
+        "vitest": "^1.5.0"
     }
-  },
-  "files": [
-    "dist/**",
-    "README.md",
-    "LICENSE"
-  ],
-  "scripts": {
-    "test": "vitest run --coverage",
-    "build": "tsc && rollup --config rollup.config.mjs"
-  },
-  "peerDependencies": {
-    "@react-three/fiber": ">=8.9.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
-  },
-  "dependencies": {
-    "gamepad.js": "^2.1.0",
-    "jolt-physics": "^0.22.0"
-  },
-  "devDependencies": {
-    "@react-three/fiber": "8.16.1",
-    "@react-three/test-renderer": "^8.2.1",
-    "@rollup/plugin-commonjs": "^25.0.7",
-    "@rollup/plugin-node-resolve": "^15.0.1",
-    "@rollup/plugin-typescript": "^11.1.6",
-    "@types/three": "^0.163.0",
-    "@typescript-eslint/eslint-plugin": "^6.10.0",
-    "@typescript-eslint/parser": "^7.5.0",
-    "@vitest/coverage-v8": "^1.4.0",
-    "eslint": "^9.0.0",
-    "happy-dom": "^14.7.0",
-    "prettier": "^3.1.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "rollup": "^4.14.0",
-    "rollup-plugin-copy": "^3.5.0",
-    "rollup-plugin-filesize": "^10.0.0",
-    "three": "^0.163.0",
-    "typescript": "^5.4.4",
-    "vitest": "^1.5.0"
-  }
 }

@@ -6,9 +6,9 @@ import { vec3, quat } from '../../utils';
 */
 import { PhysicsSystem } from '../physics-system';
 import {
-  VehicleFourWheelSettings,
-  // WheelState,
-  //createWheelSettings
+    VehicleFourWheelSettings
+    // WheelState,
+    //createWheelSettings
 } from './wheels';
 import { VehicleManager } from './VehicleManager';
 /*
@@ -18,10 +18,7 @@ const BL_WHEEL = 2;
 const BR_WHEEL = 3;
 */
 export class VehicleFourWheelManager extends VehicleManager {
-  constructor(
-    physicsSystem: PhysicsSystem,
-    settings: VehicleFourWheelSettings
-  ) {
-    super(physicsSystem, settings);
-  }
+    constructor(physicsSystem: PhysicsSystem, settings: VehicleFourWheelSettings) {
+        super(physicsSystem, settings);
+    }
 }

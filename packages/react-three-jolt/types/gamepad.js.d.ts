@@ -1,4 +1,4 @@
-declare module "gamepad.js" {
+declare module 'gamepad.js' {
     export interface Gamepad {
         axes: number[];
         buttons: GamepadButton[];
@@ -25,11 +25,7 @@ declare module "gamepad.js" {
     }
 
     export default class GamepadHandler {
-        constructor(
-            index: number,
-            gamepad: Gamepad,
-            config?: GamepadHandlerOptions
-        );
+        constructor(index: number, gamepad: Gamepad, config?: GamepadHandlerOptions);
         static resolveOptions(config: GamepadHandlerOptions): {
             axis: GamepadHandlerOptions;
             button: GamepadHandlerOptions;
@@ -43,19 +39,10 @@ declare module "gamepad.js" {
         private setButtonValue(index: number, value: number): void;
         private resolveAxisValue(index: number): number;
         private resolveButtonValue(index: number): number;
-        on(event: "axis", listener: (event: GamepadHandlerEvent) => void): void;
-        on(
-            event: "button",
-            listener: (event: GamepadHandlerEvent) => void
-        ): void;
-        off(
-            event: "axis",
-            listener: (event: GamepadHandlerEvent) => void
-        ): void;
-        off(
-            event: "button",
-            listener: (event: GamepadHandlerEvent) => void
-        ): void;
+        on(event: 'axis', listener: (event: GamepadHandlerEvent) => void): void;
+        on(event: 'button', listener: (event: GamepadHandlerEvent) => void): void;
+        off(event: 'axis', listener: (event: GamepadHandlerEvent) => void): void;
+        off(event: 'button', listener: (event: GamepadHandlerEvent) => void): void;
         start(): void;
         stop(): void;
     }

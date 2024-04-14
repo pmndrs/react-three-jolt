@@ -25,9 +25,7 @@ export function generateHeight(width: number, height: number): Uint8Array {
         for (let i = 0; i < size; i++) {
             const x = i % width,
                 y = ~~(i / width);
-            data[i] += Math.abs(
-                perlin.noise(x / quality, y / quality, z) * quality * 1.75,
-            );
+            data[i] += Math.abs(perlin.noise(x / quality, y / quality, z) * quality * 1.75);
         }
 
         quality *= 5;

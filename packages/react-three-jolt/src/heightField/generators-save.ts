@@ -17,10 +17,7 @@ export function textureToCanvas(texture: THREE.Texture) {
     return canvas;
 }
 
-export async function imageUrlToImageData(
-    url: string,
-    scalingFactor?: number,
-): Promise<ImageData> {
+export async function imageUrlToImageData(url: string, scalingFactor?: number): Promise<ImageData> {
     return new Promise((resolve, reject) => {
         const image = new Image();
         image.onload = () => {
@@ -30,12 +27,8 @@ export async function imageUrlToImageData(
                 reject(new Error('No context'));
                 return;
             }
-            const width = scalingFactor
-                ? image.width * scalingFactor
-                : image.width;
-            const height = scalingFactor
-                ? image.height * scalingFactor
-                : image.height;
+            const width = scalingFactor ? image.width * scalingFactor : image.width;
+            const height = scalingFactor ? image.height * scalingFactor : image.height;
             canvas.width = width;
             canvas.height = height;
             context.drawImage(image, 0, 0, width, height);
@@ -63,7 +56,7 @@ export function textureToImageData(texture: THREE.Texture): ImageData {
         height / 2,
         height / -2,
         1,
-        1000,
+        1000
     );
     const planeGeometry = new THREE.PlaneGeometry(width, height);
     const planeMaterial = new THREE.MeshBasicMaterial({ map: texture });
@@ -84,7 +77,7 @@ export function textureToImageData(texture: THREE.Texture): ImageData {
 export function applyHeightmapImgDataToPlane(
     plane: THREE.Mesh,
     heightmap: ImageData,
-    displacementScale: number,
+    displacementScale: number
 ) {
     const { width, height } = heightmap;
     const geometry = plane.geometry as THREE.PlaneGeometry;
@@ -107,7 +100,7 @@ export function applyHeightmapImgDataToPlane(
 export async function applyHeightmapToPlane(
     plane: THREE.Mesh,
     heightmap: string | THREE.Texture,
-    displacementScale: number,
+    displacementScale: number
 ) {
     let heightmapImgData: ImageData;
     if (typeof heightmap === 'string') {

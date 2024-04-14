@@ -39,11 +39,7 @@ function handleMessage(message) {
 }
 
 // setup the canvas and renderer
-function initializeRenderer(
-    newCanvas: OffscreenCanvas,
-    height = 1024,
-    width = 1024,
-) {
+function initializeRenderer(newCanvas: OffscreenCanvas, height = 1024, width = 1024) {
     if (!newCanvas) console.log('WORKER: no canvas sent, creating a new one');
     canvas = newCanvas || new OffscreenCanvas(width, height);
     renderer = new THREE.WebGLRenderer({ canvas });
@@ -68,7 +64,7 @@ function initializeScene(width = 1024, height = 1024, resolution = 1) {
         width,
         height,
         width / resolution,
-        height / resolution,
+        height / resolution
     );
     const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
     plane = new THREE.Mesh(geometry, material);

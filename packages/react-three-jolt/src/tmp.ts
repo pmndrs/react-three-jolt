@@ -1,4 +1,4 @@
-import { Euler, Matrix4, Object3D, Quaternion, Vector3 } from "three";
+import { Euler, Matrix4, Object3D, Quaternion, Vector3 } from 'three';
 
 export const _quaternion = new Quaternion();
 export const _euler = new Euler();
