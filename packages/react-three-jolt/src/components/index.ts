@@ -1,5 +1,3 @@
-export * from './CameraRig';
-export * from './CharacterController';
 export * from './FrameStepper';
 export * from './Heightfield';
 export * from './InstancedRigidBody';
