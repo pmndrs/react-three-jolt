@@ -1,6 +1,9 @@
-import { RigidBody, Heightfield, useJolt } from '@react-three/jolt';
+import { Physics, RigidBody, Heightfield } from '@react-three/jolt';
+import { useDemo } from '../App';
 
 export function HeightfieldDemo() {
+  const { debug, paused, interpolate, physicsKey } = useDemo();
+
   // contact listeners
   const onContactAdded = (
     body1: number,
@@ -57,8 +60,8 @@ export function HeightfieldDemo() {
   };
 
   // body settings so shapes bounce
-  const { bodySystem } = useJolt();
-  bodySystem.defaultBodySettings = {
+
+  const defaultBodySettings = {
     mRestitution: 0.1,
   };
   const ballPositions = [
@@ -114,7 +117,14 @@ export function HeightfieldDemo() {
     [0, 100, -10],
   ];
   return (
-    <>
+    <Physics
+      paused={paused}
+      key={physicsKey}
+      interpolate={interpolate}
+      debug={debug}
+      gravity={22}
+      defaultBodySettings={defaultBodySettings}
+    >
       {ballPositions.map((position, index) => (
         <RigidBody
           key={index}
@@ -129,6 +139,6 @@ export function HeightfieldDemo() {
         </RigidBody>
       ))}
       <Heightfield url="heightmaps/wp1024.png" size={512} />
-    </>
+    </Physics>
   );
 }

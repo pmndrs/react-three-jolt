@@ -1,12 +1,23 @@
-import { RigidBody } from '@react-three/jolt';
+import { Physics, RigidBody } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt-addons';
-
+import { useDemo } from '../App';
 export function JustBoxes() {
-  //const { physicsSystem } = useJolt();
+  const { debug, paused, interpolate, physicsKey } = useDemo();
+
+  const defaultBodySettings = {
+    mRestitution: 0.1,
+  };
 
   // draw 5 cubes that land on the floor
   return (
-    <>
+    <Physics
+      paused={paused}
+      key={physicsKey}
+      interpolate={interpolate}
+      debug={debug}
+      gravity={22}
+      defaultBodySettings={defaultBodySettings}
+    >
       <Floor position={[0, 0, 0]} size={100}>
         <meshStandardMaterial />
       </Floor>
@@ -41,6 +52,6 @@ export function JustBoxes() {
           <meshStandardMaterial color="green" />
         </mesh>
       </RigidBody>
-    </>
+    </Physics>
   );
 }

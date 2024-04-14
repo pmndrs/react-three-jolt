@@ -5,4 +5,3 @@ export * from './MeshFloor';
 export * from './Physics';
 export * from './RigidBody';
 //export * from './Shape';
-export * from './vehicle';

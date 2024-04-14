@@ -1,21 +1,42 @@
 import {
+  Physics,
   BodyState,
   InstancedRigidBodyMesh,
   RigidBody,
-  useConst,
-  useJolt,
   useSetInterval,
 } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt-addons';
 import { useControls } from 'leva';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { useDemo } from '../App';
+
+export function CubeHeap() {
+  const { debug, paused, interpolate, physicsKey } = useDemo();
+  // body settings so shapes bounce
+  const defaultBodySettings = {
+    mRestitution: 0.7,
+  };
+  return (
+    <Physics
+      paused={paused}
+      key={physicsKey}
+      interpolate={interpolate}
+      debug={debug}
+      gravity={22}
+      defaultBodySettings={defaultBodySettings}
+    >
+      <CubeHeapInner />
+    </Physics>
+  );
+}
 
 // this is going to be the instancedMesh version
-export function CubeHeap() {
+function CubeHeapInner() {
   const instancedRef = useRef<BodyState[]>(null);
   const previousCount = useRef(0);
   const fountainInterval = useRef(null);
+
   //controls
   const { count } = useControls({
     count: { value: 200, min: 1, max: 2000, step: 1 },
@@ -60,14 +81,6 @@ export function CubeHeap() {
     }, 1000 / 60);
   }, [instancedRef, count]);
 
-  const { physicsSystem, bodySystem } = useJolt();
-
-  // body settings so shapes bounce
-  bodySystem.defaultBodySettings = useConst({
-    mRestitution: 0.7,
-  });
-  // adjust the gravity
-  physicsSystem.setGravity(20);
   return (
     <>
       <RigidBody position={[5, 10, 3]}>
