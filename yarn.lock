@@ -1508,18 +1508,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@react-spring/animated@npm:~9.7.3":
-  version: 9.7.3
-  resolution: "@react-spring/animated@npm:9.7.3"
-  dependencies:
-    "@react-spring/shared": "npm:~9.7.3"
-    "@react-spring/types": "npm:~9.7.3"
-  peerDependencies:
-    react: ^16.8.0 || ^17.0.0 || ^18.0.0
-  checksum: 10c0/5151da4fa7da010bb2edbee05871aa7a4aea8763fe617389d17605810aa0dd817374205e5fb3930b650f4a7f25fcdf23205fdfb7365686ff75888bdfd0b39839
-  languageName: node
-  linkType: hard
-
 "@react-spring/core@npm:~9.6.1":
   version: 9.6.1
   resolution: "@react-spring/core@npm:9.6.1"
@@ -1531,19 +1519,6 @@ __metadata:
   peerDependencies:
     react: ^16.8.0 || ^17.0.0 || ^18.0.0
   checksum: 10c0/8deb3c623604f37439b127cff45246228054ccf2fab9504cc3289a422d82a58b8670d978e9f5d09a619cddbc5670628c2db81e0c984b9143c1688226b7bfdcc2
-  languageName: node
-  linkType: hard
-
-"@react-spring/core@npm:~9.7.3":
-  version: 9.7.3
-  resolution: "@react-spring/core@npm:9.7.3"
-  dependencies:
-    "@react-spring/animated": "npm:~9.7.3"
-    "@react-spring/shared": "npm:~9.7.3"
-    "@react-spring/types": "npm:~9.7.3"
-  peerDependencies:
-    react: ^16.8.0 || ^17.0.0 || ^18.0.0
-  checksum: 10c0/e28c05de8435bf2eaf8481f8acdf093909d4be9881a9a854c51dfac7c2d5562088d0fb2ce04e2f07e1b3bf621d8da3ab57bf6fedb4fdc954e3aa263bc1e393af
   languageName: node
   linkType: hard
 
@@ -1563,17 +1538,6 @@ __metadata:
   peerDependencies:
     react: ^16.8.0 || ^17.0.0 || ^18.0.0
   checksum: 10c0/6173111653da1c622b65ccc52486de245541dc52697ecfee8257d79903e27914936c3e941f85015140a2e0647d8cddb98deccf60530f3d4d1ed865a833c96302
-  languageName: node
-  linkType: hard
-
-"@react-spring/shared@npm:~9.7.3":
-  version: 9.7.3
-  resolution: "@react-spring/shared@npm:9.7.3"
-  dependencies:
-    "@react-spring/types": "npm:~9.7.3"
-  peerDependencies:
-    react: ^16.8.0 || ^17.0.0 || ^18.0.0
-  checksum: 10c0/afb03ed28ccf62efa4012e531c3659999bb364d1e0eb0fb729b962f9bd21a0b772a2d98e862062c9c32c06edf72327afcc45984d9eb22fdd961706b6ddf6950d
   languageName: node
   linkType: hard
 
@@ -1597,28 +1561,6 @@ __metadata:
   version: 9.6.1
   resolution: "@react-spring/types@npm:9.6.1"
   checksum: 10c0/99cca0141c6e8a377407e66c6deb7a370a07d2b60a103666aab858576ec9d8cbfe2254eab6bf8a6cba1e3aa6420bcd6d5c8633b04a24ccaf06e96f28cfc2d517
-  languageName: node
-  linkType: hard
-
-"@react-spring/types@npm:~9.7.3":
-  version: 9.7.3
-  resolution: "@react-spring/types@npm:9.7.3"
-  checksum: 10c0/d645044f3cc9ceb7c4f6c4d061aaf6660018568a1553d05638f56b3328c5f91597ee4118334abe22fc8f07f5ee02f054340170c1d52e11b3faea22888b5170d4
-  languageName: node
-  linkType: hard
-
-"@react-spring/web@npm:^9.0.0-rc.3":
-  version: 9.7.3
-  resolution: "@react-spring/web@npm:9.7.3"
-  dependencies:
-    "@react-spring/animated": "npm:~9.7.3"
-    "@react-spring/core": "npm:~9.7.3"
-    "@react-spring/shared": "npm:~9.7.3"
-    "@react-spring/types": "npm:~9.7.3"
-  peerDependencies:
-    react: ^16.8.0 || ^17.0.0 || ^18.0.0
-    react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0
-  checksum: 10c0/a5b4847a2921a29a3e8ce569f4951abeb268b6e8eb230f8c49d98709216b2b3a23ba1e58628c51c9eaa0bd20d83f9d7b8f8f03df98215e933de4c66c39e17fe1
   languageName: node
   linkType: hard
 
@@ -1740,6 +1682,70 @@ __metadata:
   checksum: 10c0/5766b0fd7f579bc903f6b634c38a7fba4253f935f4117ec3cb324dcac89d6c3b54023bf20164aac989cbffff3455e25dc8a780bcd98df5e94babe37d9f0b29aa
   languageName: node
   linkType: hard
+
+"@react-three/jolt-addons@npm:0.0.0-development, @react-three/jolt-addons@workspace:packages/react-three-jolt-addons":
+  version: 0.0.0-use.local
+  resolution: "@react-three/jolt-addons@workspace:packages/react-three-jolt-addons"
+  dependencies:
+    "@react-three/fiber": "npm:8.16.1"
+    "@react-three/jolt": "npm:0.0.0-development"
+    "@react-three/test-renderer": "npm:^8.2.1"
+    "@rollup/plugin-commonjs": "npm:^25.0.7"
+    "@rollup/plugin-node-resolve": "npm:^15.0.1"
+    "@rollup/plugin-typescript": "npm:^11.1.6"
+    "@types/three": "npm:^0.163.0"
+    "@typescript-eslint/eslint-plugin": "npm:^6.10.0"
+    "@typescript-eslint/parser": "npm:^7.5.0"
+    "@vitest/coverage-v8": "npm:^1.4.0"
+    eslint: "npm:^9.0.0"
+    happy-dom: "npm:^14.7.0"
+    prettier: "npm:^3.1.0"
+    react: "npm:^18.2.0"
+    react-dom: "npm:^18.2.0"
+    rollup: "npm:^4.14.0"
+    rollup-plugin-copy: "npm:^3.5.0"
+    rollup-plugin-filesize: "npm:^10.0.0"
+    three: "npm:^0.163.0"
+    typescript: "npm:^5.4.4"
+    vitest: "npm:^1.5.0"
+  peerDependencies:
+    "@react-three/fiber": ">=8.9.0"
+    react: ^18.2.0
+    react-dom: ^18.2.0
+  languageName: unknown
+  linkType: soft
+
+"@react-three/jolt-controllers@npm:0.0.0-development, @react-three/jolt-controllers@workspace:packages/react-three-jolt-controllers":
+  version: 0.0.0-use.local
+  resolution: "@react-three/jolt-controllers@workspace:packages/react-three-jolt-controllers"
+  dependencies:
+    "@react-three/fiber": "npm:8.16.1"
+    "@react-three/jolt": "npm:0.0.0-development"
+    "@react-three/test-renderer": "npm:^8.2.1"
+    "@rollup/plugin-commonjs": "npm:^25.0.7"
+    "@rollup/plugin-node-resolve": "npm:^15.0.1"
+    "@rollup/plugin-typescript": "npm:^11.1.6"
+    "@types/three": "npm:^0.163.0"
+    "@typescript-eslint/eslint-plugin": "npm:^6.10.0"
+    "@typescript-eslint/parser": "npm:^7.5.0"
+    "@vitest/coverage-v8": "npm:^1.4.0"
+    eslint: "npm:^9.0.0"
+    happy-dom: "npm:^14.7.0"
+    prettier: "npm:^3.1.0"
+    react: "npm:^18.2.0"
+    react-dom: "npm:^18.2.0"
+    rollup: "npm:^4.14.0"
+    rollup-plugin-copy: "npm:^3.5.0"
+    rollup-plugin-filesize: "npm:^10.0.0"
+    three: "npm:^0.163.0"
+    typescript: "npm:^5.4.4"
+    vitest: "npm:^1.5.0"
+  peerDependencies:
+    "@react-three/fiber": ">=8.9.0"
+    react: ^18.2.0
+    react-dom: ^18.2.0
+  languageName: unknown
+  linkType: soft
 
 "@react-three/jolt@npm:0.0.0-development, @react-three/jolt@workspace:packages/react-three-jolt":
   version: 0.0.0-use.local
@@ -3576,15 +3582,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"detect-gpu@npm:^3.0.0":
-  version: 3.1.30
-  resolution: "detect-gpu@npm:3.1.30"
-  dependencies:
-    webgl-constants: "npm:^1.1.1"
-  checksum: 10c0/55e3e3a6c60d0384e4ed7778bcd815b0db99803429b4aa71366bdef41f8d65a53c99a3e3f5943633a32ee7efa5ca8be006958406ec6aa4132d69ef5099e69699
-  languageName: node
-  linkType: hard
-
 "detect-gpu@npm:^5.0.28":
   version: 5.0.38
   resolution: "detect-gpu@npm:5.0.38"
@@ -3621,29 +3618,6 @@ __metadata:
   version: 1.5.7
   resolution: "draco3d@npm:1.5.7"
   checksum: 10c0/4419509bb93c31560a22a1a54e1c394a5b5017cab39941120c75151d941c11dec05925abf31f597ac2694c570b78c04f82aa3d69e5311f8f8e71fc8b9d92d12f
-  languageName: node
-  linkType: hard
-
-"drei@npm:^2.2.21":
-  version: 2.2.21
-  resolution: "drei@npm:2.2.21"
-  dependencies:
-    "@babel/runtime": "npm:^7.11.2"
-    "@react-spring/web": "npm:^9.0.0-rc.3"
-    detect-gpu: "npm:^3.0.0"
-    glsl-noise: "npm:^0.0.0"
-    lodash.omit: "npm:^4.5.0"
-    lodash.pick: "npm:^4.4.0"
-    react-merge-refs: "npm:^1.0.0"
-    stats.js: "npm:^0.17.0"
-    troika-three-text: "npm:^0.34.2"
-    utility-types: "npm:^3.10.0"
-    zustand: "npm:^3.0.3"
-  peerDependencies:
-    react: ">=16.13"
-    react-dom: ">=16.13"
-    react-three-fiber: ">=5.0"
-  checksum: 10c0/37e393aa5b70673a447cf6b32e89f2f414bd59ba4cc088c55ce1f8c09cf75a4252c360bae37be1ce0ff90494d255318606c5ad4be665c4944eefd644c8c6229a
   languageName: node
   linkType: hard
 
@@ -4085,17 +4059,17 @@ __metadata:
   dependencies:
     "@react-three/drei": "npm:^9.105.1"
     "@react-three/jolt": "npm:0.0.0-development"
+    "@react-three/jolt-addons": "npm:0.0.0-development"
+    "@react-three/jolt-controllers": "npm:0.0.0-development"
     "@types/react": "npm:^18.2.74"
     "@types/react-dom": "npm:^18.2.24"
     "@types/three": "npm:^0.163.0"
     "@typescript-eslint/eslint-plugin": "npm:^7.5.0"
     "@typescript-eslint/parser": "npm:^7.5.0"
     "@vitejs/plugin-react": "npm:^4.2.1"
-    drei: "npm:^2.2.21"
     eslint: "npm:^9.0.0"
     eslint-plugin-react-hooks: "npm:^4.6.0"
     eslint-plugin-react-refresh: "npm:^0.4.6"
-    jolt-physics: "npm:^0.22.0"
     leva: "npm:^0.9.35"
     prettier: "npm:^3.2.5"
     r3f-perf: "npm:^7.2.1"
@@ -5572,20 +5546,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lodash.omit@npm:^4.5.0":
-  version: 4.5.0
-  resolution: "lodash.omit@npm:4.5.0"
-  checksum: 10c0/3808b9b6faae35177174b6ab327f1177e29c91f1e98dcbccf13a72a6767bba337306449d537a4e0d8a33d2673f10d39bc732e30c4b803274ea0c1168ea60e549
-  languageName: node
-  linkType: hard
-
-"lodash.pick@npm:^4.4.0":
-  version: 4.4.0
-  resolution: "lodash.pick@npm:4.4.0"
-  checksum: 10c0/a04c460b95d1aaa44e9513d1dacf72ea74d838da843e45831de9de64c303f13cdde1859702a6f4dcef417816898ffd47c6ae0614c957ac70245bed2809b8d2e2
-  languageName: node
-  linkType: hard
-
 "lodash.startcase@npm:^4.4.0":
   version: 4.4.0
   resolution: "lodash.startcase@npm:4.4.0"
@@ -6839,13 +6799,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-merge-refs@npm:^1.0.0":
-  version: 1.1.0
-  resolution: "react-merge-refs@npm:1.1.0"
-  checksum: 10c0/afb937156d834a058e5021535a63fd8a35984365c38b613478c31186da920b3b469e38b0b161a2075fbf5db7118fb8e96bb8a52a563f271d8f8f166fe8ffe2a4
-  languageName: node
-  linkType: hard
-
 "react-reconciler@npm:^0.27.0":
   version: 0.27.0
   resolution: "react-reconciler@npm:0.27.0"
@@ -7917,16 +7870,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"troika-three-text@npm:^0.34.2":
-  version: 0.34.2
-  resolution: "troika-three-text@npm:0.34.2"
-  dependencies:
-    troika-three-utils: "npm:^0.34.0"
-    troika-worker-utils: "npm:^0.34.1"
-  checksum: 10c0/938cdc0658417af4ccc483ca5e09a2ff684fe19dd27c83c976047b9995a8cfbc7ed43365c6689cd8c7657992a61af1ed98ed817cab4eda1a626d182580ae6fc6
-  languageName: node
-  linkType: hard
-
 "troika-three-text@npm:^0.49.0":
   version: 0.49.0
   resolution: "troika-three-text@npm:0.49.0"
@@ -7941,28 +7884,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"troika-three-utils@npm:^0.34.0":
-  version: 0.34.0
-  resolution: "troika-three-utils@npm:0.34.0"
-  peerDependencies:
-    three: 0.103.x - 0.121.x
-  checksum: 10c0/c30e6ec4c1ba2e7b8a1b0fcb41c7108dfaa85bd048d957f62c51e24f75034c168086fb93b6248fa877320f93f54538efc51648bc14aa6ea3fc5b2576eee05791
-  languageName: node
-  linkType: hard
-
 "troika-three-utils@npm:^0.49.0":
   version: 0.49.0
   resolution: "troika-three-utils@npm:0.49.0"
   peerDependencies:
     three: ">=0.125.0"
   checksum: 10c0/6cf14e6e49424e587538972810241d0acf4b005e5d9bbb3d5555bcb2b8b406c3fb0752ada68b455a18a6c29b42b6aa10c6cb333346343bffc73b5e198d5cb9f7
-  languageName: node
-  linkType: hard
-
-"troika-worker-utils@npm:^0.34.1":
-  version: 0.34.1
-  resolution: "troika-worker-utils@npm:0.34.1"
-  checksum: 10c0/f4e24c22ca3f4b4606c5afa5983242639796e8a87e9560eecf3bd93fc1000efb40c0ee0a433e736a43ce802ae242c63e36204991314c8128a40230b60bd2429a
   languageName: node
   linkType: hard
 
@@ -8697,7 +8624,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zustand@npm:^3.0.3, zustand@npm:^3.6.9, zustand@npm:^3.7.1":
+"zustand@npm:^3.6.9, zustand@npm:^3.7.1":
   version: 3.7.2
   resolution: "zustand@npm:3.7.2"
   peerDependencies:

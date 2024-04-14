@@ -10,9 +10,10 @@
   },
   "packageManager": "yarn@4.0.2",
   "dependencies": {
+    "@react-three/drei": "^9.105.1",
     "@react-three/jolt": "0.0.0-development",
-    "drei": "^2.2.21",
-    "jolt-physics": "^0.22.0",
+    "@react-three/jolt-addons": "0.0.0-development",
+    "@react-three/jolt-controllers": "0.0.0-development",
     "leva": "^0.9.35",
     "r3f-perf": "^7.2.1",
     "react": "^18.2.0",
@@ -21,7 +22,6 @@
     "three": "^0.163.0"
   },
   "devDependencies": {
-    "@react-three/drei": "^9.105.1",
     "@types/react": "^18.2.74",
     "@types/react-dom": "^18.2.24",
     "@types/three": "^0.163.0",

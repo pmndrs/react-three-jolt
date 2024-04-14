@@ -1,16 +1,14 @@
 {
-  "$schema": "https://unpkg.com/@changesets/config@2.0.0/schema.json",
-  "changelog": "@changesets/cli/changelog",
-  "commit": false,
-  "fixed": [["@react-three/jolt"]],
-  "linked": [],
-  "access": "public",
-  "baseBranch": "main",
-  "updateInternalDependencies": "patch",
-  "ignore": [
-    "examples"
-  ],
-  "___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH": {
-    "onlyUpdatePeerDependentsWhenOutOfRange": true
-  }
+    "$schema": "https://unpkg.com/@changesets/config@2.0.0/schema.json",
+    "changelog": "@changesets/cli/changelog",
+    "commit": false,
+    "fixed": [["@react-three/jolt", "@react-three/jolt-addons", "@react-three/jolt-controllers"]],
+    "linked": [],
+    "access": "public",
+    "baseBranch": "main",
+    "updateInternalDependencies": "patch",
+    "ignore": ["examples"],
+    "___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH": {
+        "onlyUpdatePeerDependentsWhenOutOfRange": true
+    }
 }
