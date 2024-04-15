@@ -186,12 +186,14 @@ export class BodyState {
     }
     // Set the body rotation
     set rotation(rotation: THREE.Quaternion) {
+        const newQuat = quat.jolt(rotation);
         this.bodyInterface.SetRotation(
             this.BodyID,
             // TODO: This is probably leaky
-            quat.jolt(rotation),
+            newQuat,
             Raw.module.EActivation_Activate
         );
+        Raw.module.destroy(newQuat);
     }
     // get the rotation of the body and wrap it in a three quaternion
     get rotation(): THREE.Quaternion {
@@ -209,7 +211,9 @@ export class BodyState {
     }
     // set the velocity of the body
     set velocity(velocity: Vector3) {
-        this.body.SetLinearVelocity(vec3.jolt(velocity));
+        const newVec = vec3.jolt(velocity);
+        this.body.SetLinearVelocity(newVec);
+        Raw.module.destroy(newVec);
     }
     // get the angular velocity of the body
     get angularVelocity() {
@@ -217,7 +221,9 @@ export class BodyState {
     }
     // set the angular velocity of the body
     set angularVelocity(angularVelocity: Vector3) {
-        this.body.SetAngularVelocity(vec3.jolt(angularVelocity));
+        const newVec = vec3.jolt(angularVelocity);
+        this.body.SetAngularVelocity(newVec);
+        Raw.module.destroy(newVec);
     }
     get color(): THREE.Color {
         // if we are a mesh, get the material color of the mesh
@@ -241,8 +247,7 @@ export class BodyState {
         (this.object as InstancedMesh).setColorAt(this.index, color);
     }
 
-    /* debating keeping properties that can be easily accessed
-    with dot notation vs a function call 
+    //* Physics Properties ----------------------------------
     // sensors
     get isSensor() {
         return this.body.IsSensor();
@@ -257,31 +262,39 @@ export class BodyState {
     set friction(friction: number) {
         this.body.SetFriction(friction);
     }
-    */
+    //restitution
+    set restitution(restitution: number) {
+        this.body.SetRestitution(restitution);
+    }
+    get restitution() {
+        return this.body.GetRestitution();
+    }
 
     //* Force Manipulation ----------------------------------
     // apply a force to the body
     applyForce(force: Vector3) {
-        this.body.AddForce(vec3.jolt(force));
+        const newVec = vec3.jolt(force);
+        this.body.AddForce(newVec);
+        Raw.module.destroy(newVec);
     }
     // apply a torque to the body
     applyTorque(torque: Vector3) {
-        this.body.AddTorque(vec3.jolt(torque));
+        const newVec = vec3.jolt(torque);
+        this.body.AddTorque(newVec);
     }
     // add impulse to the body
     addImpulse(impulse: Vector3) {
-        this.bodyInterface.AddImpulse(this.BodyID, vec3.jolt(impulse));
+        const newVec = vec3.jolt(impulse);
+        this.bodyInterface.AddImpulse(this.BodyID, newVec);
+        Raw.module.destroy(newVec);
     }
     //move kinematic
     moveKinematic(position: Vector3, rotation: THREE.Quaternion, deltaTime = 0) {
-        this.bodyInterface.MoveKinematic(
-            this.BodyID,
-            vec3.jolt(position),
-            quat.jolt(rotation),
-            deltaTime
-        );
-    }
-    setRestitution(restitution: number) {
-        this.body.SetRestitution(restitution);
+        const newVec = vec3.jolt(position);
+        const newQuat = quat.jolt(rotation);
+
+        this.bodyInterface.MoveKinematic(this.BodyID, newVec, newQuat, deltaTime);
+        Raw.module.destroy(newVec);
+        Raw.module.destroy(newQuat);
     }
 }

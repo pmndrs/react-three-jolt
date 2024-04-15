@@ -57,7 +57,7 @@ export function CameraRig() {
         // create the camera listener first
         const cameraListener = cameraRig.onCamera((camera: THREE.PerspectiveCamera) => {
             console.log('updating camera', camera);
-            updateCamera(camera);
+            //updateCamera(camera);
         });
         // attach to the character system
         cameraRig.attachToCharacter(characterSystem);
