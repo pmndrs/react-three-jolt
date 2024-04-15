@@ -1,5 +1,11 @@
-import { useConstraint, RigidBody } from '@react-three/jolt';
-import { useRef } from 'react';
+import {
+  useConstraint,
+  RigidBody,
+  useSetInterval,
+  Raw,
+  useJolt,
+} from '@react-three/jolt';
+import { useEffect, useRef } from 'react';
 
 export function BoundBoxes() {
   const body1Ref = useRef(null);
@@ -8,10 +14,11 @@ export function BoundBoxes() {
   const body4Ref = useRef(null);
   const body5Ref = useRef(null);
   const body6Ref = useRef(null);
-  //const body7Ref = useRef<RigidBody>(null);
-  // const body8Ref = useRef<RigidBody>(null);
+  const body7Ref = useRef(null);
+  const body8Ref = useRef(null);
   //  const body9Ref = useRef<RigidBody>(null);
   // const body10Ref = useRef<RigidBody>(null);
+  const { physicsSystem } = useJolt();
 
   useConstraint('slider', body1Ref, body2Ref, {
     min: 6,
@@ -26,6 +33,25 @@ export function BoundBoxes() {
     min: 0,
     max: 2,
   });
+  // motorized slider constraint to test rotation of parent
+  const slider = useConstraint('slider', body7Ref, body8Ref, {
+    motor: { target: 6 },
+  });
+
+  const intervals = useSetInterval();
+  /*
+  let current = 1;
+  useEffect(() => {
+    const casted = Raw.module.castObject(slider, Raw.module.SliderConstraint);
+    intervals.setInterval(() => {
+      //@ts-ignore
+      casted.SetTargetPosition(current++);
+      //@ts-ignore
+      physicsSystem.bodyInterface.ActivateBody(body8Ref.current.bodyID);
+      console.log('setting target position', current);
+    }, 3000);
+  }, []);
+  */
 
   return (
     <>
@@ -63,6 +89,23 @@ export function BoundBoxes() {
         <mesh>
           <sphereGeometry args={[1, 8, 8]} />
           <meshStandardMaterial color="#69DDFF" />
+        </mesh>
+      </RigidBody>
+      <RigidBody
+        ref={body7Ref}
+        position={[-15, 1, 20]}
+        type={'static'}
+        mass={1}
+      >
+        <mesh>
+          <sphereGeometry args={[1, 8, 8]} />
+          <meshStandardMaterial color="#320A28" />
+        </mesh>
+      </RigidBody>
+      <RigidBody ref={body8Ref} position={[-15, 3, 24]} mass={1}>
+        <mesh>
+          <boxGeometry args={[1, 1, 2]} />
+          <meshStandardMaterial color="#8E443D" />
         </mesh>
       </RigidBody>
     </>

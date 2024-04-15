@@ -16,15 +16,16 @@ export function CameraRig() {
     const { physicsSystem } = useJolt();
     //@ts-ignore
     const { camera, scene, controls } = useThree();
-    const { set } = useThree(({ get, set }) => ({ get, set }));
+    //const { set } = useThree(({ get, set }) => ({ get, set }));
 
     const cameraRig = useMemo(() => {
         return new CameraRigManager(scene, physicsSystem);
     }, [physicsSystem]);
-    const updateCamera = (camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) => {
+    /*const updateCamera = (camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) => {
         set({ camera: camera });
         //controls.update();
     };
+    */
     const currentRotation = useRef(0);
     useCommand('z', () => {
         /*

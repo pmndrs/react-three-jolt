@@ -33,6 +33,7 @@ export class ConstraintSystem {
         let constraintSettings: any;
         let skipPointSetting = false;
         let hasSpring = false;
+        let hasMotor = false;
 
         // for sixDOF constraints
         const freeTranslationAxis = ['x', 'y', 'z'];
@@ -94,6 +95,7 @@ export class ConstraintSystem {
 
                 //TODO add motor settings
                 hasSpring = true;
+                hasMotor = true;
                 break;
 
             //* Slider/Prismatic ---------------------------
@@ -105,18 +107,19 @@ export class ConstraintSystem {
                 // the axis to slide along. This really is required but we'll add a fallback
                 constraintSettings.mSliderAxis1 = constraintSettings.mSliderAxis2 = options?.axis
                     ? vec3.threeToJolt(options.axis).Normalized()
-                    : new Raw.module.Vec3(0, -1, 1).Normalized();
+                    : new Raw.module.Vec3(0, 0, 1).Normalized();
                 // the normal axis is perpendecular to the slider axis
                 constraintSettings.mNormalAxis1 = constraintSettings.mNormalAxis2 =
                     constraintSettings.mSliderAxis1.GetNormalizedPerpendicular();
                 // the rest of these are optional
                 // In Radians
-                if (options.min) constraintSettings.mLimitsMin = options.min;
-                if (options.max) constraintSettings.mLimitsMax = options.max;
-                if (options.maxFrictionForce)
+                if (options && options.min) constraintSettings.mLimitsMin = options.min;
+                if (options && options.max) constraintSettings.mLimitsMax = options.max;
+                if (options && options.maxFrictionForce)
                     constraintSettings.mMaxFrictionForce = options.maxFrictionForce;
-                //TODO add motor settings
+
                 hasSpring = true;
+                hasMotor = true;
                 break;
 
             //* Cone -------------------------------------
@@ -251,6 +254,33 @@ export class ConstraintSystem {
             constraintSettings.mSpace = Raw.module.EConstraintSpace_LocalToBodyCOM;
         const constraint = constraintSettings.Create(body1.body, body2.body);
         this.joltPhysicsSystem.AddConstraint(constraint);
+
+        // now that the constraint exists we can apply motor settings
+        if (hasMotor && options?.motor) {
+            // assume slider to start
+            let casted = Raw.module.castObject(constraint, Raw.module.SliderConstraint);
+
+            //TODO: add casting for other motorized constraints
+
+            // set the motor state
+            if (options.motor.type && options.motor.type === 'velocity') {
+                casted.SetMotorState(Raw.module.EMotorState_Velocity);
+                // set the desired velocity if passed
+                if (options.motor.velocity) {
+                    casted.SetTargetVelocity(options.motor.velocity);
+                }
+            } else {
+                // motor is a position motor
+                casted.SetMotorState(Raw.module.EMotorState_Position);
+                // set the target position if passed
+                if (options.motor.target) {
+                    console.log('Setting motorize slider target', options.motor.target);
+                    // target is a float along the axis
+                    casted.SetTargetPosition(options.motor.target);
+                }
+            }
+        }
+
         // TODO should we destroy the settings now?
         Raw.module.destroy(constraintSettings);
         return constraint;
