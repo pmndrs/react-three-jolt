@@ -21,7 +21,7 @@ export const useConstraint = (
         () => {
             //@ts-ignore
             if (!body1.current || !body2.current) return;
-            physicsSystem.constraintSystem.addConstraint(
+            const newConstraint = physicsSystem.constraintSystem.addConstraint(
                 type,
                 //@ts-ignore
                 body1.current,
@@ -29,12 +29,14 @@ export const useConstraint = (
                 body2.current,
                 options
             );
+            constraint.current = newConstraint;
         },
         () => {
-            //  physicsSystem.constraintSystem.removeConstraint(rawConstraint);
+            physicsSystem.constraintSystem.removeConstraint(constraint.current);
         },
         []
     );
+
     return constraint;
 
     /* original

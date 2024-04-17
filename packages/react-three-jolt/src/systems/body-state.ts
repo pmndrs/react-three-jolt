@@ -22,8 +22,7 @@ export class BodyState {
     object: Object3D | THREE.InstancedMesh;
     invertedWorldMatrix: Matrix4;
     handle: number;
-    //@ts-ignore
-    index: number;
+    index?: number;
 
     /**
      * Required for instanced rigid bodies. (from r3/rapier)
@@ -144,14 +143,14 @@ export class BodyState {
     getMatrix(matrix: Matrix4) {
         if (this.isInstance) {
             const object = this.object as THREE.InstancedMesh;
-            object.getMatrixAt(this.index, matrix);
+            object.getMatrixAt(this.index!, matrix);
         } else matrix.copy(this.object.matrixWorld);
         return matrix;
     }
     setMatrix(matrix: Matrix4) {
         if (this.isInstance) {
             const object = this.object as THREE.InstancedMesh;
-            object.setMatrixAt(this.index, matrix);
+            object.setMatrixAt(this.index!, matrix);
             object.instanceMatrix.needsUpdate = true;
         } else {
             this.object.matrix.copy(matrix);
@@ -233,7 +232,7 @@ export class BodyState {
         }
         // if we are an instance, get the color of the instanced mesh
         const _color = new THREE.Color();
-        (this.object as InstancedMesh).getColorAt(this.index, _color);
+        (this.object as InstancedMesh).getColorAt(this.index!, _color);
         return _color;
     }
     set color(color: THREE.Color | string | number) {
@@ -244,7 +243,7 @@ export class BodyState {
             (this.object as THREE.Mesh).material.color = color;
         }
         // if we are an instance, set the color of the instanced mesh
-        (this.object as InstancedMesh).setColorAt(this.index, color);
+        (this.object as InstancedMesh).setColorAt(this.index!, color);
     }
 
     //* Physics Properties ----------------------------------

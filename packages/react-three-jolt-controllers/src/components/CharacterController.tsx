@@ -3,8 +3,8 @@ import { useRef, useEffect, forwardRef, memo } from 'react';
 import { useThree } from '@react-three/fiber';
 import { useJolt } from '@react-three/jolt';
 import * as THREE from 'three';
-import { characterControllerSystem } from '../systems/character-controller';
-import { useCommand } from '@react-three/jolt';
+import { CharacterControllerSystem } from '../systems/character-controller';
+import { useCommand } from '@react-three/jolt-addons';
 import { useForwardedRef } from '@react-three/jolt';
 // create a blank context
 export const CharacterControllerContext = React.createContext(undefined!);
@@ -35,7 +35,7 @@ export const CharacterController: React.FC<CControllerProps> = memo(
         const { physicsSystem } = useJolt();
         //TODO: Not really sure why we had to do this as a state but oh well
         const [characterSystem, setCharacterSystem] = useState<
-            characterControllerSystem | undefined
+            CharacterControllerSystem | undefined
         >(undefined);
 
         // we need the three camera
@@ -44,7 +44,7 @@ export const CharacterController: React.FC<CControllerProps> = memo(
         const cameraRotation = new THREE.Quaternion();
         // set values and initializers for characterSystem
         useEffect(() => {
-            const newCCS = new characterControllerSystem(physicsSystem);
+            const newCCS = new CharacterControllerSystem(physicsSystem);
             //@ts-ignore
             newCCS.threeCharacter = objectRef.current;
             newCCS.setCapsule(radius, height);
@@ -128,7 +128,7 @@ export const CharacterController: React.FC<CControllerProps> = memo(
                     <object3D ref={offsetObject} position-y={radius + height / 2}>
                         <mesh ref={debugCapsule} visible={debug}>
                             <capsuleGeometry args={[radius, height, 32]} />
-                            <meshStandardMaterial wireframe={false} color="red" />
+                            <meshStandardMaterial wireframe={true} color="red" />
                             <mesh position-z={-1}>
                                 <boxGeometry args={[0.1, 0.5, 1]} />
                                 <meshStandardMaterial color="orange" />

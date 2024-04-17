@@ -7,8 +7,5 @@ export * from './components';
 export * from './constants';
 export type { Vector3Tuple, Vector4Tuple } from './types';
 
-// move this to own package
-export * from './useCommand';
-
 // we have to export raw so the add-ons can access it
 export { Raw, initJolt } from './raw';

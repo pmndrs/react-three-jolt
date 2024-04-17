@@ -3,6 +3,7 @@ import { Floor } from '@react-three/jolt-addons';
 import { CharacterController, CameraRig } from '@react-three/jolt-controllers';
 //helpers for example
 import { BoundBoxes } from './BoundBoxes';
+import { useLookCommand } from '@react-three/jolt-addons';
 /*
 import {
     useCommand,
@@ -19,7 +20,9 @@ export function CharacterVirtualDemo() {
   const defaultBodySettings = {
     mRestitution: 0,
   };
-
+  useLookCommand((lookVector: any) => {
+    console.log('lookVector', lookVector);
+  });
   return (
     <>
       <directionalLight

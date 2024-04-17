@@ -82,7 +82,6 @@ export const quat = {
     three(quaternion: anyQuat): THREE.Quaternion {
         if (quaternion instanceof Array) return new THREE.Quaternion(...quaternion);
         if (quat.isJolt(quaternion)) {
-            console.log('is jolt', quaternion);
             return quat.joltToThree(quaternion);
         }
         return quaternion;

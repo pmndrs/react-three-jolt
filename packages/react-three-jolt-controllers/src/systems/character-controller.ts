@@ -7,7 +7,7 @@ import type Jolt from 'jolt-physics';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
 import { Raw, Layer, PhysicsSystem, quat, vec3, generateBodySettings } from '@react-three/jolt';
 
-export class characterControllerSystem {
+export class CharacterControllerSystem {
     joltInterface: Jolt.JoltInterface;
     physicsSystem;
     bodySystem;
@@ -29,6 +29,10 @@ export class characterControllerSystem {
     jumpSpeed = 15.0;
 
     enableCharacterInertia = true;
+    // if the body turns on move input
+    enableCharacterRotation = true;
+    enableWalkStairs = true;
+    enableStickToFloor = true;
 
     upRotationX = 0;
     upRotationZ = 0;
@@ -37,10 +41,7 @@ export class characterControllerSystem {
     characterPadding = 0.02;
     penetrationRecoverySpeed = 1.0;
     predictiveContactDistance = 0.1;
-    enableWalkStairs = true;
-    enableStickToFloor = true;
-    // if the body turns on move input
-    rotateOnMove = true;
+
     direction = new THREE.Vector3(0, 0, 0);
     velocity = new THREE.Vector3(0, 0, 0);
 
@@ -93,9 +94,13 @@ export class characterControllerSystem {
     //private jumpBlocked = false;
     private jumpCounter = 0;
     private isJumping = false;
+    lerpFactor = 0.4;
 
     // testing props
     oldPosition = new THREE.Vector3();
+
+    // Temp variables
+    private _tmpVec3 = new Raw.module.Vec3();
 
     constructor(physicsSystem: PhysicsSystem) {
         this.physicsSystem = physicsSystem;
@@ -112,7 +117,7 @@ export class characterControllerSystem {
             Layer.MOVING
         );
 
-        //this.initCharacterContactListener();
+        this.initCharacterContactListener();
         // Set a default shape size (know it will be overwritten by the user
         this.setCapsule(1, 2);
         this.initCharacter();
@@ -233,15 +238,19 @@ export class characterControllerSystem {
         console.log('creating anchor');
         const shapeSettings = new Raw.module.SphereShapeSettings(0.5);
         const bodySettings = generateBodySettings(shapeSettings, {
-            bodyType: 'rig'
+            bodyType: 'kinematic'
         });
         const anchor = this.physicsSystem.bodyInterface.CreateBody(bodySettings);
+        anchor.SetIsSensor(true);
         this.anchorID = anchor.GetID();
+        // set the gravity factor
+        //this.physicsSystem.bodyInterface.SetGravityFactor(this.anchorID, 0); s
         // we have to generate a correct bodyState
         const anchorHandle = this.physicsSystem.bodySystem.addExistingBody(
             new THREE.Object3D(),
             anchor
         );
+        console.log('Anchor in controller', anchorHandle);
         this.anchor = this.physicsSystem.bodySystem.getBody(anchorHandle);
 
         // cleanup
@@ -326,16 +335,21 @@ export class characterControllerSystem {
             this.shapeFilter,
             this.joltInterface.GetTempAllocator()
         );
+        // TODO this is where we slerp the character
 
         // move the three object
-        this.threeCharacter.position.copy(vec3.joltToThree(this.character.GetPosition()));
-        this.threeCharacter.quaternion.copy(quat.joltToThree(this.character.GetRotation()));
+        this.threeCharacter.position.lerp(
+            vec3.three(this.character.GetPosition()),
+            this.lerpFactor
+        );
+        this.threeCharacter.quaternion.slerp(
+            quat.three(this.character.GetRotation()),
+            this.lerpFactor
+        );
         // update the anchor
-        this.physicsSystem.bodyInterface.SetPositionAndRotation(
-            this.anchorID,
-            this.character.GetPosition(),
-            this.character.GetRotation(),
-            Raw.module.EActivation_Activate
+        this.anchor.setPositionAndRotation(
+            this.threeCharacter.position,
+            this.threeCharacter.quaternion
         );
     }
     // Movement Functions ------------------------------
@@ -360,7 +374,7 @@ export class characterControllerSystem {
     move(direction: THREE.Vector3) {
         this.movementInput = direction;
         // rotate based on the direction
-        if (this.rotateOnMove && direction.length() > 0)
+        if (this.enableCharacterRotation && direction.length() > 0)
             this.setRotation(
                 new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction)
             );
@@ -371,7 +385,7 @@ export class characterControllerSystem {
         //TODO: resolve a way to remove this clone
         const movementDirection = this.movementInput.clone();
         //const jump = this.isJumping;
-        const _tmpVec3 = new Raw.module.Vec3();
+
         // can the user defy physics and move while airborne
         // also if the user passes a direction (allows jump without direction input)
         const playerControlsHorizontalVelocity =
@@ -392,8 +406,8 @@ export class characterControllerSystem {
             this.allowSliding = true;
         }
         // Maintain the up orientation
-        _tmpVec3.Set(this.upRotationX, 0, this.upRotationZ);
-        const characterUpRotation = Raw.module.Quat.prototype.sEulerAngles(_tmpVec3);
+        this._tmpVec3.Set(this.upRotationX, 0, this.upRotationZ);
+        const characterUpRotation = Raw.module.Quat.prototype.sEulerAngles(this._tmpVec3);
         this.character.SetUp(characterUpRotation.RotateAxisY());
         // this is overriding our existing rotation
         //this.character.SetRotation(characterUpRotation);
@@ -440,7 +454,7 @@ export class characterControllerSystem {
         }
 
         // Gravity
-        newVelocity.add(gravity.multiplyScalar(deltaTime | 1).applyQuaternion(upRotation));
+        newVelocity.add(gravity.multiplyScalar(deltaTime).applyQuaternion(upRotation));
 
         if (playerControlsHorizontalVelocity) {
             // Player input
@@ -452,11 +466,11 @@ export class characterControllerSystem {
             newVelocity.add(currentHorizontalVelocity);
         }
 
-        _tmpVec3.Set(newVelocity.x, newVelocity.y, newVelocity.z);
+        this._tmpVec3.Set(newVelocity.x, newVelocity.y, newVelocity.z);
         //const difference = newVelocity.clone().sub(this.oldPosition);
         //console.log('difference', difference);
         // console.log('new velocity', newVelocity);
-        this.character.SetLinearVelocity(_tmpVec3);
+        this.character.SetLinearVelocity(this._tmpVec3);
         //this.oldPosition = newVelocity.clone();
     }
     // TODO Fix this

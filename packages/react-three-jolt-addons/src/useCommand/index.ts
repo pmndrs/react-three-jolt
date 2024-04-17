@@ -11,6 +11,9 @@ import { useFrame } from '@react-three/fiber';
 //TODO: Not sure this the right way to do a global singleton
 let commander: Commander;
 
+// export from the helpers
+export * from './lookCommand';
+
 // returns a state of the commander's commands
 export function useCommandState() {
     const commander = useCommander();

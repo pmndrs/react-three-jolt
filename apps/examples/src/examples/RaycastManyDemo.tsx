@@ -4,9 +4,9 @@ import {
   RaycastHit,
   Raycaster,
   RigidBody,
-  useCommand,
   useRaycaster,
 } from '@react-three/jolt';
+import { useCommand } from '@react-three/jolt-addons';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 

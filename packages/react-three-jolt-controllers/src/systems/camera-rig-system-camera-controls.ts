@@ -2,17 +2,20 @@
 //import { Raw } from '@react-three/jolt';
 //import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
+import CameraControls from 'camera-controls';
 // mostly for the types
-import { PhysicsSystem, Raycaster, vec3 } from '@react-three/jolt';
-//import { ConstraintSystem } from '@react-three/jolt';
+import { PhysicsSystem, vec3 } from '@react-three/jolt';
+import { ConstraintSystem } from '@react-three/jolt';
 
 //import { vec3, quat, convertNegativeRadians } from '@react-three/jolt';
 import { BodyState } from '@react-three/jolt';
 
 //activate camera controls
+CameraControls.install({ THREE: THREE });
 export class CameraRigManager {
     private physicsSystem: PhysicsSystem;
-    //private constraintSystem: ConstraintSystem;
+    private constraintSystem: ConstraintSystem;
+    cameraControls: CameraControls;
 
     isAttached = false;
 
@@ -29,8 +32,6 @@ export class CameraRigManager {
 
     mount?: BodyState;
     attachment?: BodyState;
-
-    controls: CameraBoom;
 
     // holders for rig points
     points = new Map();
@@ -62,10 +63,7 @@ export class CameraRigManager {
     constructor(scene: THREE.Scene, physicsSystem: PhysicsSystem) {
         this.scene = scene;
         this.physicsSystem = physicsSystem;
-        //this.constraintSystem = physicsSystem.constraintSystem;
-
-        this.controls = new CameraBoom(physicsSystem);
-
+        this.constraintSystem = physicsSystem.constraintSystem;
         // attach to the physics system loop
         this.attachToLoop();
         // create the rigs
@@ -79,8 +77,7 @@ export class CameraRigManager {
         this.insertDebugShape('base', '#B0413E');
 
         this.createCamera('main', { space: 'base', position: new THREE.Vector3(0, 4, 4) });
-        // put the camera into the control boom
-        this.controls.camera = this.getCamera('main') as THREE.PerspectiveCamera;
+        this.cameraControls = new CameraControls(this.cameras.get('main')!, window.document.body);
     }
     // cleanup
     destroy() {
@@ -130,14 +127,6 @@ export class CameraRigManager {
         if (this.attachment) this.isAttached = true;
     }
 
-    //* Camera Boom ========================================
-    look(lookVector: THREE.Vector2Like) {
-        this.controls.look(lookVector);
-    }
-    zoom(zoom: number) {
-        this.controls.zoom(zoom);
-    }
-
     //* Cameras ========================================
     // create a camera
     createCamera(name: string, options?: any) {
@@ -179,11 +168,23 @@ export class CameraRigManager {
         camera.lookAt(this.target);
     }
     // set the active camera
-    setActiveCamera(name: string) {
+    setActiveCamera(name: string, maintainSpace = false) {
+        //disable controls while changing
+        this.cameraControls.enabled = false;
+        // reset the world space of the old camera
+        if (this.activeCamera) this.resetCameraSpace(this.activeCamera);
         const newCam = this.cameras.get(name);
         if (newCam) {
             this.activeCamera = newCam;
+            if (!maintainSpace) {
+                // move the camera to world space
+                this.scene.add(newCam);
 
+                this.cameraControls.camera = newCam;
+                this.cameraControls.enabled = true;
+            } else {
+                this.cameraControls.enabled = false;
+            }
             this.triggerCameraChange();
         }
     }
@@ -248,8 +249,52 @@ export class CameraRigManager {
     }
 
     // handler for when the frame updates
-    private handleUpdate(_deltaTime: number, _subFrame: number) {
+    private handleUpdate(deltaTime: number, _subFrame: number) {
         this.updateSpaces();
+
+        //update the moving camera
+        if (!this.activeCamera || !this.cameraControls.enabled) return;
+        if (this.positionUpdateType == 'fixed') this.updateCameraFixed(deltaTime);
+        else this.updateCameraDistance(deltaTime);
+    }
+    updateCameraFixed(deltaTime: number) {
+        this.cameraControls.update(deltaTime);
+        const oldTarget = this.target.clone();
+        // update the camera target
+        this.target.copy(this.anchor.position).add(this.targetOffset);
+        // change vector
+        const delta = this.target.clone().sub(oldTarget);
+        const currentPos = this.activeCamera!.position;
+        const targetPos = currentPos.clone().add(delta);
+        // lerp both the position and the target
+        this.cameraControls.lerpLookAt(
+            currentPos.x,
+            currentPos.y,
+            currentPos.z,
+            oldTarget.x,
+            oldTarget.y,
+            oldTarget.z,
+            targetPos.x,
+            targetPos.y,
+            targetPos.z,
+            this.target.x,
+            this.target.y,
+            this.target.z,
+            this.camerMoveLerpFactor
+        );
+    }
+    updateCameraDistance(deltaTime: number) {
+        this.cameraControls.update(deltaTime);
+        const oldTarget = this.target.clone();
+        // update the camera target
+        this.target.copy(this.anchor.position).add(this.targetOffset);
+        // change vector
+        const delta = this.target.clone().sub(oldTarget);
+        const currentPos = this.activeCamera!.position;
+        const targetPos = currentPos.clone().add(delta);
+        // update the camera target
+        this.cameraControls.moveTo(this.target.x, this.target.y, this.target.z, false);
+        //this.cameraControls.setTarget(this.target.x, this.target.y, this.target.z);
     }
 
     updateSpaces() {
@@ -300,84 +345,5 @@ export class CameraRigManager {
         console.log('Creating Rig Point', name, point, color, motionType);
         this.points.set(name, point);
         return point!;
-    }
-}
-
-export class CameraBoom {
-    physicsSystem: PhysicsSystem;
-    raycaster: Raycaster;
-    activeCamera?: THREE.PerspectiveCamera | THREE.OrthographicCamera;
-
-    //props
-    lookSpeed = 1;
-    zoomSpeed = 1;
-    maxHorizontal = THREE.MathUtils.degToRad(90);
-    maxVertical = THREE.MathUtils.degToRad(90);
-    enableSlerp = false;
-    slerpFactor = 0.5;
-
-    // minimum distance to be clear of obstru
-    clearDistance = 5;
-
-    currentDistance = 5;
-    verticalAngle = 0;
-    horizontalAngle = 0;
-
-    //defaults
-    initialDistance = 5;
-    initialVerticalAngle = 15;
-    initialHorizontalAngle = 0;
-
-    // targets (for lerping)
-    targetDistance = 5;
-    targetVerticalAngle = 15;
-    targetHorizontalAngle = 0;
-
-    // camera target in worldspace
-    target = new THREE.Vector3(0, 0, 0);
-
-    updateMode: 'demand' | 'additive' = 'demand';
-
-    pivot = new THREE.Object3D();
-    cameraSpace = new THREE.Object3D();
-    lookVector = new THREE.Vector2(0, 0);
-
-    constructor(physicsSystem: PhysicsSystem, _options?: any) {
-        this.physicsSystem = physicsSystem;
-        this.raycaster = physicsSystem.getRaycaster();
-    }
-
-    // assign the camera to the boom
-    set camera(camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) {
-        this.cameraSpace.add(camera);
-        this.activeCamera = camera;
-    }
-    get camera(): THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined {
-        return this.activeCamera;
-    }
-
-    // look comand takes x/y vector in -1 to 1 range
-    look(lookVector: THREE.Vector2Like) {
-        this.lookVector.set(lookVector.x, lookVector.y);
-        if (this.updateMode == 'demand') this.handleDemandUpdate();
-    }
-    zoom(factor: number) {
-        this.targetDistance = this.currentDistance + factor * this.zoomSpeed;
-        if (this.updateMode == 'demand') this.handleDemandUpdate();
-    }
-    handleDemandUpdate() {
-        this.horizontalAngle = this.lookVector.x * this.maxHorizontal;
-        this.verticalAngle = this.lookVector.y * this.maxVertical;
-        // rotate the pivot
-        if (!this.enableSlerp) {
-            this.pivot.rotateY(this.horizontalAngle);
-            this.updateVerticalPosition();
-            this.camera?.lookAt(this.target);
-        }
-    }
-    // take the distance and vertical angle and set the cameraSpace position
-    updateVerticalPosition() {
-        this.cameraSpace.position.y = this.currentDistance * Math.sin(this.verticalAngle);
-        this.cameraSpace.position.z = this.currentDistance * Math.cos(this.verticalAngle);
     }
 }

@@ -1,11 +1,46 @@
 import {
   useConstraint,
   RigidBody,
-  useSetInterval,
-  Raw,
-  useJolt,
+  //useSetInterval,
+  //Raw,
+  //useJolt,
+  //BodyState,
 } from '@react-three/jolt';
-import { useEffect, useRef } from 'react';
+import {
+  //useEffect,
+  useRef,
+} from 'react';
+//import * as THREE from 'three';
+
+/*const rotateQuaternion = (
+  quaternion: THREE.Quaternion,
+  axis: string,
+  rotation: number
+): THREE.Quaternion => {
+  const euler = new THREE.Euler();
+  euler.setFromQuaternion(quaternion);
+
+  switch (axis) {
+    case 'x':
+      euler.x += THREE.MathUtils.degToRad(rotation);
+      break;
+    case 'y':
+      euler.y += THREE.MathUtils.degToRad(rotation);
+      break;
+    case 'z':
+      euler.z += THREE.MathUtils.degToRad(rotation);
+      break;
+    default:
+      console.error('Invalid axis specified');
+      break;
+  }
+
+  const newQuaternion = new THREE.Quaternion();
+  newQuaternion.setFromEuler(euler);
+
+  return newQuaternion;
+};
+*/
 
 export function BoundBoxes() {
   const body1Ref = useRef(null);
@@ -18,7 +53,7 @@ export function BoundBoxes() {
   const body8Ref = useRef(null);
   //  const body9Ref = useRef<RigidBody>(null);
   // const body10Ref = useRef<RigidBody>(null);
-  const { physicsSystem } = useJolt();
+  //const { physicsSystem } = useJolt();
 
   useConstraint('slider', body1Ref, body2Ref, {
     min: 6,
@@ -34,21 +69,31 @@ export function BoundBoxes() {
     max: 2,
   });
   // motorized slider constraint to test rotation of parent
-  const slider = useConstraint('slider', body7Ref, body8Ref, {
+  //const sliderRef =
+  useConstraint('slider', body7Ref, body8Ref, {
     motor: { target: 6 },
   });
 
-  const intervals = useSetInterval();
+  //const intervals = useSetInterval();
+
+  //let current = 1;
   /*
-  let current = 1;
   useEffect(() => {
-    const casted = Raw.module.castObject(slider, Raw.module.SliderConstraint);
     intervals.setInterval(() => {
+      //rotate the slider core
+      // get the current rotation
       //@ts-ignore
-      casted.SetTargetPosition(current++);
+      const baseQuat = body7Ref.current!.rotation;
+      const newQuat = rotateQuaternion(baseQuat, 'x', 15);
       //@ts-ignore
-      physicsSystem.bodyInterface.ActivateBody(body8Ref.current.bodyID);
+      body7Ref.current!.rotation = newQuat;
+      console.log('rotating', newQuat);
+
+      //@ts-ignore
+      sliderRef.current.SetTargetPosition(current++);
       console.log('setting target position', current);
+      //@ts-ignore
+      physicsSystem.bodyInterface.ActivateBody(body8Ref.current.body.GetID());
     }, 3000);
   }, []);
   */

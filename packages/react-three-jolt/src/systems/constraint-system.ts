@@ -252,14 +252,43 @@ export class ConstraintSystem {
         // It WILL break stuff switching to local space
         if (options?.space === 'local')
             constraintSettings.mSpace = Raw.module.EConstraintSpace_LocalToBodyCOM;
+
+        //* Actually create the constraint ----------------
         const constraint = constraintSettings.Create(body1.body, body2.body);
         this.joltPhysicsSystem.AddConstraint(constraint);
 
+        // for various reasons we need to cast the constraint to the correct type
+        let casted: any;
+        switch (type) {
+            case 'slider':
+                casted = Raw.module.castObject(constraint, Raw.module.SliderConstraint);
+                break;
+            case 'point':
+                casted = Raw.module.castObject(constraint, Raw.module.PointConstraint);
+                break;
+            case 'distance':
+                casted = Raw.module.castObject(constraint, Raw.module.DistanceConstraint);
+                break;
+            case 'hinge':
+            case 'revolute':
+                casted = Raw.module.castObject(constraint, Raw.module.HingeConstraint);
+                break;
+            case 'sixDOF':
+                casted = Raw.module.castObject(constraint, Raw.module.SixDOFConstraint);
+                break;
+            case 'cone':
+                casted = Raw.module.castObject(constraint, Raw.module.ConeConstraint);
+                break;
+            case 'swingTwist':
+                casted = Raw.module.castObject(constraint, Raw.module.SwingTwistConstraint);
+                break;
+
+            // default just return the original
+            default:
+                casted = constraint;
+        }
         // now that the constraint exists we can apply motor settings
         if (hasMotor && options?.motor) {
-            // assume slider to start
-            let casted = Raw.module.castObject(constraint, Raw.module.SliderConstraint);
-
             //TODO: add casting for other motorized constraints
 
             // set the motor state
@@ -274,7 +303,6 @@ export class ConstraintSystem {
                 casted.SetMotorState(Raw.module.EMotorState_Position);
                 // set the target position if passed
                 if (options.motor.target) {
-                    console.log('Setting motorize slider target', options.motor.target);
                     // target is a float along the axis
                     casted.SetTargetPosition(options.motor.target);
                 }
@@ -283,7 +311,11 @@ export class ConstraintSystem {
 
         // TODO should we destroy the settings now?
         Raw.module.destroy(constraintSettings);
-        return constraint;
+        return casted;
+    }
+
+    removeConstraint(constraint: any) {
+        this.joltPhysicsSystem.RemoveConstraint(constraint);
     }
     // apply spring settings to a constraint
     createSpringSettings(strength = 1, damping = 0.5, mode = 'frequency') {
