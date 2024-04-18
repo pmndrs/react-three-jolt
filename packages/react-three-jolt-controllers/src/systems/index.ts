@@ -1,4 +1,4 @@
 export * from './vehicles';
 
-export * from './camera-rig-system';
+export * from './camera-rig/';
 export * from './character-controller';

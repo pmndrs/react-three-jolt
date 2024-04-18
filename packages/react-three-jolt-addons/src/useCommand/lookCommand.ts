@@ -5,35 +5,24 @@ import { useConst } from '@react-three/jolt';
 import { useEffect } from 'react';
 import * as THREE from 'three';
 
-export function useLookCommand(lookHandler: any, options?: any) {
-    const { invert = { y: false } } = options || {};
+export function useLookCommand(
+    lookHandler: any,
+    zoomHandler: (zoomlevel: number) => void,
+    options?: any
+) {
+    const { invert = { y: false, x: false } } = options || {};
     const targetElement = options?.domElement || document.body;
 
     const lookVector = useConst(new THREE.Vector2());
     let isMouseDown = false;
+    const origin = new THREE.Vector2(0, 0);
     // bind the listeners to the dom element
     useEffect(() => {
-        // get the dimensions of the element
-        const { height, width } = targetElement.getBoundingClientRect();
-        //whichever is bigger will set our percentage factor
-        const factor = height < width ? height : width;
-        const elementDimensions = { height, width, factor };
-
         const onMouseMove = (event: MouseEvent) => {
-            //   console.log('mouse move', event, isMouseDown);
-            // calcualte the position in the range -1 to 1 based on event.offsetX and event.offsetY
-            // change the specefics to use factor so whichever is greater
-            //lookVector.x = (event.offsetX / elementDimensions.width) * 2 - 1;
-            //lookVector.y = (event.offsetY / elementDimensions.height) * 2 - 1;
-            // if we are inverting the y axis, then we need to invert the y value
-
-            // calculate the  distance from the center of the element
-            const yDistance = event.offsetY - elementDimensions.height / 2;
-            const xDistance = event.offsetX - elementDimensions.width / 2;
-            lookVector.x = (xDistance / elementDimensions.factor) * 2;
-            lookVector.y = (yDistance / elementDimensions.factor) * 2;
-
-            if (invert) lookVector.y = -lookVector.y;
+            // set the lookVector based on the movement values
+            lookVector.set(event.movementX, event.movementY);
+            if (invert.y) lookVector.y = -lookVector.y;
+            if (invert.x) lookVector.x = -lookVector.x;
             // if we are pointerlocked or the mouse is down fire the handler
             if (document.pointerLockElement || isMouseDown) {
                 lookHandler(lookVector);
@@ -41,15 +30,35 @@ export function useLookCommand(lookHandler: any, options?: any) {
         };
 
         //bind mousedown and up
-        const downListener = () => {
-            console.log('mousedown');
+        const downListener = (event: MouseEvent) => {
+            if (options?.lockPointer)
+                targetElement.requestPointerLock({
+                    unadjustedMovement: options?.useAccelerated ? false : true
+                });
+            origin.set(event.offsetX, event.offsetY);
             isMouseDown = true;
+
+            // add leave listener
+            window.addEventListener('mouseout', onLeave);
         };
         const upListener = () => {
-            isMouseDown = false;
+            if (!document.pointerLockElement) isMouseDown = false;
+            window.removeEventListener('mouseout', onLeave);
         };
         targetElement.addEventListener('mousedown', downListener);
         targetElement.addEventListener('mouseup', upListener);
+
+        //bind zoom
+        const onWheel = (event: WheelEvent) => {
+            zoomHandler(event.deltaY);
+        };
+        targetElement.addEventListener('wheel', onWheel);
+
+        // listener for when mouse escapes the window
+        const onLeave = () => {
+            isMouseDown = false;
+            window.removeEventListener('mouseout', onLeave);
+        };
 
         //bind mousemove
         const moveListener = (event: MouseEvent) => onMouseMove(event);
@@ -60,6 +69,7 @@ export function useLookCommand(lookHandler: any, options?: any) {
             targetElement.removeEventListener('mousedown', downListener);
             targetElement.removeEventListener('mouseup', upListener);
             targetElement.removeEventListener('mousemove', moveListener);
+            targetElement.removeEventListener('wheel', onWheel);
         };
     }, [targetElement]);
 }

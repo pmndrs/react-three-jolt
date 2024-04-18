@@ -1,7 +1,7 @@
-import { useMemo, useEffect, useRef } from 'react';
+import { useMemo, useEffect } from 'react';
 import { useJolt } from '@react-three/jolt';
 import { useThree } from '@react-three/fiber';
-import { CameraRigManager } from '../systems/camera-rig-system';
+import { CameraRigManager } from '../systems/camera-rig/camera-rig-system';
 import * as THREE from 'three';
 
 export function useCameraRig() {
@@ -26,9 +26,6 @@ export function useCameraRig() {
             console.log('updating camera', camera);
             updateCamera(camera);
         });
-        //@ts-ignore attach to the character system
-        cameraRig.attach(characterSystem.anchor);
-        cameraRig.setActiveCamera('main');
         return () => {
             cameraListener();
         };

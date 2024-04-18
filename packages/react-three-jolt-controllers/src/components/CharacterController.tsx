@@ -15,6 +15,7 @@ interface CControllerProps {
     debug?: boolean;
     rest?: any;
     position?: any;
+    anchor?: any;
 }
 export const CharacterController: React.FC<CControllerProps> = memo(
     forwardRef((props, forwardedRef) => {

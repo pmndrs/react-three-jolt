@@ -1,34 +1,50 @@
-import { useMemo, useContext, useEffect, useRef } from 'react';
-import { useThree } from '@react-three/fiber';
-import { useConst, useJolt } from '@react-three/jolt';
-import { CameraRigManager } from '../systems/camera-rig-system';
-import { CharacterControllerContext } from './CharacterController';
-//import { RigidBody } from './RidgedBody';
-import { useCommand } from '@react-three/jolt-addons';
-import * as THREE from 'three';
+import { useEffect, forwardRef, useImperativeHandle, useContext } from 'react';
+import { useCameraRig } from '../hooks';
+import { BodyState } from '@react-three/jolt';
+import { useCommand, useLookCommand } from '@react-three/jolt-addons';
+//import * as THREE from 'three';
 import React from 'react';
-//import { CharacterControllerSystem } from 'src/systems';
-export function CameraRig() {
-    //@ts-ignore
-    const isAttached = useRef(false);
-    //@ts-ignore
-    const settable = useConst('yep');
-    const { characterSystem } = useContext(CharacterControllerContext);
-    const { physicsSystem } = useJolt();
-    //@ts-ignore
-    const { camera, scene, controls } = useThree();
-    const { set } = useThree(({ get, set }) => ({ get, set }));
-    //@ts-ignore disable the active controls
-    controls.enabled = false;
-    const cameraRig = useMemo(() => {
-        return new CameraRigManager(scene, physicsSystem);
-    }, [physicsSystem]);
-    const updateCamera = (camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) => {
-        set({ camera: camera });
-        console.log('controls', controls);
-    };
 
-    //const currentRotation = useRef(0);
+//lets try importing the character context
+import { CharacterControllerContext } from './CharacterController';
+//import { CharacterControllerSystem } from 'src/systems';
+interface CameraRigProps {
+    anchor: BodyState;
+}
+
+export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, ref) {
+    const { anchor } = props;
+
+    const cameraRig = useCameraRig();
+    useLookCommand(
+        (lookVector: any) => {
+            cameraRig.look(lookVector);
+        },
+        (zoomLevel: number) => {
+            cameraRig.zoom(zoomLevel);
+        }
+    );
+
+    // bind the cameraRig to the anchor
+    useEffect(() => {
+        if (!anchor) return;
+        cameraRig.attach(anchor);
+        return () => {
+            cameraRig.detach();
+        };
+    }, [anchor]);
+
+    // lets try and see if we are in a character context
+    const { characterSystem } = useContext(CharacterControllerContext);
+
+    useEffect(() => {
+        if (!characterSystem) return;
+        //@ts-ignore
+        cameraRig.attach(characterSystem.anchor);
+        cameraRig.setActiveCamera('main');
+        return () => cameraRig.detach();
+    }, [characterSystem]);
+
     useCommand('z', () => {
         /*
         console.log(
@@ -44,20 +60,9 @@ export function CameraRig() {
         return Math.random() * Math.PI * 2;
     };
 */
-    useEffect(() => {
-        if (!characterSystem) return;
-        // create the camera listener first
-        const cameraListener = cameraRig.onCamera((camera: THREE.PerspectiveCamera) => {
-            console.log('updating camera', camera);
-            updateCamera(camera);
-        });
-        //@ts-ignore attach to the character system
-        cameraRig.attach(characterSystem.anchor);
-        cameraRig.setActiveCamera('main');
-        return () => {
-            cameraListener();
-        };
-    }, [characterSystem]);
+
+    // send the parent the rig in the ref
+    useImperativeHandle(ref, () => cameraRig, [cameraRig]);
 
     return <></>;
-}
+});
