@@ -62,10 +62,12 @@ export class CameraBoom {
         this.cameraSpace.position.z = this.currentDistance;
 
         // to debug add a shape to the pivot
+        /*
         const geometry = new THREE.BoxGeometry(1, 1, 1);
         const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
         const cube = new THREE.Mesh(geometry, material);
         this.cameraSpace.add(cube);
+        */
     }
 
     // assign the camera to the boom
@@ -117,14 +119,16 @@ export class CameraBoom {
         if (this.currentDistance > this.maxDistance) this.currentDistance = this.maxDistance;
         if (this.updateMode == 'demand') this.handleZoomUpdate();
     }
+    rotate(changeValue: number) {
+        this.pivot.rotation.y += changeValue;
+    }
+
+    //* Update movements ========================================
     handleLookUpdate() {
         // lookVector is now the delta between previous events
         this.pivot.rotation.y -= this.lookVector.x * this.camFactor * this.lookSpeed;
         const vy =
             this.cameraSpace.rotation.x + this.lookVector.y * this.camFactor * this.lookSpeed;
-
-        // this may become wrong once rotated?
-        //this.currentDistance = this.cameraSpace.position.length();
 
         if (vy >= -0.5 && vy <= 1.5) {
             this.cameraSpace.rotation.x = vy;
@@ -140,21 +144,11 @@ export class CameraBoom {
         this.cameraSpace.position.z = this.currentDistance * Math.cos(-vy);
     }
 
-    /*
-    handleDemandUpdate() {
-        this.horizontalAngle = this.lookVector.x * this.maxHorizontal;
-        this.verticalAngle = this.lookVector.y * this.maxVertical;
-        // rotate the pivot
-        if (!this.enableSlerp) {
-            this.pivot.rotateY(this.horizontalAngle);
-            this.updateVerticalPosition();
-            this.camera?.lookAt(this.target);
-        }
-    }
-    */
-    // take the distance and vertical angle and set the cameraSpace position
-    updateVerticalPosition() {
-        this.cameraSpace.position.y = this.currentDistance * Math.sin(this.verticalAngle);
-        this.cameraSpace.position.z = this.currentDistance * Math.cos(this.verticalAngle);
-    }
+    //* Collision detection ========================================
+
+    // cast vertical ray from minimum height and return min and max height
+    castGroundRay() {}
+    // test if the camera is obstructed
+    castObstructionRay() {}
+    // test if the camera space is colliding with anything
 }

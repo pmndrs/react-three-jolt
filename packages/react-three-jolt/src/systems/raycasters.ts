@@ -1,11 +1,11 @@
 // this system lets us create raycasts, shapecasts, and specific collision tests
-import { PhysicsSystem } from './physics-system';
+import type { PhysicsSystem } from './physics-system';
 import { Layer } from '../constants';
 import * as THREE from 'three';
 
 import type Jolt from 'jolt-physics';
 import { Raw } from '../raw';
-import { anyVec3, vec3 } from '../utils';
+import { type anyVec3, vec3 } from '../utils';
 
 export class QuerySystem {
     physicsSystem: PhysicsSystem;
@@ -18,6 +18,8 @@ export class QuerySystem {
         this.joltInterface = physicsSystem.joltInterface;
     }
 }
+
+type Callback = (hit?: RaycastHit | RaycastHit[]) => void;
 
 type CastRayCollector =
     | Jolt.CastRayAllHitCollisionCollector
@@ -162,9 +164,9 @@ export class Raycaster {
     }
     // do the cast, runs optional handlers and returns the hits
     // @ts-ignore early bail return triggers TS
-    cast(successHandler?: any, failHandler?: any) {
+    cast(successHandler?: Callback, failHandler?: Callback) {
         // clear the collector
-        if (this.hasCast && this.type != 'closest') this.collector.Reset();
+        if (this.hasCast && this.type !== 'closest') this.collector.Reset();
         this.hasCast = true;
         //clear the hits
         this.hits = [];
@@ -211,18 +213,18 @@ export class Raycaster {
         // return single if just one, or array if multi.
         // moved here to allow debugging
         if (this.hits.length > 0) {
-            if (this.hits.length == 1) return this.hits[0];
+            if (this.hits.length === 1) return this.hits[0];
             return this.hits;
         }
         if (failHandler) failHandler();
     }
     // ease of life handler to change the origin when casting
-    castFrom(origin: anyVec3, successHandler?: any, failHandler?: any) {
+    castFrom(origin: anyVec3, successHandler?: Callback, failHandler?: Callback) {
         this.origin = origin;
         return this.cast(successHandler, failHandler);
     }
     // ease of life to cast from the origin to a point
-    castTo(destination: anyVec3, successHandler?: any, failHandler?: any) {
+    castTo(destination: anyVec3, successHandler?: Callback, failHandler?: Callback) {
         this.direction = vec3.three(destination).clone().sub(this.origin);
         return this.cast(successHandler, failHandler);
     }
@@ -230,8 +232,8 @@ export class Raycaster {
     castBetween(
         origin: THREE.Vector3,
         destination: THREE.Vector3,
-        successHandler?: any,
-        failHandler?: any
+        successHandler?: Callback,
+        failHandler?: Callback
     ) {
         this.origin = origin;
         this.direction = vec3.three(destination).sub(this.origin);
@@ -323,6 +325,7 @@ export class Raycaster {
         this.debugObject.add(newPoints);
     }
     drawDebuggingMarkers() {
+        // biome-ignore lint/complexity/noForEach: <explanation>
         this.hits.forEach((hit) => this.drawMarker(hit));
     }
     drawMarker(hit: RaycastHit, size = 0.5, color = '#C6D8D3') {
@@ -357,7 +360,7 @@ export class AdvancedRaycaster extends Raycaster {
     collector: Jolt.CastRayCollectorJS = new Raw.module.CastRayCollectorJS();
     //@ts-ignore
     activeBody: Jolt.Body;
-    collisionCount: number = 0;
+    collisionCount = 0;
     hits: RaycastHit[] = [];
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         super(joltPhysicsSystem, joltInterface);
@@ -543,6 +546,7 @@ export class Multicaster {
     cast(successHandler?: any, failHandler?: any) {
         this.hits = [];
         this.positions.forEach((position) => {
+            //@ts-ignore
             this.raycaster.castFrom(position, (hit: RaycastHit | RaycastHit[]) => {
                 if (Array.isArray(hit)) this.hits.push(...hit);
                 else this.hits.push(hit);

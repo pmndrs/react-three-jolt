@@ -1,0 +1,13 @@
+{
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "complexity": {
+                "noForEach": "off"
+            },
+            "suspicious": {
+                "noExplicitAny": "off"
+            }
+        }
+    }
+}

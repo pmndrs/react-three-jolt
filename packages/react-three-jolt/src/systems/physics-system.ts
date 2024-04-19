@@ -17,6 +17,7 @@ import { BodySystem } from './body-system';
 import { BodyState } from './body-state';
 import { ConstraintSystem } from './constraint-system';
 import { Raycaster, AdvancedRaycaster, Multicaster } from './raycasters';
+import { ShapeCollider } from './queries/collider';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
 import { quat, vec3, anyVec3 } from '../utils';
 import { MathUtils, Quaternion, Vector3 } from 'three';
@@ -318,6 +319,12 @@ export class PhysicsSystem {
     getMulticaster() {
         return new Multicaster(this.physicsSystem, this.joltInterface);
     }
+
+    //* Colliders ===================================
+    getShapeCollider() {
+        return new ShapeCollider(this.physicsSystem, this.joltInterface);
+    }
+
 
     //* Utility methods ----------------------------
     // Set Gravity

@@ -1,7 +1,7 @@
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { Raw } from '../raw';
-import { Vector3Tuple, Vector4Tuple } from '../types';
+import type { Vector3Tuple, Vector4Tuple } from '../types';
 
 // Get the distance between two jolt vector3s
 export type anyVec3 = Jolt.Vec3 | Jolt.RVec3 | THREE.Vector3 | [number, number, number] | number[];
@@ -18,12 +18,12 @@ export const vec3 = {
     // Extensions to simplify this ---
     // regardless of type of vec3 return the correct type
     jolt(vec: anyVec3): Jolt.Vec3 {
-        if (vec instanceof Array) return vec3.tupleToJolt(vec as Vector3Tuple);
+        if (Array.isArray(vec)) return vec3.tupleToJolt(vec as Vector3Tuple);
         if (vec instanceof THREE.Vector3) return vec3.threeToJolt(vec);
         return vec as Jolt.Vec3;
     },
     three(vec: anyVec3): THREE.Vector3 {
-        if (vec instanceof Array) return new THREE.Vector3(...vec);
+        if (Array.isArray(vec)) return new THREE.Vector3(...vec);
         if (vec3.isJolt(vec)) return vec3.joltToThree(vec);
         return vec as THREE.Vector3;
     },
@@ -75,12 +75,12 @@ export const quat = {
         //@ts-ignore
         quaternion.GetX !== undefined,
     jolt(quaternion: anyQuat): Jolt.Quat {
-        if (quaternion instanceof Array) return quat.tupleToJolt(quaternion);
+        if (Array.isArray(quaternion)) return quat.tupleToJolt(quaternion);
         if (quaternion instanceof THREE.Quaternion) return quat.threeToJolt(quaternion);
         return quaternion;
     },
     three(quaternion: anyQuat): THREE.Quaternion {
-        if (quaternion instanceof Array) return new THREE.Quaternion(...quaternion);
+        if (Array.isArray(quaternion)) return new THREE.Quaternion(...quaternion);
         if (quat.isJolt(quaternion)) {
             return quat.joltToThree(quaternion);
         }
@@ -98,7 +98,7 @@ export const convertNegativeRadians = (radians: number): number => {
 //convert basic strings to add m and uppercase the first letter
 export function joltPropName(propertyName: string) {
     //jolt capitalizes the first letter and appends a lowercase 'm'
-    return 'm' + propertyName.charAt(0).toUpperCase() + propertyName.slice(1);
+    return `m${propertyName.charAt(0).toUpperCase()}${propertyName.slice(1)}`;
 }
 
 // get the bounding box of a three object
@@ -106,4 +106,17 @@ export function getBoundingBox(object: THREE.Object3D) {
     const box = new THREE.Box3();
     box.setFromObject(object);
     return box;
+}
+
+export function generateJoltMatrix(inPosition: anyVec3, inRotation: anyQuat, _inScale?: anyVec3) {
+    // generate a new Jolt matrix
+    //apply the position
+    const position = vec3.jolt(inPosition);
+    const rotation = quat.jolt(inRotation);
+    const matrix = Raw.module.Mat44.prototype.sRotationTranslation(rotation, position);
+    // destoy the references
+    Raw.module.destroy(position);
+    Raw.module.destroy(rotation);
+
+    return matrix;
 }
