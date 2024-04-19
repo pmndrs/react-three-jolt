@@ -40,7 +40,7 @@ export class ShapeCollider {
     activeScale = new THREE.Vector3(1, 1, 1);
 
     //primary shape to test against
-    activeShape: Jolt.Shape = new Raw.module.SphereShape(1);
+    activeShape: Jolt.Shape = new Raw.module.SphereShape(0.3);
 
     // required jolt props
     shapeScale = new Raw.module.Vec3(1, 1, 1);
@@ -65,7 +65,6 @@ export class ShapeCollider {
 
     //raw jolt cast query
     rawCast() {
-        console.log('Raw Collide Shape Query');
         this.joltPhysicsSystem
             .GetNarrowPhaseQuery()
             .CollideShape(
@@ -139,7 +138,7 @@ export class ShapeCollider {
         }
     }
 
-    cast(successHandler: any, failHandler: any) {
+    cast(successHandler?: any, failHandler?: any) {
         // clear the collector
         //if (this.hasCast && this.type !== 'closest') 
             this.collector.Reset();
@@ -181,7 +180,7 @@ export class ShapeCollider {
                 return this.hits;
             }
         }
-        failHandler();
+        if(failHandler) failHandler();
         return false;
     }
 

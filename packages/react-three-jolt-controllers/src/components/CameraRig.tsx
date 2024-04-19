@@ -2,13 +2,12 @@ import { useEffect, forwardRef, useImperativeHandle, useContext } from 'react';
 import { useCameraRig } from '../hooks';
 import type { BodyState } from '@react-three/jolt';
 import { useCommand, useLookCommand } from '@react-three/jolt-addons';
-import * as THREE from 'three';
+//import * as THREE from 'three';
 import React from 'react';
 import { useJolt } from '@react-three/jolt';
 
 //lets try importing the character context
 import { CharacterControllerContext } from './CharacterController';
-import { CollisionResult } from '../../../react-three-jolt/dist/systems/queries/collider';
 //import { CharacterControllerSystem } from 'src/systems';
 interface CameraRigProps {
     anchor?: BodyState;
@@ -28,7 +27,7 @@ export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, re
     // bind the look command for look and zoom
     useLookCommand(
         (lookVector: any) => {
-            cameraRig.look(lookVector);
+            cameraRig.moveBoom(lookVector);
         },
         (zoomLevel: number) => {
             cameraRig.zoom(zoomLevel);
@@ -54,26 +53,16 @@ export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, re
         cameraRig.setActiveCamera('main');
         return () => cameraRig.detach();
     }, [characterSystem]);
-    let height = 2;
     useCommand('z', () => {
-        
-        collider.position = new THREE.Vector3(30,height,30);
-        console.log('triggering collision test', collider.position);
-        collider.cast((hit: CollisionResult) => {
-            console.log('Hit:', hit);
-        },() => {
-            console.log('No Hit');
-        
-        })
-        height++;
-        /*
-        console.log(
-            'Rotating collar to:, ',
-            currentRotation.current,
-            ', in Rads: ',
-            THREE.MathUtils.degToRad(currentRotation.current)
-        );
-        */
+        cameraRig.controls.doObstructionTest();
+    });
+    useCommand('c', () => {
+        const collision = cameraRig.controls.doCollisionTest();
+        console.log('Collision:', collision);
+    });
+    // reset to follow cam
+    useCommand('r', () => {
+        cameraRig.controls.setRotation(cameraRig.anchor.rotation.y);
     });
 
     /*    const getRandomRadian = () => {

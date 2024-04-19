@@ -133,8 +133,8 @@ export class CameraRigManager {
     }
 
     //* Camera Boom ========================================
-    look(lookVector: THREE.Vector2Like) {
-        this.controls.look(lookVector);
+    moveBoom(lookVector: THREE.Vector2Like) {
+        this.controls.move(lookVector);
     }
     zoom(zoom: number) {
         this.controls.zoom(zoom);
@@ -252,6 +252,7 @@ export class CameraRigManager {
     // handler for when the frame updates
     private handleUpdate(_deltaTime: number, _subFrame: number) {
         this.updateSpaces();
+        if(this.activeCamera && this.controls) this.controls.handleFrameUpdate(); 
     }
 
     updateSpaces() {

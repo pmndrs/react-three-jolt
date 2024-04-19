@@ -16,7 +16,7 @@ import { Raw } from '../raw';
 import { BodySystem } from './body-system';
 import { BodyState } from './body-state';
 import { ConstraintSystem } from './constraint-system';
-import { Raycaster, AdvancedRaycaster, Multicaster } from './raycasters';
+import { Raycaster, AdvancedRaycaster, Multicaster } from './queries/raycasters';
 import { ShapeCollider } from './queries/collider';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
 import { quat, vec3, anyVec3 } from '../utils';

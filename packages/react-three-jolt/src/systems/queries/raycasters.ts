@@ -1,11 +1,11 @@
 // this system lets us create raycasts, shapecasts, and specific collision tests
-import type { PhysicsSystem } from './physics-system';
-import { Layer } from '../constants';
+import type { PhysicsSystem } from '../physics-system';
+import { Layer } from '../../constants';
 import * as THREE from 'three';
 
 import type Jolt from 'jolt-physics';
-import { Raw } from '../raw';
-import { type anyVec3, vec3 } from '../utils';
+import { Raw } from '../../raw';
+import { type anyVec3, vec3 } from '../../utils';
 
 export class QuerySystem {
     physicsSystem: PhysicsSystem;
@@ -164,7 +164,7 @@ export class Raycaster {
     }
     // do the cast, runs optional handlers and returns the hits
     // @ts-ignore early bail return triggers TS
-    cast(successHandler?: Callback, failHandler?: Callback) {
+    cast(successHandler?: any, failHandler?: any) {
         // clear the collector
         if (this.hasCast && this.type !== 'closest') this.collector.Reset();
         this.hasCast = true;
@@ -213,7 +213,7 @@ export class Raycaster {
         // return single if just one, or array if multi.
         // moved here to allow debugging
         if (this.hits.length > 0) {
-            if (this.hits.length === 1) return this.hits[0];
+            if (this.type !== 'all') return this.hits[0];
             return this.hits;
         }
         if (failHandler) failHandler();

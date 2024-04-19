@@ -24,6 +24,12 @@ export class BodyState {
     handle: number;
     index?: number;
 
+    // obstruction and collision
+    allowObstruction = false; // temporarily block obstruction
+    obstructionType: "any" | "temporal" = "temporal";
+    obstructionTimelimit = 5000;
+    allowCollision = false;
+
     /**
      * Required for instanced rigid bodies. (from r3/rapier)
      */
