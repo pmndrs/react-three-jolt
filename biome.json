@@ -9,5 +9,15 @@
                 "noExplicitAny": "off"
             }
         }
+    },
+    "formatter": {
+        "indentWidth": 4,
+        "lineWidth": 100
+    },
+    "javascript": {
+        "formatter": {
+            "trailingComma": "none",
+            "bracketSameLine": false
+        }
     }
 }
