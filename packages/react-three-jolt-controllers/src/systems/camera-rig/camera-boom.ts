@@ -31,7 +31,9 @@ export class CameraBoom {
 	slerpFactor = 0.5;
 	minDistance = 0.1;
 	maxDistance = 100;
-	allowCameraClipping = false; // temp true to test shapecaster
+	maxShapecastingTime = 5000;
+	allowCameraClipping = false;
+	limitShapecasting = false;
 
 	//maybe internal props
 	camFactor = 0.002;
@@ -42,6 +44,7 @@ export class CameraBoom {
 	// minimum distance to be clear of obstru
 	clearDistance = 5;
 	timeObstructed = 0;
+	timeShapecasting = 0;
 	obstructionTimestamp = 0;
 
 	currentDistance = 5;
@@ -57,6 +60,7 @@ export class CameraBoom {
 
 	isMoving = false;
 	isRotating = false;
+	isShapecasting = false;
 	minLerpClearance = 0.01;
 	rearcastFactor = 1;
 
@@ -207,9 +211,10 @@ export class CameraBoom {
 		// do the obstruction test
 		if (!this.activeCamera) return;
 		if (!this.allowCameraClipping) {
-			// do the collision test
-			this.doCollisionTest();
-			//this.doObstructionTest();
+			// these are tested individually because they both can activate shapecasting
+			if (!this.isShapecasting) this.doCollisionTest();
+			if (!this.isShapecasting) this.doObstructionTest();
+			if (this.isShapecasting) this.doShapecastTest();
 		}
 		// handle the distance update
 		this.handleDistanceUpdate();
@@ -239,11 +244,6 @@ export class CameraBoom {
 		if (!obstructions) {
 			//clear the timer
 			this.timeObstructed = 0;
-			// move us back to the target distance
-			if (this.clearDistance !== this.targetDistance) {
-				this.clearDistance = this.targetDistance;
-				this.isMoving = true;
-			}
 			return;
 		}
 		const now = Date.now();
@@ -263,14 +263,14 @@ export class CameraBoom {
 			const body = this.physicsSystem.bodySystem.getBody(obstruction.bodyHandle);
 			if (body) {
 				// check if we dont allow obstruction
-				if (body.allowObstruction === false) this.isMoving = true;
+				if (body.allowObstruction === false) this.isShapecasting = true;
 
 				// check if we are beyond the obstruction time
 				if (
 					body.obstructionType === "temporal" &&
 					this.timeObstructed > body.obstructionTimelimit
 				)
-					this.isMoving = true;
+					this.isShapecasting = true;
 			}
 		}
 	}
@@ -285,17 +285,41 @@ export class CameraBoom {
 		const body = this.physicsSystem.bodySystem.getBody(collision.bodyHandle);
 		if (body && body.allowCollision === false) {
 			// do a shapecast to this point
-			const obstruction = this.castObstructionShape();
-			if (obstruction) {
-				// get the distance to the obstruction
-				const distance = this.pivotWorldSpace.distanceTo(obstruction.position);
-				// set the clear distance to this distance
-				this.clearDistance = distance - this.obstructionBuffer;
-				this.isMoving = true;
-			}
+			this.isShapecasting = true;
 			//this.currentDistance = this.clearDistance;
 			//if (this.updateMode === "demand") this.handleZoomUpdate();
 		}
+	}
+	doShapecastTest() {
+		// timer to limit constant shapecasting
+		// assume 60fps
+		let forceRetarget = false;
+		if (this.limitShapecasting) {
+			this.timeShapecasting++;
+			if (this.timeShapecasting > this.maxShapecastingTime / 60) {
+				forceRetarget = true;
+				this.timeShapecasting = 0;
+			}
+		}
+		const obstruction = this.castObstructionShape();
+		if (obstruction) {
+			// get the distance to the obstruction
+			const distance = this.pivotWorldSpace.distanceTo(obstruction.position);
+			// set the clear distance to this distance
+			this.clearDistance = distance - this.obstructionBuffer;
+			this.isMoving = true;
+			if (forceRetarget) {
+				this.targetDistance = this.clearDistance;
+				this.isShapecasting = false;
+			}
+			return;
+		}
+
+		// if we are not obstructed we can move to target
+		if (this.clearDistance !== this.targetDistance) {
+			this.clearDistance = this.targetDistance;
+			this.isMoving = true;
+		} else this.isShapecasting = false;
 	}
 
 	// cast vertical ray from minimum height and return min and max height

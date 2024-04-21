@@ -274,9 +274,9 @@ export class CameraRigManager {
 	//create rig points
 	createRigPoint(name: string, options?: any): BodyState {
 		const {
-			color = "#767B91",
+			color = "#767B91"
 			// type = 'sphere',
-			motionType
+			//motionType
 		} = options || {};
 		/* / TODO Cylinder throws errors
         const geometry =

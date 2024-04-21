@@ -4,6 +4,10 @@ import { CharacterController, CameraRig } from "@react-three/jolt-controllers";
 //helpers for example
 import { BoundBoxes } from "./BoundBoxes";
 import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
+import { Arch } from "./Bodies/Arch";
+import { Tunnel } from "./Bodies/Tunnel";
+import { Stairs } from "./Bodies/Stairs";
+import { useThree } from "@react-three/fiber";
 /*
 import {
     useCommand,
@@ -15,10 +19,15 @@ import {
 export function CharacterVirtualDemo() {
 	//const options = useConst({ inverted: { y: true } });
 	//useGamepadForCameraControls('look', controls, options);
-
+	const { gl } = useThree();
 	// body settings so shapes bounce
 	const defaultBodySettings = {
 		mRestitution: 0
+	};
+	const pointerLock = () => {
+		console.log("trying to lock");
+		const element = gl.domElement;
+		element.requestPointerLock();
 	};
 
 	return (
@@ -31,21 +40,18 @@ export function CharacterVirtualDemo() {
 			/>
 			<ambientLight intensity={1.5} />
 			<Physics module={InitJolt} gravity={25} defaultBodySettings={defaultBodySettings}>
-				<RigidBody position={[0, 0, -10]}>
-					<mesh>
-						<boxGeometry args={[5, 1, 5]} />
-						<meshStandardMaterial color="#92DCE5" />
-					</mesh>
-				</RigidBody>
+				<Arch position={[0, 0, -15]} />
+				<Tunnel position={[-25, 0, 25]} rotation={[0, -0.5, 0]} />
+				<Stairs position={[-30, 0, 25]} rotation={[0, 4, 0]} />
 				<RigidBody position={[0, 0, 10]}>
-					<mesh>
+					<mesh onClick={() => pointerLock()}>
 						<boxGeometry args={[5, 1, 5]} />
 						<meshStandardMaterial color="#D64933" />
 					</mesh>
 				</RigidBody>
-				<RigidBody position={[-10, 0, 0]}>
+				<RigidBody position={[-10, 1, 0]}>
 					<mesh>
-						<boxGeometry args={[5, 1, 5]} />
+						<boxGeometry args={[5, 0.4, 5]} />
 						<meshStandardMaterial color="#8B80F9" />
 					</mesh>
 				</RigidBody>
