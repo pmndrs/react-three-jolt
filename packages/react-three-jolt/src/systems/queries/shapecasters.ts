@@ -4,7 +4,7 @@ import * as THREE from "three";
 
 import type Jolt from "jolt-physics";
 import { Raw } from "../../raw";
-import { type anyVec3, vec3, generateJoltMatrix, quat } from "../../utils";
+import { type anyVec3, vec3, generateJoltMatrix } from "../../utils";
 
 type Callback = (hit?: ShapecastHit | ShapecastHit[]) => void;
 
@@ -24,7 +24,7 @@ export class Shapecaster {
 	shapeFilter: Jolt.ShapeFilter = new Raw.module.ShapeFilter();
 
 	// shapecast settings
-	shapecast: Jolt.ShapeCast;
+	shapecast!: Jolt.ShapeCast;
 	shapecastSettings = new Raw.module.ShapeCastSettings();
 	doIgnoreBackfaceTriangles = true;
 	doIgnoreBackfaceConvex = true;
