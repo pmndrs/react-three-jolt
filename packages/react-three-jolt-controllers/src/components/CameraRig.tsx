@@ -53,6 +53,7 @@ export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, re
 		return () => cameraRig.detach();
 	}, [characterSystem]);
 	useCommand("z", () => {
+		console.log("Zooming out");
 		//const cast = cameraRig.controls.castObstructionShape();
 	});
 	useCommand("c", () => {
@@ -63,11 +64,6 @@ export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, re
 		console.log("Resetting to follow cam");
 		cameraRig.controls.setRotation(cameraRig.anchor.rotation.y, true);
 	});
-
-	/*    const getRandomRadian = () => {
-        return Math.random() * Math.PI * 2;
-    };
-*/
 
 	// send the parent the rig in the ref
 	useImperativeHandle(ref, () => cameraRig, [cameraRig]);

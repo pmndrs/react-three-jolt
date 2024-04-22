@@ -5,14 +5,42 @@ import * as THREE from "three";
 import { MathUtils } from "three";
 import type Jolt from "jolt-physics";
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from "../tmp";
-import { Raw, Layer, PhysicsSystem, quat, vec3, generateBodySettings } from "@react-three/jolt";
+import {
+	Raw,
+	Layer,
+	PhysicsSystem,
+	quat,
+	vec3,
+	generateBodySettings,
+	BodySystem
+} from "@react-three/jolt";
+
+interface CharacterFilters {
+	objectVsBroadPhaseLayerFilter?: Jolt.ObjectVsBroadPhaseLayerFilter;
+	objectLayerPairFilter?: Jolt.ObjectLayerPairFilter;
+	movingBPFilter?: Jolt.DefaultBroadPhaseLayerFilter;
+	movingLayerFilter?: Jolt.DefaultObjectLayerFilter;
+	bodyFilter: Jolt.BodyFilter;
+	shapeFilter: Jolt.ShapeFilter;
+}
 
 export class CharacterControllerSystem {
 	joltInterface: Jolt.JoltInterface;
-	physicsSystem;
-	bodySystem;
+	physicsSystem: PhysicsSystem;
+	bodySystem: BodySystem;
+
+	// DO NOT MESS WITH THESE
+	filters: CharacterFilters = {
+		objectVsBroadPhaseLayerFilter: undefined,
+		objectLayerPairFilter: undefined,
+		movingBPFilter: undefined,
+		movingLayerFilter: undefined,
+		bodyFilter: new Raw.module.BodyFilter(),
+		shapeFilter: new Raw.module.ShapeFilter()
+	};
 
 	private actionListeners = [];
+	//private stateListeners = [];
 
 	// configurable options
 
@@ -34,12 +62,9 @@ export class CharacterControllerSystem {
 	enableWalkStairs = true;
 	enableStickToFloor = true;
 
+	// Allows
 	upRotationX = 0;
 	upRotationZ = 0;
-	maxSlopeAngle = MathUtils.degToRad(45.0);
-	maxStrength = 100.0;
-	characterPadding = 0.02;
-	penetrationRecoverySpeed = 1.0;
 	predictiveContactDistance = 0.1;
 
 	direction = new THREE.Vector3(0, 0, 0);
@@ -48,7 +73,7 @@ export class CharacterControllerSystem {
 	public threeObject: any;
 
 	// **Primary Holder Object ***
-	character: any;
+	character!: Jolt.CharacterVirtual;
 	//rig anchor
 	anchor: any;
 	anchorID: any;
@@ -66,19 +91,14 @@ export class CharacterControllerSystem {
 
 	private updateSettings = new Raw.module.ExtendedUpdateSettings();
 
-	private objectVsBroadPhaseLayerFilter;
-	private objectLayerPairFilter;
-	private movingBPFilter;
-	private movingLayerFilter;
-	private bodyFilter = new Raw.module.BodyFilter();
-	private shapeFilter = new Raw.module.ShapeFilter();
-
 	// private properties
 	//active speed allows variable running speeds
 	private activeSpeed = 6;
 	// shapes of the character
-	private standingShape: any;
-	private crouchingShape: any;
+	private activeStandingShape!: Jolt.Shape;
+	private activeCrouchingShape!: Jolt.Shape;
+	standingGeometry!: THREE.BufferGeometry;
+	crouchingGeometry!: THREE.BufferGeometry;
 
 	private characterContactListener: any;
 	// Rotation properties
@@ -91,7 +111,6 @@ export class CharacterControllerSystem {
 	// movement vectors
 	private movementInput = new THREE.Vector3();
 	private desiredVelocity = new THREE.Vector3();
-	//private jumpBlocked = false;
 	private jumpCounter = 0;
 	private isJumping = false;
 	lerpFactor = 0.4;
@@ -100,23 +119,27 @@ export class CharacterControllerSystem {
 	oldPosition = new THREE.Vector3();
 
 	// Temp variables
+	//TODO remove this for global temps
 	private _tmpVec3 = new Raw.module.Vec3();
 
 	constructor(physicsSystem: PhysicsSystem) {
 		this.physicsSystem = physicsSystem;
 		this.joltInterface = physicsSystem.joltInterface;
 		this.bodySystem = physicsSystem.bodySystem;
-		this.objectVsBroadPhaseLayerFilter = this.joltInterface.GetObjectVsBroadPhaseLayerFilter();
-		this.objectLayerPairFilter = this.joltInterface.GetObjectLayerPairFilter();
-		this.movingBPFilter = new Raw.module.DefaultBroadPhaseLayerFilter(
-			this.objectVsBroadPhaseLayerFilter,
+		// Filters
+		this.filters.objectVsBroadPhaseLayerFilter =
+			this.joltInterface.GetObjectVsBroadPhaseLayerFilter();
+		this.filters.objectLayerPairFilter = this.joltInterface.GetObjectLayerPairFilter();
+		this.filters.movingBPFilter = new Raw.module.DefaultBroadPhaseLayerFilter(
+			this.filters.objectVsBroadPhaseLayerFilter,
 			Layer.MOVING
 		);
-		this.movingLayerFilter = new Raw.module.DefaultObjectLayerFilter(
-			this.objectLayerPairFilter,
+		this.filters.movingLayerFilter = new Raw.module.DefaultObjectLayerFilter(
+			this.filters.objectLayerPairFilter,
 			Layer.MOVING
 		);
 
+		// Init the character contact listener
 		this.initCharacterContactListener();
 		// Set a default shape size (know it will be overwritten by the user
 		this.setCapsule(1, 2);
@@ -125,6 +148,170 @@ export class CharacterControllerSystem {
 			this.prePhysicsUpdate(deltaTime)
 		);
 	}
+	// cleanup
+	destroy() {
+		console.log("Character wants to destroy...");
+		//todo: destroy the character
+	}
+	//* Properties ========================================
+	get shape() {
+		return this.character.GetShape();
+	}
+	set shape(shape: Jolt.Shape) {
+		this.character.SetShape(
+			shape,
+			1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
+			//@ts-ignore
+			this.filters.movingBPFilter,
+			this.filters.movingLayerFilter,
+			this.filters.bodyFilter,
+			this.filters.shapeFilter,
+			this.joltInterface.GetTempAllocator()
+		);
+	}
+	get standingShape() {
+		return this.activeStandingShape;
+	}
+	set standingShape(shape: Jolt.Shape) {
+		this.activeStandingShape = shape;
+		//TODO create geometry based on this shape for debugging
+	}
+	get crouchingShape() {
+		return this.activeCrouchingShape;
+	}
+	set crouchingShape(shape: Jolt.Shape) {
+		this.activeCrouchingShape = shape;
+		//TODO create geometry based on this shape for debugging
+	}
+
+	// Position and movement ------------------------------
+	get linearVelocity(): THREE.Vector3 {
+		return vec3.three(this.character.GetLinearVelocity());
+	}
+	set linearVelocity(value: THREE.Vector3) {
+		const newVec = vec3.jolt(value);
+		this.character.SetLinearVelocity(newVec);
+		Raw.module.destroy(newVec);
+	}
+	get position(): THREE.Vector3 {
+		return vec3.three(this.character.GetPosition());
+	}
+	set position(value: THREE.Vector3) {
+		const newVec = vec3.jolt(value);
+		this.character.SetPosition(newVec);
+		Raw.module.destroy(newVec);
+	}
+	get rotation(): THREE.Quaternion {
+		return quat.three(this.character.GetRotation());
+	}
+	set rotation(value: THREE.Quaternion) {
+		const newQuat = quat.jolt(value);
+		this.character.SetRotation(newQuat);
+		Raw.module.destroy(newQuat);
+	}
+	//read-only
+	get worldTransform(): THREE.Matrix4 {
+		const transform = this.character.GetWorldTransform();
+		//TODO are these references or new objects that need destroying?
+		const position = vec3.three(transform.GetTranslation());
+		const rotation = quat.three(transform.GetQuaternion());
+		return new THREE.Matrix4().compose(position, rotation, new THREE.Vector3(1, 1, 1));
+	}
+	// read-only
+	get centerOfMassTransform(): THREE.Matrix4 {
+		const transform = this.character.GetCenterOfMassTransform();
+		//TODO are these references or new objects that need destroying?
+		const position = vec3.three(transform.GetTranslation());
+		const rotation = quat.three(transform.GetQuaternion());
+		return new THREE.Matrix4().compose(position, rotation, new THREE.Vector3(1, 1, 1));
+	}
+	get mass(): number {
+		return this.character.GetMass();
+	}
+	set mass(value: number) {
+		this.character.SetMass(value);
+	}
+	get maxStrength(): number {
+		return this.character.GetMaxStrength();
+	}
+	// from character base --------------------------------
+	get maxCosSlopeAngle(): number {
+		return this.character.GetCosMaxSlopeAngle();
+	}
+	set maxSlopeAngle(value: number) {
+		this.character.SetMaxSlopeAngle(value);
+	}
+	get up(): THREE.Vector3 {
+		return vec3.three(this.character.GetUp());
+	}
+	set up(value: THREE.Vector3) {
+		const newVec = vec3.jolt(value);
+		this.character.SetUp(newVec);
+		Raw.module.destroy(newVec);
+	}
+	// Ground Properties ----------------------------------
+	//Tell if we are flying, sliding, etc (Read-only)
+	get groundState(): string | undefined {
+		const joltState = this.character.GetGroundState();
+		switch (joltState) {
+			case Raw.module.EGroundState_OnGround:
+				return "OnGround";
+			case Raw.module.EGroundState_OnSteepGround:
+				return "OnSteepGround";
+			case Raw.module.EGroundState_InAir:
+				return "InAir";
+			case Raw.module.EGroundState_NotSupported:
+				return "NotSupported";
+		}
+		return undefined;
+		//TODO do we need to destroy joltState?
+	}
+	get isSupported(): boolean {
+		return this.character.IsSupported();
+	}
+	get groundNormal(): THREE.Vector3 {
+		return vec3.three(this.character.GetGroundNormal());
+	}
+	get groundPosition(): THREE.Vector3 {
+		return vec3.three(this.character.GetGroundPosition());
+	}
+	get groundVelocity(): THREE.Vector3 {
+		return vec3.three(this.character.GetGroundVelocity());
+	}
+	get groundMaterial(): any {
+		return this.character.GetGroundMaterial();
+	}
+	get groundBodyHandle(): any {
+		return this.character.GetGroundBodyID().GetIndexAndSequenceNumber();
+		//TODO do we need to destroy the bodyID?
+	}
+
+	// Rare ----------------------------------------------
+	get penetrationRecoverySpeed(): number {
+		return this.character.GetPenetrationRecoverySpeed();
+	}
+	set penetrationRecoverySpeed(value: number) {
+		this.character.SetPenetrationRecoverySpeed(value);
+	}
+	// read-only
+	get characterPadding(): number {
+		return this.character.GetCharacterPadding();
+	}
+	get maxNumHits(): number {
+		return this.character.GetMaxNumHits();
+	}
+	set maxNumHits(value: number) {
+		this.character.SetMaxNumHits(value);
+	}
+	get shapeOffset(): THREE.Vector3 {
+		return vec3.three(this.character.GetShapeOffset());
+	}
+	set shapeOffset(value: THREE.Vector3) {
+		const newVec = vec3.jolt(value);
+		this.character.SetShapeOffset(newVec);
+		Raw.module.destroy(newVec);
+	}
+
 	//* Contact Listeners =================================
 
 	initCharacterContactListener() {
@@ -198,12 +385,12 @@ export class CharacterControllerSystem {
 	initCharacter() {
 		const settings = new Raw.module.CharacterVirtualSettings();
 		settings.mMass = 1000;
-		settings.mMaxSlopeAngle = this.maxSlopeAngle;
-		settings.mMaxStrength = this.maxStrength;
+		settings.mMaxSlopeAngle = MathUtils.degToRad(45.0);
+		settings.mMaxStrength = 100;
 		settings.mShape = this.standingShape;
 		settings.mBackFaceMode = Raw.module.EBackFaceMode_CollideWithBackFaces;
-		settings.mCharacterPadding = this.characterPadding;
-		settings.mPenetrationRecoverySpeed = this.penetrationRecoverySpeed;
+		settings.mCharacterPadding = 0.02;
+		settings.mPenetrationRecoverySpeed = 1;
 		settings.mPredictiveContactDistance = this.predictiveContactDistance;
 		settings.mSupportingVolume = new Raw.module.Plane(
 			Raw.module.Vec3.prototype.sAxisY(),
@@ -219,20 +406,12 @@ export class CharacterControllerSystem {
 
 		//this.threeCharacter.geometry = this.threeStandingGeometry;
 		this.threeCharacter.userData.body = this.character;
-		// see if the issue is a shape issue
-		this.character.SetShape(
-			this.standingShape,
-			1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
-			this.movingBPFilter,
-			this.movingLayerFilter,
-			this.bodyFilter,
-			this.shapeFilter,
-			this.joltInterface.GetTempAllocator()
-		);
+		this.shape = this.standingShape;
 		// create the rig anchor
 		this.createAnchor();
 		// TODO: Destroy all the jolt stuff now its created
 	}
+
 	// create the anchor object for rigs
 	private createAnchor() {
 		const shapeSettings = new Raw.module.SphereShapeSettings(0.5);
@@ -242,8 +421,6 @@ export class CharacterControllerSystem {
 		const anchor = this.physicsSystem.bodyInterface.CreateBody(bodySettings);
 		anchor.SetIsSensor(true);
 		this.anchorID = anchor.GetID();
-		// set the gravity factor
-		//this.physicsSystem.bodyInterface.SetGravityFactor(this.anchorID, 0); s
 		// we have to generate a correct bodyState
 		const anchorHandle = this.physicsSystem.bodySystem.addExistingBody(
 			new THREE.Object3D(),
@@ -327,10 +504,11 @@ export class CharacterControllerSystem {
 			deltaTime,
 			this.character.GetUp(),
 			this.updateSettings,
-			this.movingBPFilter,
-			this.movingLayerFilter,
-			this.bodyFilter,
-			this.shapeFilter,
+			//@ts-ignore
+			this.filters.movingBPFilter,
+			this.filters.movingLayerFilter,
+			this.filters.bodyFilter,
+			this.filters.shapeFilter,
 			this.joltInterface.GetTempAllocator()
 		);
 		// TODO this is where we slerp the character
@@ -420,12 +598,12 @@ export class CharacterControllerSystem {
 		const groundVelocity = vec3.joltToThree(this.character.GetGroundVelocity());
 		const gravity = vec3.joltToThree(this.physicsSystem.physicsSystem.GetGravity());
 
-		let newVelocity;
+		let newVelocity: any;
 		const movingTowardsGround = currentVerticalVelocity.y - groundVelocity.y < 0.1;
 
 		// If on ground and not moving away from ground
 		if (
-			this.character.GetGroundState() == Raw.module.EGroundState_OnGround && // If on ground
+			this.character.GetGroundState() === Raw.module.EGroundState_OnGround && // If on ground
 			(this.enableCharacterInertia
 				? movingTowardsGround // Inertia enabled: And not moving away from ground
 				: !this.character.IsSlopeTooSteep(this.character.GetGroundNormal()))
@@ -473,8 +651,8 @@ export class CharacterControllerSystem {
 	}
 	// TODO Fix this
 	setCrouched = (crouched: boolean, forceUpdate: boolean) => {
-		if (crouched != this.isCrouched || forceUpdate) {
-			let newShape;
+		if (crouched !== this.isCrouched || forceUpdate) {
+			let newShape: any;
 			//let newGeometry;
 			if (crouched) {
 				newShape = this.crouchingShape;
@@ -487,10 +665,11 @@ export class CharacterControllerSystem {
 				this.character.SetShape(
 					newShape,
 					1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
-					this.movingBPFilter,
-					this.movingLayerFilter,
-					this.bodyFilter,
-					this.shapeFilter,
+					//@ts-ignore
+					this.filters.movingBPFilter,
+					this.filters.movingLayerFilter,
+					this.filters.bodyFilter,
+					this.filters.shapeFilter,
 					this.joltInterface.GetTempAllocator()
 				)
 			) {
@@ -540,11 +719,9 @@ export class CharacterControllerSystem {
 		return () => this.removeActionListener(listener);
 	};
 
-	// Util functions ----------------------------------
+	//* Util functions ----------------------------------
 
-	teleport(position: THREE.Vector3) {
-		const _tmpRVec3 = new Raw.module.RVec3();
-		_tmpRVec3.Set(position.x, position.y, position.z);
-		this.character.SetPosition(_tmpRVec3);
+	isSlopeTooSteep(normal: THREE.Vector3) {
+		return this.character.IsSlopeTooSteep(vec3.threeToJolt(normal));
 	}
 }

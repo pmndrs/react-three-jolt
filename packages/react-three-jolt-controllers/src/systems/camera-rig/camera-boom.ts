@@ -86,8 +86,10 @@ export class CameraBoom {
 		base.add(this.pivot);
 		this.pivot.add(this.cameraSpace);
 		// move the camera to the initial zPosition
+		// TODO Replace with initialize
 		this.cameraSpace.position.z = this.currentDistance;
 
+		//TODO move to debug
 		// to debug add a shape to the pivot
 		/*
         const geometry = new THREE.BoxGeometry(1, 1, 1);
@@ -127,11 +129,13 @@ export class CameraBoom {
 		this.cameraSpace.add(camera);
 		this.activeCamera = camera;
 		this.handleLookUpdate();
-		console.log("set camera");
 	}
 	get camera(): THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined {
 		return this.activeCamera;
 	}
+
+	//* Methods ========================================
+	// deactivate the controls and loops
 	//take a position and set the rotation and camera space value based on it
 	initialize(targetPosition: THREE.Vector3) {
 		// the position is in worldspace
@@ -159,7 +163,10 @@ export class CameraBoom {
 		if (this.updateMode === "demand") this.handleLookUpdate();
 	}
 	zoom(factor: number) {
-		this.currentDistance = this.currentDistance + factor * this.zoomFactor * this.zoomSpeed;
+		const desiredDistance = this.currentDistance + factor * this.zoomFactor * this.zoomSpeed;
+		//if the desired distance is more than the clear distance bail
+		if (this.isShapecasting && desiredDistance >= this.clearDistance) return;
+		this.currentDistance = desiredDistance;
 		this.targetDistance = this.currentDistance;
 		//apply min/max
 		if (this.currentDistance < this.minDistance) this.currentDistance = this.minDistance;
@@ -167,6 +174,7 @@ export class CameraBoom {
 		if (this.updateMode === "demand") this.handleZoomUpdate();
 	}
 	rotate(changeValue: number) {
+		//todo make this use slerping like distance
 		this.pivot.rotation.y += changeValue;
 	}
 	setRotation(value: number, force?: boolean) {
@@ -200,7 +208,6 @@ export class CameraBoom {
 		//reset the look vector
 		const vy = this.cameraSpace.rotation.x;
 		this.cameraSpace.position.y = this.currentDistance * Math.sin(-vy);
-
 		this.cameraSpace.position.z = this.currentDistance * Math.cos(-vy);
 	}
 
@@ -222,6 +229,8 @@ export class CameraBoom {
 	// frame driven distance handle
 	handleDistanceUpdate() {
 		if (this.isMoving) {
+			// let us zoom in
+			if (this.targetDistance < this.clearDistance) this.clearDistance = this.targetDistance;
 			this.currentDistance = THREE.MathUtils.lerp(
 				this.currentDistance,
 				this.clearDistance,

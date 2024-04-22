@@ -1,4 +1,4 @@
-import { useMemo, useEffect } from "react";
+import { useMemo, useEffect, useRef } from "react";
 import { useJolt } from "@react-three/jolt";
 import { useThree } from "@react-three/fiber";
 import { CameraRigManager } from "../systems/camera-rig/camera-rig-system";
@@ -15,6 +15,7 @@ export function useCameraRig() {
 	const cameraRig = useMemo(() => {
 		return new CameraRigManager(scene, physicsSystem);
 	}, [physicsSystem]);
+	const originalCamera = useRef(camera);
 	const updateCamera = (camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) => {
 		set({ camera: camera });
 	};
@@ -27,6 +28,9 @@ export function useCameraRig() {
 		});
 		return () => {
 			cameraListener();
+			// reset the camera
+			updateCamera(originalCamera.current);
+			console.log("reset camera");
 		};
 	}, []);
 

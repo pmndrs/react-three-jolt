@@ -16,6 +16,7 @@ export const initJolt = async (jolt?: typeof Jolt) => {
 		console.log("** Setting Raw to local Jolt **");
 		if (Raw.module !== null) {
 			// how can we destroy the old one?
+			//@ts-ignore
 			delete Raw.module;
 		}
 		Raw.module = await jolt();
