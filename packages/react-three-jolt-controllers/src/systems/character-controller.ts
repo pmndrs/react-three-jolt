@@ -31,6 +31,7 @@ export class CharacterControllerSystem {
 
 	// **Primary Holder Object ***
 	character!: Jolt.CharacterVirtual;
+	threeObject = new THREE.Object3D();
 	threeCharacter = new THREE.Mesh(
 		new THREE.BoxGeometry(1, 1, 1),
 		new THREE.MeshPhongMaterial({ color: 0xffff00 })
@@ -79,9 +80,15 @@ export class CharacterControllerSystem {
 	velocity = new THREE.Vector3(0, 0, 0);
 
 	// State properties ------------------------------
+	isDebugging = false;
 	isCrouched = false;
 	isRotating = false;
 	private isJumping = false;
+	isMoving = false;
+	isSliding = false;
+	isRunning = false;
+	isExhausted = false;
+
 	allowSliding = false;
 	allowRunning = true;
 	enableExhaustion = true;
@@ -91,8 +98,6 @@ export class CharacterControllerSystem {
 	jumpLimit = 2;
 	jumpDegradeFactor = 0.5;
 	hangtime = 0;
-	isRunning = false;
-	isExhausted = false;
 	runningTimeLimit = 5000;
 	exauhstionTimeLimit = 7000;
 
@@ -101,15 +106,13 @@ export class CharacterControllerSystem {
 	// private properties
 	//active speed allows variable running speeds
 	private activeSpeed = 6;
-	private runningTime = 0;
-	private exhaustionTime = 0;
 	private runningTimer: any;
 
 	// shapes of the character
 	private activeStandingShape!: Jolt.Shape;
 	private activeCrouchingShape!: Jolt.Shape;
-	standingGeometry!: THREE.BufferGeometry;
-	crouchingGeometry!: THREE.BufferGeometry;
+	standingMesh!: THREE.Mesh;
+	crouchingMesh!: THREE.Mesh;
 
 	// Rotation properties
 	targetRotation = new THREE.Quaternion();
@@ -148,9 +151,10 @@ export class CharacterControllerSystem {
 
 		// Init the character contact listener
 		this.initCharacterContactListener();
+
+		this.initCharacter();
 		// Set a default shape size (know it will be overwritten by the user
 		this.setCapsule(1, 2);
-		this.initCharacter();
 		// create the rig anchor
 		this.createAnchor();
 		// Finally, attach to main loop
@@ -164,11 +168,20 @@ export class CharacterControllerSystem {
 		//todo: destroy the character
 	}
 	//* Properties ========================================
+	get debug() {
+		return this.isDebugging;
+	}
+	set debug(value: boolean) {
+		this.isDebugging = value;
+		if (!this.isCrouched) this.standingMesh.visible = value;
+		else this.crouchingMesh.visible = value;
+	}
 	get shape() {
 		return this.character.GetShape();
 	}
+	// probably shouldn't use this ever
 	set shape(shape: Jolt.Shape) {
-		this.character.SetShape(
+		const setAttempt = this.character.SetShape(
 			shape,
 			1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
 			//@ts-ignore
@@ -178,6 +191,7 @@ export class CharacterControllerSystem {
 			this.filters.shapeFilter,
 			this.joltInterface.GetTempAllocator()
 		);
+		if (this.isDebugging) console.log("Shape Set Attempt:", setAttempt);
 	}
 	get standingShape() {
 		return this.activeStandingShape;
@@ -455,9 +469,7 @@ export class CharacterControllerSystem {
 		);
 		this.character.SetListener(this.characterContactListener);
 
-		//this.threeCharacter.geometry = this.threeStandingGeometry;
-		this.threeCharacter.userData.body = this.character;
-		this.shape = this.standingShape;
+		this.threeObject.userData.body = this.character;
 
 		// TODO: Destroy all the jolt stuff now its created
 	}
@@ -484,10 +496,11 @@ export class CharacterControllerSystem {
 	}
 	// set the capsule shape for the character
 	setCapsule(radius: number, height: number) {
-		this.characterHeightStanding = height;
+		/*this.characterHeightStanding = height;
 		this.characterRadiusStanding = radius;
 		this.characterHeightCrouching = height * 0.5;
-		this.characterRadiusCrouching = radius * 0.5;
+		this.characterRadiusCrouching = radius;
+		*/
 		const positionStanding = new Raw.module.Vec3(
 			0,
 			0.5 * this.characterHeightStanding + this.characterRadiusStanding,
@@ -499,7 +512,6 @@ export class CharacterControllerSystem {
 			0
 		);
 		const rotation = Raw.module.Quat.prototype.sIdentity();
-		// TODO: prettier butchers this
 		this.standingShape = new Raw.module.RotatedTranslatedShapeSettings(
 			positionStanding,
 			rotation,
@@ -520,8 +532,40 @@ export class CharacterControllerSystem {
 		)
 			.Create()
 			.Get();
-		// TODO: Destroy all the jolt stuff now its created
+
+		// if the debug meshes already exist, destroy them
+		if (this.standingMesh) this.destroyDebugMesh(this.standingMesh);
+		if (this.crouchingMesh) this.destroyDebugMesh(this.crouchingMesh);
+		// create the geometry for debugging
+		this.standingMesh = this.createDebugMesh(radius, height);
+		this.crouchingMesh = this.createDebugMesh(radius, height * 0.5, "#00ff00");
+
+		// finally set the shape
+		console.log("Setting Standing Shape");
+		this.shape = this.standingShape;
+		setTimeout(() => {
+			//this.shape = this.crouchingShape;
+			//console.log("Crouching Shape Set");
+		}, 5000);
+		// cleanup
+		// This looks correct but crashes things...
+		// TODO resolve cleaning up
+		//Raw.module.destroy(standingSettings);
+		//Raw.module.destroy(crouchedSettings);
 	}
+	//* Scene Functions ========================================
+	// attach the character to a scene
+	addToScene(scene: THREE.Scene) {
+		scene.add(this.threeObject);
+	}
+	add(object: THREE.Object3D) {
+		this.threeObject.add(object);
+	}
+	removeFromScene() {
+		this.threeObject.parent?.remove(this.threeObject);
+	}
+
+	//* loop functions ========================================
 
 	prePhysicsUpdate(deltaTime: number) {
 		// locks the character in a up position
@@ -541,19 +585,14 @@ export class CharacterControllerSystem {
 			this.joltInterface.GetTempAllocator()
 		);
 		// move the three object
-		this.threeCharacter.position.lerp(
-			vec3.three(this.character.GetPosition()),
-			this.lerpFactor
-		);
-		this.threeCharacter.quaternion.slerp(
+		this.threeObject.position.lerp(vec3.three(this.character.GetPosition()), this.lerpFactor);
+		this.threeObject.quaternion.slerp(
 			quat.three(this.character.GetRotation()),
 			this.lerpFactor
 		);
+		//console.log('character position', vec3.three(this.character.GetPosition()	);
 		// update the anchor
-		this.anchor.setPositionAndRotation(
-			this.threeCharacter.position,
-			this.threeCharacter.quaternion
-		);
+		this.anchor.setPositionAndRotation(this.threeObject.position, this.threeObject.quaternion);
 	}
 	//* Movement Functions ========================================
 	// Rotate with slerp
@@ -677,32 +716,36 @@ export class CharacterControllerSystem {
 		this.character.SetLinearVelocity(this._tmpVec3);
 	}
 	// TODO Fix this
-	setCrouched = (crouched: boolean, forceUpdate: boolean) => {
+	setCrouched = (crouched: boolean, forceUpdate?: boolean) => {
 		if (crouched !== this.isCrouched || forceUpdate) {
-			let newShape: any;
-			//let newGeometry;
-			if (crouched) {
-				newShape = this.crouchingShape;
-				//newGeometry = this.threeCrouchingGeometry;
-			} else {
-				newShape = this.standingShape;
-				//newGeometry = this.threeStandingGeometry;
-			}
-			if (
-				this.character.SetShape(
-					newShape,
-					1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
-					//@ts-ignore
-					this.filters.movingBPFilter,
-					this.filters.movingLayerFilter,
-					this.filters.bodyFilter,
-					this.filters.shapeFilter,
-					this.joltInterface.GetTempAllocator()
-				)
-			) {
+			console.log("trying to crouch");
+			// get the character posit
+			const position = this.position.clone();
+			//move the character into space and away from the anchor (temporary)
+			this.position = position.clone().add(new THREE.Vector3(0, 500, 500));
+			const newShape = crouched ? this.crouchingShape : this.standingShape;
+			const tryShape = this.character.SetShape(
+				newShape,
+				0 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
+				//@ts-ignore
+				this.filters.movingBPFilter,
+				this.filters.movingLayerFilter,
+				this.filters.bodyFilter,
+				this.filters.shapeFilter,
+				this.joltInterface.GetTempAllocator()
+			);
+			console.log("Shape set", tryShape);
+			if (tryShape) {
 				// Accept the new shape only when the SetShape call was successful
+				console.log("should crouch");
 				this.isCrouched = crouched;
-				//threeCharacter.geometry = newGeometry;
+				// move the character back
+				this.position = position;
+				if (this.isDebugging) {
+					this.standingMesh.visible = !crouched;
+					this.crouchingMesh.visible = crouched;
+				}
+				this.triggerActionListeners("crouched", crouched);
 			}
 		}
 	};
@@ -720,27 +763,25 @@ export class CharacterControllerSystem {
 		const newSpeed = speed || this.characterSpeed * 2;
 		this.activeSpeed = newSpeed;
 		//notify
-		this.triggerActionListeners("startRunning", newSpeed);
+		this.triggerActionListeners("running", newSpeed);
 		// start the running timeer to trigger exhaustion
 		if (this.enableExhaustion)
 			this.runningTimer = setTimeout(() => {
 				this.isExhausted = true;
 				this.activeSpeed = this.characterSpeedExhausted;
-				console.log("Exhausted");
-				this.triggerActionListeners("exhausted");
+				this.triggerActionListeners("exhausted", this.exauhstionTimeLimit);
 				// once exhausted, we can never stop.
 				setTimeout(() => {
 					this.isExhausted = false;
 					this.activeSpeed = this.characterSpeed;
-					console.log("Exhausted Recovered");
-					this.triggerActionListeners("exhaustedRecover");
+					this.triggerActionListeners("exausted", false);
 				}, this.exauhstionTimeLimit);
 			}, this.runningTimeLimit);
 	}
 	stopRunning() {
 		this.activeSpeed = this.characterSpeed;
 		clearTimeout(this.runningTimer);
-		this.triggerActionListeners("stopRunning");
+		this.triggerActionListeners("running", 0);
 	}
 
 	//* Action Listener Functions ----------------------------
@@ -752,17 +793,43 @@ export class CharacterControllerSystem {
 		this.actionListeners = this.actionListeners.filter((l) => l !== listener);
 	};
 	triggerActionListeners = (action: any, payload?: any) => {
+		if (this.isDebugging) console.log("Character Controller:", action, payload);
 		//@ts-ignore
 		this.actionListeners.forEach((listener) => listener(action, payload));
 	};
 	// watch function takes an action and a callback and adds the correct listener
-	watch = (action: any, callback: any) => {
+	on = (action: any, callback: any) => {
 		const listener = (a: any) => {
 			if (a === action) callback();
 		};
 		this.addActionListener(listener);
 		return () => this.removeActionListener(listener);
 	};
+
+	//* Debug mesh functions =================================
+	// create a debug mesh for the character with arrow shape
+	createDebugMesh(radius: number, height: number, color = "red", nose = true) {
+		const geometry = new THREE.CapsuleGeometry(radius, height, 8);
+		geometry.translate(0, 0.5 * height + radius, 0);
+		const material = new THREE.MeshPhongMaterial({ color: color, wireframe: true });
+		const cylinder = new THREE.Mesh(geometry, material);
+		if (nose) {
+			const noseGeometry = new THREE.BoxGeometry(0.1, 0.5, 1);
+			const noseMaterial = new THREE.MeshPhongMaterial({ color: "orange" });
+			const nose = new THREE.Mesh(noseGeometry, noseMaterial);
+			cylinder.add(nose);
+			nose.position.set(0, 0.5 * height + radius, -radius);
+		}
+		this.threeObject.add(cylinder);
+		return cylinder;
+	}
+	destroyDebugMesh(mesh: THREE.Mesh) {
+		this.threeObject.remove(mesh);
+		// destroy the mesh geometry and material
+		mesh.geometry.dispose();
+		(mesh.material as THREE.Material).dispose();
+		//the mesh itself will cleanup as it wont have a reference
+	}
 
 	//* Util functions ----------------------------------
 

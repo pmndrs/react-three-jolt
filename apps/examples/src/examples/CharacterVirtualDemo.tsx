@@ -41,6 +41,9 @@ export function CharacterVirtualDemo() {
 			<ambientLight intensity={1.5} />
 			<Physics module={InitJolt} gravity={25} defaultBodySettings={defaultBodySettings}>
 				<Arch position={[0, 0, -15]} />
+				<Arch position={[0, -2, -20]} />
+				<Arch position={[0, -3, -25]} />
+				<Arch position={[0, -4, -30]} />
 				<Tunnel position={[-25, 0, 25]} rotation={[0, -0.5, 0]} />
 				<Stairs position={[-30, 0, 25]} rotation={[0, 4, 0]} />
 				<RigidBody position={[0, 0, 10]}>
@@ -77,10 +80,10 @@ export function CharacterVirtualDemo() {
 				</RigidBody>
 
 				<BoundBoxes />
-				<CharacterController debug position={[0, 4, 0]}>
+				<CharacterController debug position={[0, 0, 0]}>
 					<CameraRig />
 				</CharacterController>
-				<Floor size={150} position={[0, 0, 0]} />
+				<Floor size={150} position={[0, -0.5, 0]} />
 			</Physics>
 		</>
 	);
