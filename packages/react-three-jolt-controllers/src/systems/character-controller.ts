@@ -50,7 +50,7 @@ export class CharacterControllerSystem {
 	characterRadiusCrouching = 0.8;
 
 	// Character movement properties
-	controlMovementDuringJump = true; ///< If false the character cannot change movement direction in mid air
+	allowAirbornControl = true; ///< If false the character cannot change movement direction in mid air
 	characterSpeed = 6;
 	characterSpeedCrouched = 3.0;
 	characterSpeedTired = 2.0;
@@ -182,6 +182,42 @@ export class CharacterControllerSystem {
 	set crouchingShape(shape: Jolt.Shape) {
 		this.activeCrouchingShape = shape;
 		//TODO create geometry based on this shape for debugging
+	}
+	// Stairs, Sticky Floors, etc -------------------------
+	get stickToFloorStepDown(): THREE.Vector3 {
+		return vec3.three(this.updateSettings.mStickToFloorStepDown);
+	}
+	// set to 0 to disable sticking to the floor
+	set stickToFloorStepDown(value: THREE.Vector3) {
+		this.updateSettings.mStickToFloorStepDown.Set(value.x, value.y, value.z);
+	}
+	// the details are a little complex.
+	// link: https://jrouwe.github.io/JoltPhysics/class_character_virtual.html#a7b92d577e9abb6193f971e26df9964f7
+	get walkStairsStepUp(): THREE.Vector3 {
+		return vec3.three(this.updateSettings.mWalkStairsStepUp);
+	}
+	// set to 0 to turn off or higher to go up bigger steps
+	set walkStairsStepUp(value: THREE.Vector3) {
+		this.updateSettings.mWalkStairsStepUp.Set(value.x, value.y, value.z);
+	}
+	get walkStairsMinStepForward(): number {
+		return this.updateSettings.mWalkStairsMinStepForward;
+	}
+	set walkStairsMinStepForward(value: number) {
+		this.updateSettings.mWalkStairsMinStepForward = value;
+	}
+	get walkStairsStepForwardTest(): number {
+		return this.updateSettings.mWalkStairsStepForwardTest;
+	}
+	set walkStairsStepForwardTest(value: number) {
+		this.updateSettings.mWalkStairsStepForwardTest = value;
+	}
+	// add a little boost when walking down stairs
+	get walkStairsStepDownExtra(): THREE.Vector3 {
+		return vec3.three(this.updateSettings.mWalkStairsStepDownExtra);
+	}
+	set walkStairsStepDownExtra(value: THREE.Vector3) {
+		this.updateSettings.mWalkStairsStepDownExtra.Set(value.x, value.y, value.z);
 	}
 
 	// Position and movement ------------------------------
@@ -475,30 +511,9 @@ export class CharacterControllerSystem {
 
 	prePhysicsUpdate(deltaTime: number) {
 		// locks the character in a up position
-		const characterUp = vec3.joltToThree(this.character.GetUp());
 		// TODO: consider angular velocity to slightly rotate (wolfram GDC2014)
 		this.applyRotation();
 		this.applyMovement(deltaTime);
-		// Most of the next few actions are applying gravity/force to the character
-		// prevents odd hovering
-		if (!this.enableStickToFloor) {
-			this.updateSettings.mStickToFloorStepDown = Raw.module.Vec3.prototype.sZero();
-		} else {
-			const vec = characterUp
-				.clone()
-				.multiplyScalar(-this.updateSettings.mStickToFloorStepDown.Length());
-			this.updateSettings.mStickToFloorStepDown.Set(vec.x, vec.y, vec.z);
-		}
-
-		if (!this.enableWalkStairs) {
-			this.updateSettings.mWalkStairsStepUp = Raw.module.Vec3.prototype.sZero();
-		} else {
-			const vec = characterUp
-				.clone()
-				.multiplyScalar(this.updateSettings.mWalkStairsStepUp.Length());
-			this.updateSettings.mWalkStairsStepUp.Set(vec.x, vec.y, vec.z);
-		}
-		characterUp.multiplyScalar(-this.physicsSystem.physicsSystem.GetGravity().Length());
 
 		this.character.ExtendedUpdate(
 			deltaTime,
@@ -558,44 +573,36 @@ export class CharacterControllerSystem {
 
 	// move the character in space
 	private applyMovement(deltaTime = 1) {
-		//TODO: resolve a way to remove this clone
 		const movementDirection = this.movementInput.clone();
-		//const jump = this.isJumping;
 
 		// can the user defy physics and move while airborne
 		// also if the user passes a direction (allows jump without direction input)
 		const playerControlsHorizontalVelocity =
-			this.controlMovementDuringJump || this.character.IsSupported();
+			this.allowAirbornControl || this.character.IsSupported();
 		if (playerControlsHorizontalVelocity) {
 			// True if the player intended to move
 			this.allowSliding = !(movementDirection.length() < 1.0e-12);
 			// Smooth the player input
 			if (this.enableCharacterInertia) {
+				//degrades the inertia by a small value
 				this.desiredVelocity.multiplyScalar(0.75);
-				//TODO this add is why we need the clone
 				this.desiredVelocity.add(movementDirection.multiplyScalar(0.25 * this.activeSpeed));
 			} else {
+				// apply the velocity directly
 				this.desiredVelocity.copy(movementDirection).multiplyScalar(this.activeSpeed);
 			}
 		} else {
 			// While in air we allow sliding
 			this.allowSliding = true;
 		}
-		// Maintain the up orientation
-		this._tmpVec3.Set(this.upRotationX, 0, this.upRotationZ);
-		const characterUpRotation = Raw.module.Quat.prototype.sEulerAngles(this._tmpVec3);
-		this.character.SetUp(characterUpRotation.RotateAxisY());
-		// this is overriding our existing rotation
-		//this.character.SetRotation(characterUpRotation);
-		const upRotation = quat.joltToThree(characterUpRotation);
 
 		this.character.UpdateGroundVelocity();
-		const characterUp = vec3.joltToThree(this.character.GetUp());
-		const linearVelocity = vec3.joltToThree(this.character.GetLinearVelocity());
+		const characterUp = this.up;
+		const linearVelocity = this.linearVelocity;
 		const currentVerticalVelocity = characterUp
 			.clone()
 			.multiplyScalar(linearVelocity.dot(characterUp));
-		const groundVelocity = vec3.joltToThree(this.character.GetGroundVelocity());
+		const groundVelocity = this.groundVelocity;
 		const gravity = vec3.joltToThree(this.physicsSystem.physicsSystem.GetGravity());
 
 		let newVelocity: any;
@@ -621,20 +628,19 @@ export class CharacterControllerSystem {
 		if (this.isJumping) {
 			if (this.jumpCounter < this.jumpLimit) {
 				this.jumpCounter++;
-				//console.log('jumping, jump count:', this.jumpCounter);
 				this.triggerActionListeners("jump", this.jumpCounter);
 
 				newVelocity.add(characterUp.multiplyScalar(this.jumpSpeed));
 				this.isJumping = false;
 			}
 		}
+		const upRotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(), this.up);
 
 		// Gravity
 		newVelocity.add(gravity.multiplyScalar(deltaTime).applyQuaternion(upRotation));
 
 		if (playerControlsHorizontalVelocity) {
 			// Player input
-			// console.log('player velocity', this.desiredVelocity);
 			newVelocity.add(this.desiredVelocity.clone().applyQuaternion(upRotation));
 		} else {
 			// Preserve horizontal velocity
@@ -643,11 +649,7 @@ export class CharacterControllerSystem {
 		}
 
 		this._tmpVec3.Set(newVelocity.x, newVelocity.y, newVelocity.z);
-		//const difference = newVelocity.clone().sub(this.oldPosition);
-		//console.log('difference', difference);
-		// console.log('new velocity', newVelocity);
 		this.character.SetLinearVelocity(this._tmpVec3);
-		//this.oldPosition = newVelocity.clone();
 	}
 	// TODO Fix this
 	setCrouched = (crouched: boolean, forceUpdate: boolean) => {
