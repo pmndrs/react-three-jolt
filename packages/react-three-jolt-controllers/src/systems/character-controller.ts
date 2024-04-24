@@ -25,9 +25,22 @@ interface CharacterFilters {
 }
 
 export class CharacterControllerSystem {
-	joltInterface: Jolt.JoltInterface;
-	physicsSystem: PhysicsSystem;
-	bodySystem: BodySystem;
+	protected joltInterface: Jolt.JoltInterface;
+	protected physicsSystem: PhysicsSystem;
+	protected bodySystem: BodySystem;
+
+	// **Primary Holder Object ***
+	character!: Jolt.CharacterVirtual;
+	threeCharacter = new THREE.Mesh(
+		new THREE.BoxGeometry(1, 1, 1),
+		new THREE.MeshPhongMaterial({ color: 0xffff00 })
+	);
+	protected updateSettings = new Raw.module.ExtendedUpdateSettings();
+	protected characterContactListener: any;
+
+	//rig anchor
+	anchor: any;
+	anchorID: any;
 
 	// DO NOT MESS WITH THESE
 	filters: CharacterFilters = {
@@ -39,8 +52,8 @@ export class CharacterControllerSystem {
 		shapeFilter: new Raw.module.ShapeFilter()
 	};
 
-	private actionListeners = [];
-	//private stateListeners = [];
+	protected actionListeners = [];
+	protected stateListeners = [];
 
 	// configurable options
 
@@ -53,7 +66,7 @@ export class CharacterControllerSystem {
 	allowAirbornControl = true; ///< If false the character cannot change movement direction in mid air
 	characterSpeed = 6;
 	characterSpeedCrouched = 3.0;
-	characterSpeedTired = 2.0;
+	characterSpeedExhausted = 2.0;
 	jumpSpeed = 15.0;
 
 	enableCharacterInertia = true;
@@ -62,57 +75,51 @@ export class CharacterControllerSystem {
 	enableWalkStairs = true;
 	enableStickToFloor = true;
 
-	// Allows
-	upRotationX = 0;
-	upRotationZ = 0;
-	predictiveContactDistance = 0.1;
-
 	direction = new THREE.Vector3(0, 0, 0);
 	velocity = new THREE.Vector3(0, 0, 0);
 
-	public threeObject: any;
-
-	// **Primary Holder Object ***
-	character!: Jolt.CharacterVirtual;
-	//rig anchor
-	anchor: any;
-	anchorID: any;
 	// State properties ------------------------------
 	isCrouched = false;
+	isRotating = false;
+	private isJumping = false;
 	allowSliding = false;
-	allowSprinting = false;
+	allowRunning = true;
+	enableExhaustion = true;
+	exhaustionEffectsJump = true;
+	exhaustionBlocksDoubleJump = true;
+	allowJumpWhileFalling = true;
 	jumpLimit = 2;
 	jumpDegradeFactor = 0.5;
-	// to be removed --------------------------------
-	geometry = new THREE.BoxGeometry(1, 1, 1);
-	material = new THREE.MeshPhongMaterial({ color: 0xffff00 });
-	threeCharacter = new THREE.Mesh(this.geometry, this.material);
-	//-------------------------------------------
+	hangtime = 0;
+	isRunning = false;
+	isExhausted = false;
+	runningTimeLimit = 5000;
+	exauhstionTimeLimit = 7000;
 
-	private updateSettings = new Raw.module.ExtendedUpdateSettings();
+	//-------------------------------------------
 
 	// private properties
 	//active speed allows variable running speeds
 	private activeSpeed = 6;
+	private runningTime = 0;
+	private exhaustionTime = 0;
+	private runningTimer: any;
+
 	// shapes of the character
 	private activeStandingShape!: Jolt.Shape;
 	private activeCrouchingShape!: Jolt.Shape;
 	standingGeometry!: THREE.BufferGeometry;
 	crouchingGeometry!: THREE.BufferGeometry;
 
-	private characterContactListener: any;
 	// Rotation properties
-	currentRotation = new THREE.Quaternion();
 	targetRotation = new THREE.Quaternion();
 	maxRotationSpeed = 0.1; //radians per frame
 	currentRotationSlerp = 0;
-	isRotating = false;
 
 	// movement vectors
 	private movementInput = new THREE.Vector3();
 	private desiredVelocity = new THREE.Vector3();
 	private jumpCounter = 0;
-	private isJumping = false;
 	lerpFactor = 0.4;
 
 	// testing props
@@ -144,6 +151,9 @@ export class CharacterControllerSystem {
 		// Set a default shape size (know it will be overwritten by the user
 		this.setCapsule(1, 2);
 		this.initCharacter();
+		// create the rig anchor
+		this.createAnchor();
+		// Finally, attach to main loop
 		this.physicsSystem.addPreStepListener((deltaTime: number) =>
 			this.prePhysicsUpdate(deltaTime)
 		);
@@ -302,6 +312,11 @@ export class CharacterControllerSystem {
 		return undefined;
 		//TODO do we need to destroy joltState?
 	}
+	get isFalling(): boolean {
+		if (this.isSupported) return false;
+		const verticalVelocity = this.up.clone().multiplyScalar(this.linearVelocity.dot(this.up));
+		return verticalVelocity.y - this.groundVelocity.y < 0.1;
+	}
 	get isSupported(): boolean {
 		return this.character.IsSupported();
 	}
@@ -427,7 +442,7 @@ export class CharacterControllerSystem {
 		settings.mBackFaceMode = Raw.module.EBackFaceMode_CollideWithBackFaces;
 		settings.mCharacterPadding = 0.02;
 		settings.mPenetrationRecoverySpeed = 1;
-		settings.mPredictiveContactDistance = this.predictiveContactDistance;
+		settings.mPredictiveContactDistance = 0.1;
 		settings.mSupportingVolume = new Raw.module.Plane(
 			Raw.module.Vec3.prototype.sAxisY(),
 			-this.characterRadiusStanding
@@ -443,8 +458,7 @@ export class CharacterControllerSystem {
 		//this.threeCharacter.geometry = this.threeStandingGeometry;
 		this.threeCharacter.userData.body = this.character;
 		this.shape = this.standingShape;
-		// create the rig anchor
-		this.createAnchor();
+
 		// TODO: Destroy all the jolt stuff now its created
 	}
 
@@ -526,8 +540,6 @@ export class CharacterControllerSystem {
 			this.filters.shapeFilter,
 			this.joltInterface.GetTempAllocator()
 		);
-		// TODO this is where we slerp the character
-
 		// move the three object
 		this.threeCharacter.position.lerp(
 			vec3.three(this.character.GetPosition()),
@@ -543,7 +555,8 @@ export class CharacterControllerSystem {
 			this.threeCharacter.quaternion
 		);
 	}
-	// Movement Functions ------------------------------
+	//* Movement Functions ========================================
+	// Rotate with slerp
 	setRotation(rotation: THREE.Quaternion) {
 		this.targetRotation = rotation;
 		this.currentRotationSlerp = 0;
@@ -556,9 +569,11 @@ export class CharacterControllerSystem {
 				this.currentRotationSlerp = 1;
 				this.isRotating = false;
 			}
-			this.currentRotation.slerp(this.targetRotation, this.currentRotationSlerp);
+			const newRot = this.rotation
+				.clone()
+				.slerp(this.targetRotation, this.currentRotationSlerp);
 
-			this.character.SetRotation(quat.threeToJolt(this.currentRotation));
+			this.rotation = newRot;
 		}
 	}
 	// set the movement input
@@ -595,8 +610,9 @@ export class CharacterControllerSystem {
 			// While in air we allow sliding
 			this.allowSliding = true;
 		}
-
+		// This is like a tick to make sure the ground velocity is up to date
 		this.character.UpdateGroundVelocity();
+
 		const characterUp = this.up;
 		const linearVelocity = this.linearVelocity;
 		const currentVerticalVelocity = characterUp
@@ -626,11 +642,20 @@ export class CharacterControllerSystem {
 		// JUMP. Double jump or on the ground
 		//
 		if (this.isJumping) {
+			//block jump if falling
+			if (this.isFalling && !this.allowJumpWhileFalling) return;
+			// block double jump if exhausted
+			if (this.jumpCounter >= 1 && this.isExhausted && this.exhaustionBlocksDoubleJump)
+				return;
+			// if we allow double jump.
 			if (this.jumpCounter < this.jumpLimit) {
 				this.jumpCounter++;
 				this.triggerActionListeners("jump", this.jumpCounter);
-
-				newVelocity.add(characterUp.multiplyScalar(this.jumpSpeed));
+				const jumpSpeed =
+					this.exhaustionEffectsJump && this.isExhausted
+						? this.jumpSpeed / 2
+						: this.jumpSpeed;
+				newVelocity.add(characterUp.multiplyScalar(jumpSpeed));
 				this.isJumping = false;
 			}
 		}
@@ -691,16 +716,34 @@ export class CharacterControllerSystem {
 		}, 100);
 	}
 	startRunning(speed?: any) {
+		if (!this.allowRunning || this.isExhausted || this.isCrouched) return;
 		const newSpeed = speed || this.characterSpeed * 2;
 		this.activeSpeed = newSpeed;
 		//notify
 		this.triggerActionListeners("startRunning", newSpeed);
+		// start the running timeer to trigger exhaustion
+		if (this.enableExhaustion)
+			this.runningTimer = setTimeout(() => {
+				this.isExhausted = true;
+				this.activeSpeed = this.characterSpeedExhausted;
+				console.log("Exhausted");
+				this.triggerActionListeners("exhausted");
+				// once exhausted, we can never stop.
+				setTimeout(() => {
+					this.isExhausted = false;
+					this.activeSpeed = this.characterSpeed;
+					console.log("Exhausted Recovered");
+					this.triggerActionListeners("exhaustedRecover");
+				}, this.exauhstionTimeLimit);
+			}, this.runningTimeLimit);
 	}
 	stopRunning() {
 		this.activeSpeed = this.characterSpeed;
+		clearTimeout(this.runningTimer);
 		this.triggerActionListeners("stopRunning");
 	}
-	// Action Listener Functions ----------------------------
+
+	//* Action Listener Functions ----------------------------
 	addActionListener = (listener: any) => {
 		//@ts-ignore
 		this.actionListeners.push(listener);
