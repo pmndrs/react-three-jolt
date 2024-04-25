@@ -3,7 +3,7 @@ import { Floor } from "@react-three/jolt-addons";
 import { CharacterController, CameraRig } from "@react-three/jolt-controllers";
 //helpers for example
 import { BoundBoxes } from "./BoundBoxes";
-//import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
+import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
 import { Arch } from "./Bodies/Arch";
 import { Tunnel } from "./Bodies/Tunnel";
 import { Teleport } from "./Bodies/Teleport";
@@ -41,7 +41,7 @@ export function CharacterVirtualDemo() {
 				shadow-normalBias={0.04}
 			/>
 			<ambientLight intensity={1.5} />
-			<Physics gravity={25} defaultBodySettings={defaultBodySettings}>
+			<Physics module={InitJolt} gravity={25} defaultBodySettings={defaultBodySettings}>
 				<Arch position={[0, 0, -15]} />
 				<Arch position={[0, -2, -20]} />
 				<Arch position={[0, -3, -25]} />
