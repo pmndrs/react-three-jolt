@@ -7,6 +7,7 @@ import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
 import { Arch } from "./Bodies/Arch";
 import { Tunnel } from "./Bodies/Tunnel";
 import { Teleport } from "./Bodies/Teleport";
+import { Conveyor } from "./Bodies/Conveyor";
 import { Stairs } from "./Bodies/Stairs";
 import { useThree } from "@react-three/fiber";
 /*
@@ -45,6 +46,7 @@ export function CharacterVirtualDemo() {
 				<Arch position={[0, -2, -20]} />
 				<Arch position={[0, -3, -25]} />
 				<Arch position={[0, -4, -30]} />
+				<Conveyor position={[-10, 0, -25]} />
 				<Teleport position={[5, 0, -10]} />
 				<Tunnel position={[-25, 0, 25]} rotation={[0, -0.5, 0]} />
 				<Stairs position={[-30, 0, 25]} rotation={[0, 4, 0]} />
