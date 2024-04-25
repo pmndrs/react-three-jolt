@@ -821,7 +821,7 @@ export class CharacterControllerSystem {
 		this.actionListeners.push(listener);
 	};
 	removeActionListener = (listener: any) => {
-		this.actionListeners = this.actionListeners.filter((l) => l !== listener);
+		this.actionListeners = this.actionListeners.filter((l: any) => l !== listener);
 	};
 	triggerActionListeners = (action: any, payload?: any) => {
 		if (this.isDebugging && this.debugVerbose)

@@ -31,8 +31,7 @@ export const CharacterController: React.FC<CControllerProps> = memo(
 		const characterRef = useForwardedRef(forwardedRef);
 
 		const objectRef = useRef<THREE.Object3D>(null);
-		const offsetObject = useRef<THREE.Object3D>(null);
-		const debugCapsule = useRef<THREE.Mesh>(null);
+
 		const { physicsSystem } = useJolt();
 		//TODO: Not really sure why we had to do this as a state but oh well
 		const [characterSystem, setCharacterSystem] = useState<

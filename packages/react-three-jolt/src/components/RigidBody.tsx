@@ -13,7 +13,7 @@ import * as THREE from "three";
 import { Object3D } from "three";
 import { useForwardedRef, useJolt } from "../hooks";
 import { getThreeObjectForBody } from "../systems/body-system";
-import { vec3, quat } from "../utils";
+import { vec3 } from "../utils";
 import { BodyState } from "../systems";
 
 interface RigidBodyProps {
