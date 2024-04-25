@@ -20,7 +20,7 @@ interface CharacterFilters {
 	objectLayerPairFilter?: Jolt.ObjectLayerPairFilter;
 	movingBPFilter?: Jolt.DefaultBroadPhaseLayerFilter;
 	movingLayerFilter?: Jolt.DefaultObjectLayerFilter;
-	bodyFilter: Jolt.BodyFilter;
+	bodyFilter: Jolt.BodyFilterJS;
 	shapeFilter: Jolt.ShapeFilter;
 }
 
@@ -49,12 +49,11 @@ export class CharacterControllerSystem {
 		objectLayerPairFilter: undefined,
 		movingBPFilter: undefined,
 		movingLayerFilter: undefined,
-		bodyFilter: new Raw.module.BodyFilter(),
+		bodyFilter: new Raw.module.BodyFilterJS(),
 		shapeFilter: new Raw.module.ShapeFilter()
 	};
 
-	protected actionListeners = [];
-	protected stateListeners = [];
+	protected actionListeners: any = [];
 
 	// configurable options
 
@@ -100,6 +99,7 @@ export class CharacterControllerSystem {
 	hangtime = 0;
 	runningTimeLimit = 5000;
 	exauhstionTimeLimit = 7000;
+	debugVerbose = false;
 
 	//-------------------------------------------
 
@@ -107,6 +107,7 @@ export class CharacterControllerSystem {
 	//active speed allows variable running speeds
 	private activeSpeed = 6;
 	private runningTimer: any;
+	protected crouchingInterval: any;
 
 	// shapes of the character
 	private activeStandingShape!: Jolt.Shape;
@@ -124,9 +125,6 @@ export class CharacterControllerSystem {
 	private desiredVelocity = new THREE.Vector3();
 	private jumpCounter = 0;
 	lerpFactor = 0.4;
-
-	// testing props
-	oldPosition = new THREE.Vector3();
 
 	// Temp variables
 	//TODO remove this for global temps
@@ -148,6 +146,12 @@ export class CharacterControllerSystem {
 			this.filters.objectLayerPairFilter,
 			Layer.MOVING
 		);
+		// adjust the main body filter to not conflict with sensors
+		this.filters.bodyFilter.ShouldCollide = () => true;
+		//@ts-ignore wrap still incorrect here.
+		this.filters.bodyFilter.ShouldCollideLocked = (inBody: Jolt.Body) =>
+			//@ts-ignore wrap still incorrect here.
+			!Raw.module.wrapPointer(inBody, Raw.module.Body).IsSensor();
 
 		// Init the character contact listener
 		this.initCharacterContactListener();
@@ -165,6 +169,8 @@ export class CharacterControllerSystem {
 	// cleanup
 	destroy() {
 		console.log("Character wants to destroy...");
+		// remove itself from the scene
+		this.removeFromScene();
 		//todo: destroy the character
 	}
 	//* Properties ========================================
@@ -718,15 +724,13 @@ export class CharacterControllerSystem {
 	// TODO Fix this
 	setCrouched = (crouched: boolean, forceUpdate?: boolean) => {
 		if (crouched !== this.isCrouched || forceUpdate) {
-			console.log("trying to crouch");
-			// get the character posit
-			const position = this.position.clone();
-			//move the character into space and away from the anchor (temporary)
-			this.position = position.clone().add(new THREE.Vector3(0, 500, 500));
+			// clear any crouching intervals (if we were blocked to stand)
+			if (this.crouchingInterval) clearInterval(this.crouchingInterval);
+
 			const newShape = crouched ? this.crouchingShape : this.standingShape;
 			const tryShape = this.character.SetShape(
 				newShape,
-				0 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
+				1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
 				//@ts-ignore
 				this.filters.movingBPFilter,
 				this.filters.movingLayerFilter,
@@ -734,18 +738,20 @@ export class CharacterControllerSystem {
 				this.filters.shapeFilter,
 				this.joltInterface.GetTempAllocator()
 			);
-			console.log("Shape set", tryShape);
 			if (tryShape) {
 				// Accept the new shape only when the SetShape call was successful
-				console.log("should crouch");
 				this.isCrouched = crouched;
 				// move the character back
-				this.position = position;
+				//this.position = position;
 				if (this.isDebugging) {
 					this.standingMesh.visible = !crouched;
 					this.crouchingMesh.visible = crouched;
 				}
 				this.triggerActionListeners("crouched", crouched);
+			} else {
+				this.crouchingInterval = setInterval(() => {
+					this.setCrouched(crouched, true);
+				}, 500);
 			}
 		}
 	};
@@ -786,14 +792,14 @@ export class CharacterControllerSystem {
 
 	//* Action Listener Functions ----------------------------
 	addActionListener = (listener: any) => {
-		//@ts-ignore
 		this.actionListeners.push(listener);
 	};
 	removeActionListener = (listener: any) => {
 		this.actionListeners = this.actionListeners.filter((l) => l !== listener);
 	};
 	triggerActionListeners = (action: any, payload?: any) => {
-		if (this.isDebugging) console.log("Character Controller:", action, payload);
+		if (this.isDebugging && this.debugVerbose)
+			console.log("Character Controller:", action, payload);
 		//@ts-ignore
 		this.actionListeners.forEach((listener) => listener(action, payload));
 	};
