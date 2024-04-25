@@ -8,11 +8,11 @@ import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from ".
 import {
 	Raw,
 	Layer,
-	PhysicsSystem,
+	type PhysicsSystem,
 	quat,
 	vec3,
 	generateBodySettings,
-	BodySystem
+	type BodySystem
 } from "@react-three/jolt";
 
 interface CharacterFilters {
@@ -397,7 +397,21 @@ export class CharacterControllerSystem {
 			body2 = Raw.module.wrapPointer(body2, Raw.module.Body);
 			//@ts-ignore
 			linearVelocity = Raw.module.wrapPointer(linearVelocity, Raw.module.Vec3);
-			// this is where the movement from conveyor belts and other things can be added
+			// get the body we are colliding with
+			const body2State = this.bodySystem.getBody(body2.GetID().GetIndexAndSequenceNumber());
+			// check if the body is a teleporter
+			if (body2State) {
+				if (body2State.isTeleporter && body2State.teleporterVector) {
+					this.position = body2State?.teleporterVector;
+				}
+
+				//check if the body is a conveyor
+				if (body2State.isConveyor && body2State.conveyorVector) {
+					const addVec = vec3.jolt(body2State.conveyorVector);
+					linearVelocity.Add(addVec);
+					Raw.module.destroy(addVec);
+				}
+			}
 		};
 		this.characterContactListener.OnContactValidate = (
 			character: Jolt.CharacterVirtual,
@@ -502,11 +516,15 @@ export class CharacterControllerSystem {
 	}
 	// set the capsule shape for the character
 	setCapsule(radius: number, height: number) {
-		/*this.characterHeightStanding = height;
-		this.characterRadiusStanding = radius;
-		this.characterHeightCrouching = height * 0.5;
-		this.characterRadiusCrouching = radius;
-		*/
+		if (height) {
+			this.characterHeightStanding = height;
+			this.characterHeightCrouching = height * 0.5;
+		}
+		if (radius) {
+			this.characterRadiusStanding = radius;
+			this.characterRadiusCrouching = radius;
+		}
+
 		const positionStanding = new Raw.module.Vec3(
 			0,
 			0.5 * this.characterHeightStanding + this.characterRadiusStanding,
@@ -549,10 +567,7 @@ export class CharacterControllerSystem {
 		// finally set the shape
 		console.log("Setting Standing Shape");
 		this.shape = this.standingShape;
-		setTimeout(() => {
-			//this.shape = this.crouchingShape;
-			//console.log("Crouching Shape Set");
-		}, 5000);
+
 		// cleanup
 		// This looks correct but crashes things...
 		// TODO resolve cleaning up
@@ -669,6 +684,11 @@ export class CharacterControllerSystem {
 		let newVelocity: any;
 		const movingTowardsGround = currentVerticalVelocity.y - groundVelocity.y < 0.1;
 
+		// notify the user we are falling
+		if (this.isFalling) {
+			if (this.hangtime === 0) this.triggerActionListeners("falling", true);
+			this.hangtime += deltaTime;
+		}
 		// If on ground and not moving away from ground
 		if (
 			this.character.GetGroundState() === Raw.module.EGroundState_OnGround && // If on ground
@@ -676,6 +696,11 @@ export class CharacterControllerSystem {
 				? movingTowardsGround // Inertia enabled: And not moving away from ground
 				: !this.character.IsSlopeTooSteep(this.character.GetGroundNormal()))
 		) {
+			//reset the falling counter
+			if (this.hangtime > 0) {
+				this.triggerActionListeners("falling", this.hangtime);
+				this.hangtime = 0;
+			}
 			// reset the jump counter
 			this.jumpCounter = 0;
 			// Inertia disabled: And not on a slope that is too steep

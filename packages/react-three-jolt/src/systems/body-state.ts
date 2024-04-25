@@ -30,6 +30,12 @@ export class BodyState {
 	obstructionTimelimit = 5000;
 	allowCollision = false;
 
+	// for conveyor systems
+	isConveyor = false;
+	conveyorVector?: THREE.Vector3;
+	isTeleporter = false;
+	teleporterVector?: THREE.Vector3;
+
 	/**
 	 * Required for instanced rigid bodies. (from r3/rapier)
 	 */

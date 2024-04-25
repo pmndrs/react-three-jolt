@@ -13,7 +13,7 @@ import * as THREE from "three";
 import { Object3D } from "three";
 import { useForwardedRef, useJolt } from "../hooks";
 import { getThreeObjectForBody } from "../systems/body-system";
-import { vec3 } from "../utils";
+import { vec3, quat } from "../utils";
 import { BodyState } from "../systems";
 
 interface RigidBodyProps {
@@ -33,6 +33,7 @@ interface RigidBodyProps {
 	ref?: any;
 	allowObstruction?: boolean;
 	obstructionTimelimit?: number;
+	isSensor?: boolean;
 
 	//TODO: do these work yet?
 	scale?: number[];
@@ -64,6 +65,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			scale,
 			mass,
 			quaternion,
+			isSensor,
 
 			// obstruction
 			allowObstruction,
@@ -86,7 +88,6 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 		// this allows us to debug on the physics system or the component specifically
 		const debug = propDebug || physicsDebug;
 		//* Load the body -------------------------------------
-		// TODO: is layoutEffect right over useEffect?
 		useEffect(() => {
 			if (!bodySystem) return;
 			if (objectRef.current) {
@@ -123,6 +124,22 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			}
 		}, [debug]);
 
+		//* Prop Updates -------------------------------------
+		useEffect(() => {
+			if (!rigidBodyRef.current) return;
+			const body = rigidBodyRef.current as BodyState;
+			if (position) body.position = vec3.three(position);
+			if (rotation) {
+				const quaternion = Array.isArray(rotation)
+					? new THREE.Quaternion().setFromEuler(
+							new THREE.Euler(rotation[0], rotation[1], rotation[2])
+						)
+					: rotation;
+				body.rotation = quaternion;
+			}
+			if (isSensor !== undefined) body.body.SetIsSensor(isSensor);
+		}, [position, rotation, isSensor, rigidBodyRef]);
+
 		// add the contact listeners
 		useEffect(() => {
 			const rb = rigidBodyRef.current as BodyState;
@@ -140,6 +157,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 				}
 			};
 		}, [rigidBodyRef.current, onContactAdded, onContactRemoved, onContactPersisted]);
+
 		//not sure these should be set as useEffects or directly in the body
 		useEffect(() => {
 			if (!rigidBodyRef.current) return;
