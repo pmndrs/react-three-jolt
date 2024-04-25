@@ -47,6 +47,7 @@ export function CharacterVirtualDemo() {
 				<Arch position={[0, -3, -25]} />
 				<Arch position={[0, -4, -30]} />
 				<Conveyor position={[-10, 0, -25]} />
+				<Conveyor position={[-20, 0, -25]} target={[0, 15, 0]} color={"#3685B5"} />
 				<Teleport position={[5, 0, -10]} />
 				<Tunnel position={[-25, 0, 25]} rotation={[0, -0.5, 0]} />
 				<Stairs position={[-30, 0, 25]} rotation={[0, 4, 0]} />
