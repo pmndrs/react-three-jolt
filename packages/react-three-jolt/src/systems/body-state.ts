@@ -26,7 +26,7 @@ export class BodyState {
 
 	// obstruction and collision
 	allowObstruction = true; // temporarily block obstruction
-	obstructionType: "any" | "temporal" = "temporal";
+	obstructionType: "any" | "temporal" = "any";
 	obstructionTimelimit = 5000;
 	allowCollision = false;
 

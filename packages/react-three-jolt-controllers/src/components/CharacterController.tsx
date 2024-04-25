@@ -52,6 +52,10 @@ export const CharacterController: React.FC<CControllerProps> = memo(
 			//newCCS.setCapsule(radius, height);
 
 			setCharacterSystem(newCCS);
+			// destroy on unload
+			return () => {
+				newCCS.destroy();
+			};
 		}, []);
 
 		// set debugging

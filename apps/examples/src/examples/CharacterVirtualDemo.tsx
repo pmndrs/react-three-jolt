@@ -3,7 +3,7 @@ import { Floor } from "@react-three/jolt-addons";
 import { CharacterController, CameraRig } from "@react-three/jolt-controllers";
 //helpers for example
 import { BoundBoxes } from "./BoundBoxes";
-import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
+//import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
 import { Arch } from "./Bodies/Arch";
 import { Tunnel } from "./Bodies/Tunnel";
 import { Teleport } from "./Bodies/Teleport";
@@ -41,22 +41,28 @@ export function CharacterVirtualDemo() {
 				shadow-normalBias={0.04}
 			/>
 			<ambientLight intensity={1.5} />
-			<Physics module={InitJolt} gravity={25} defaultBodySettings={defaultBodySettings}>
+			<Physics gravity={25} defaultBodySettings={defaultBodySettings}>
 				<Arch position={[0, 0, -15]} />
 				<Arch position={[0, -2, -20]} />
 				<Arch position={[0, -3, -25]} />
 				<Arch position={[0, -4, -30]} />
+
 				<Conveyor position={[-10, 0, -25]} />
+
 				<Conveyor position={[-20, 0, -25]} target={[0, 15, 0]} color={"#3685B5"} />
+
 				<Teleport position={[5, 0, -10]} />
+
 				<Tunnel position={[-25, 0, 25]} rotation={[0, -0.5, 0]} />
 				<Stairs position={[-30, 0, 25]} rotation={[0, 4, 0]} />
+
 				<RigidBody position={[0, 0, 10]}>
 					<mesh onClick={() => pointerLock()}>
 						<boxGeometry args={[5, 1, 5]} />
 						<meshStandardMaterial color="#D64933" />
 					</mesh>
 				</RigidBody>
+
 				<RigidBody position={[-10, 1, 0]}>
 					<mesh>
 						<boxGeometry args={[5, 0.4, 5]} />

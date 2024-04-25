@@ -398,6 +398,7 @@ export class CharacterControllerSystem {
 			//@ts-ignore
 			linearVelocity = Raw.module.wrapPointer(linearVelocity, Raw.module.Vec3);
 			// get the body we are colliding with
+
 			const body2State = this.bodySystem.getBody(body2.GetID().GetIndexAndSequenceNumber());
 			// check if the body is a teleporter
 			if (body2State) {

@@ -13,13 +13,14 @@ export function Conveyor(props: any) {
 		color = "#1EA896",
 		...rest
 	} = props;
-
+	/*
 	useEffect(() => {
 		if (!rigidBodyRef.current) return;
 		const body = rigidBodyRef.current as BodyState;
 		body.isConveyor = true;
 		body.conveyorVector = target;
 	}, [target]);
+	*/
 
 	return (
 		<RigidBody ref={rigidBodyRef} position={position} rotation={rotation} type={"static"}>
