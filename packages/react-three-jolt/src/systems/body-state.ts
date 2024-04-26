@@ -280,10 +280,34 @@ export class BodyState {
 	get restitution() {
 		return this.body.GetRestitution();
 	}
+	get angularDamping() {
+		return this.body.GetMotionProperties().GetAngularDamping();
+	}
+	set angularDamping(damping: number) {
+		this.body.GetMotionProperties().SetAngularDamping(damping);
+	}
+	get linearDamping() {
+		return this.body.GetMotionProperties().GetLinearDamping();
+	}
+	set linearDamping(damping: number) {
+		this.body.GetMotionProperties().SetLinearDamping(damping);
+	}
+	get gravityFactor() {
+		return this.body.GetMotionProperties().GetGravityFactor();
+	}
+	set gravityFactor(factor: number) {
+		this.body.GetMotionProperties().SetGravityFactor(factor);
+	}
+	get mass() {
+		return this.body.GetShape().GetMassProperties().mMass;
+	}
+	set mass(mass: number) {
+		this.bodySystem.setMass(this.handle, mass);
+	}
 
 	//* Force Manipulation ----------------------------------
 	// apply a force to the body
-	applyForce(force: Vector3) {
+	addForce(force: Vector3) {
 		const newVec = vec3.jolt(force);
 		this.body.AddForce(newVec);
 		Raw.module.destroy(newVec);
@@ -297,10 +321,12 @@ export class BodyState {
 	addImpulse(impulse: Vector3) {
 		const newVec = vec3.jolt(impulse);
 		this.bodyInterface.AddImpulse(this.BodyID, newVec);
+		//we have to activate the body after applying impulse
+		//this.bodyInterface.ActivateBody(this.BodyID);
 		Raw.module.destroy(newVec);
 	}
 	//move kinematic
-	moveKinematic(position: Vector3, rotation: THREE.Quaternion, deltaTime = 0) {
+	moveKinematic(position: Vector3, rotation = this.rotation, deltaTime = 0.16) {
 		const newVec = vec3.jolt(position);
 		const newQuat = quat.jolt(rotation);
 
