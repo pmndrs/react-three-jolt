@@ -35,6 +35,11 @@ interface RigidBodyProps {
 	obstructionTimelimit?: number;
 	isSensor?: boolean;
 
+	//physics props
+	linearDamping?: number;
+	angularDamping?: number;
+	friction?: number;
+
 	//TODO: do these work yet?
 	scale?: number[];
 	mass?: number;
@@ -66,6 +71,8 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			mass,
 			quaternion,
 			isSensor,
+			angularDamping,
+			linearDamping,
 
 			// obstruction
 			allowObstruction,
@@ -164,6 +171,8 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			const body = rigidBodyRef.current as BodyState;
 			//@ts-ignore
 			if (mass) bodySystem.setMass(body.handle, mass);
+			if (linearDamping) body.linearDamping = linearDamping;
+			if (angularDamping) body.angularDamping = angularDamping;
 
 			// check if the body is allowing obstruction
 			const isAllowing = body.allowObstruction;
@@ -177,7 +186,14 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 					body.obstructionTimelimit = obstructionTimelimit;
 				}
 			}
-		}, [mass, allowObstruction, obstructionTimelimit]);
+		}, [
+			mass,
+			allowObstruction,
+			obstructionTimelimit,
+			linearDamping,
+			angularDamping,
+			rigidBodyRef
+		]);
 
 		// the context should update when a new handle is added
 		//@ts-ignore

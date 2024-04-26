@@ -4073,6 +4073,8 @@ __metadata:
     eslint-plugin-react-hooks: "npm:^4.6.0"
     eslint-plugin-react-refresh: "npm:^0.4.6"
     leva: "npm:^0.9.35"
+    maath: "npm:^0.10.7"
+    postprocessing: "npm:^6.35.3"
     prettier: "npm:^3.2.5"
     r3f-perf: "npm:^7.2.1"
     react: "npm:^18.2.0"
@@ -6576,6 +6578,15 @@ __metadata:
     picocolors: "npm:^1.0.0"
     source-map-js: "npm:^1.2.0"
   checksum: 10c0/955407b8f70cf0c14acf35dab3615899a2a60a26718a63c848cf3c29f2467b0533991b985a2b994430d890bd7ec2b1963e36352b0774a19143b5f591540f7c06
+  languageName: node
+  linkType: hard
+
+"postprocessing@npm:^6.35.3":
+  version: 6.35.3
+  resolution: "postprocessing@npm:6.35.3"
+  peerDependencies:
+    three: ">= 0.152.0 < 0.164.0"
+  checksum: 10c0/9882c0899fd22e080398c8d2ecec297959971698d5e4e43ded0b706fafac8037140a19da65d4cd3662501ef770b67b3d2d950a4f62d8c4e71c97e57de228336e
   languageName: node
   linkType: hard
 

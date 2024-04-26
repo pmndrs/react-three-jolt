@@ -151,7 +151,11 @@ export class PhysicsSystem {
 				: this.steppingState.accumulator / this.timeStep;
 		// Loop over all dynamic bodies
 		// NOTE: using "state" to match rapier logic
-		this.bodySystem.dynamicBodies.forEach((state: BodyState) => {
+		const mergedBodies: BodyState[] = [
+			...this.bodySystem.dynamicBodies.values(),
+			...this.bodySystem.kinematicBodies.values()
+		];
+		mergedBodies.forEach((state: BodyState) => {
 			const body = state.body;
 
 			if (state.isSleeping) return;

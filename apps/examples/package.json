@@ -15,6 +15,8 @@
     "@react-three/jolt-addons": "0.0.1",
     "@react-three/jolt-controllers": "0.0.1",
     "leva": "^0.9.35",
+    "maath": "^0.10.7",
+    "postprocessing": "^6.35.3",
     "r3f-perf": "^7.2.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
