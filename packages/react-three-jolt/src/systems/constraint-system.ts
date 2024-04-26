@@ -316,7 +316,7 @@ export class ConstraintSystem {
 
 	removeConstraint(constraint: any) {
 		// can we just destroy it?
-		Raw.module.destroy(constraint);
+		//Raw.module.destroy(constraint);
 		//this.joltPhysicsSystem.RemoveConstraint(constraint);
 	}
 	// apply spring settings to a constraint
