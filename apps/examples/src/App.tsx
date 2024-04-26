@@ -2,7 +2,7 @@
 //import * as THREE from 'three';
 import { Environment, CameraControls } from '@react-three/drei';
 import { Canvas, useThree } from '@react-three/fiber';
-import { Physics, vec3 } from '@react-three/jolt';
+import { vec3 } from '@react-three/jolt';
 import { Perf } from 'r3f-perf';
 import {
   //ReactNode,
@@ -29,14 +29,17 @@ import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
 import { JustBoxes } from './examples/JustBoxes';
 import { HeightfieldDemo } from './examples/Heightfield';
 import { CubeHeap } from './examples/CubeHeap';
-
+import { FourWheelDemo } from './examples/FourWheelsWithHeightmap';
+import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
 //try to import a local module of jolt
-import initJolt from './jolt/Distribution/jolt-physics.wasm-compat.js';
+// see issue #71
+//import initJolt from './jolt/Distribution/jolt-physics.wasm-compat.js';
 const demoContext = createContext<{
-  setDebug?(f: boolean): void;
-  setPaused?(f: boolean): void;
-  setCameraEnabled?(f: boolean): void;
-}>({});
+  debug: boolean;
+  paused: boolean;
+  interpolate: boolean;
+  physicsKey: number;
+}>({ debug: false, paused: false, interpolate: true, physicsKey: 0 });
 
 export const useDemo = () => useContext(demoContext);
 
@@ -112,12 +115,23 @@ const routes: Routes = {
     background: '#3d405b',
     element: <HeightfieldDemo />,
   },
-  // just for current dev purposes
   CubeHeap: {
     position: [2, 25, 51],
     target: [0, 1, 10],
     background: '#3d405b',
     element: <CubeHeap />,
+  },
+  Vehicle: {
+    position: [2, 25, 51],
+    target: [0, 1, 10],
+    background: '#3d405b',
+    element: <FourWheelDemo />,
+  },
+  Character: {
+    position: [2, 25, 51],
+    target: [0, 1, 10],
+    background: '#3d405b',
+    element: <CharacterVirtualDemo />,
   },
   // just for current dev purposes
   Boxes: {
@@ -189,20 +203,15 @@ export const App = () => {
             position={cameraProps?.position}
             target={cameraProps?.target}
           />
-          <Physics
-            module={initJolt}
-            paused={paused}
-            key={physicsKey}
-            interpolate={interpolate}
-            debug={debug}
-            gravity={22}
+          <demoContext.Provider
+            value={{ debug, paused, interpolate, physicsKey }}
           >
             <Routes>
               {Object.keys(routes).map((key) => (
                 <Route path={key} key={key} element={routes[key].element} />
               ))}
             </Routes>
-          </Physics>
+          </demoContext.Provider>
           {perf && <Perf position="top-left" minimal className="perf" />}
         </Canvas>
       </Suspense>

@@ -1,11 +1,12 @@
 import { useFrame } from '@react-three/fiber';
 import {
+  Physics,
   RaycastHit,
   Raycaster,
   RigidBody,
-  useCommand,
   useRaycaster,
 } from '@react-three/jolt';
+import { useCommand } from '@react-three/jolt-addons';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 
@@ -16,7 +17,25 @@ const _scale = new THREE.Vector3();
 const _matrix = new THREE.Matrix4();
 const _axis = new THREE.Vector3();
 
-export function RaycastManyDemo({ count = 150, color = '#F4F1DE' }) {
+import { useDemo } from '../App';
+// we have to wrap the demo so we can provide the physics component
+export function RaycastManyDemo() {
+  const { debug, paused, interpolate, physicsKey } = useDemo();
+
+  return (
+    <Physics
+      paused={paused}
+      key={physicsKey}
+      interpolate={interpolate}
+      debug={debug}
+      gravity={0}
+    >
+      <RaycastMany />
+    </Physics>
+  );
+}
+
+function RaycastMany({ count = 150, color = '#F4F1DE' }) {
   const instancedMarkersRef = useRef<THREE.InstancedMesh>(null);
   const linesRef = useRef<THREE.LineSegments>(null);
   const maxCount = 3000;

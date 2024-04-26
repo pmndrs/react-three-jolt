@@ -1,0 +1,23 @@
+{
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "complexity": {
+                "noForEach": "off"
+            },
+            "suspicious": {
+                "noExplicitAny": "off"
+            }
+        }
+    },
+    "formatter": {
+        "indentWidth": 4,
+        "lineWidth": 100
+    },
+    "javascript": {
+        "formatter": {
+            "trailingComma": "none",
+            "bracketSameLine": false
+        }
+    }
+}

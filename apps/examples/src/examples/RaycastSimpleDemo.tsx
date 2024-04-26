@@ -1,31 +1,47 @@
+import { useEffect, useRef } from 'react';
+import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
 import {
+  Physics,
   RaycastHit,
   Raycaster,
   RigidBody,
-  useConst,
-  useJolt,
   useMulticaster,
   useRaycaster,
   useSetTimeout,
   useUnmount,
 } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt-addons';
-import { useEffect, useRef } from 'react';
-import * as THREE from 'three';
+import { useDemo } from '../App';
+// we have to wrap the demo so we can provide the physics component
 
 export function RaycastSimpleDemo() {
+  const { debug, paused, interpolate, physicsKey } = useDemo();
+
+  // Reset the restitution
+  // body settings so shapes dont bounce
+  const defaultBodySettings = {
+    mRestitution: 0.1,
+  };
+  return (
+    <Physics
+      paused={paused}
+      key={physicsKey}
+      interpolate={interpolate}
+      debug={debug}
+      gravity={22}
+      defaultBodySettings={defaultBodySettings}
+    >
+      <RaycastSimple />
+    </Physics>
+  );
+}
+
+function RaycastSimple() {
   const raycaster: Raycaster = useRaycaster();
   const multicaster = useMulticaster();
   const { scene } = useThree();
-  const { bodySystem } = useJolt();
   const debugObject = useRef(new THREE.Object3D());
-
-  // Reset the restitution
-  // body settings so shapes bounce
-  bodySystem.defaultBodySettings = useConst({
-    mRestitution: 0.1,
-  });
 
   const timeouts = useSetTimeout();
   useEffect(() => {

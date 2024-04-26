@@ -55,7 +55,6 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
             if (instancedMeshRef.current) {
                 instancedMeshRef.current.parent.remove(instancedMeshRef.current);
                 current = instancedMeshRef.current;
-                // console.log('current', current);
             }
             // todo: do we need to do more to properly dispose of it?
             const holder: THREE.Mesh = holderMeshRef.current;
@@ -88,7 +87,6 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
             instancedMeshRef.current = instancedMesh;
             // add back to the scene
             if (parentRef?.current) parentRef.current!.add(instancedMesh);
-            //console.log('current scene', scene);
             manageInstances(count);
         }, [count]);
         const createInstanceBody = (index: number) => {
@@ -130,16 +128,9 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
             }
             // update the instance states
             instanceStates.current = instances;
-            /*console.log(
-                    'states updated, new count:',
-                    instances.length,
-                    instanceStates.current
-                );
-                */
         };
         // cleanup
         useUnmount(() => {
-            console.log('instanceMesh cleanup');
             // remove the instancedMesh from the scene
             if (instancedMeshRef.current) {
                 instancedMeshRef.current.parent.remove(instancedMeshRef.current);

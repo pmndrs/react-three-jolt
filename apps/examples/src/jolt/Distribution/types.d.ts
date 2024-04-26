@@ -273,6 +273,13 @@ declare module Jolt {
     function _emscripten_enum_SoftBodySharedSettings_EBendType_SoftBodySharedSettings_EBendType_None(): SoftBodySharedSettings_EBendType;
     function _emscripten_enum_SoftBodySharedSettings_EBendType_SoftBodySharedSettings_EBendType_Distance(): SoftBodySharedSettings_EBendType;
     function _emscripten_enum_SoftBodySharedSettings_EBendType_SoftBodySharedSettings_EBendType_Dihedral(): SoftBodySharedSettings_EBendType;
+    const SoftBodySharedSettings_ELRAType_None: number;
+    const SoftBodySharedSettings_ELRAType_EuclideanDistance: number;
+    const SoftBodySharedSettings_ELRAType_GeodesicDistance: number;
+    type SoftBodySharedSettings_ELRAType = typeof SoftBodySharedSettings_ELRAType_None | typeof SoftBodySharedSettings_ELRAType_EuclideanDistance | typeof SoftBodySharedSettings_ELRAType_GeodesicDistance;
+    function _emscripten_enum_SoftBodySharedSettings_ELRAType_SoftBodySharedSettings_ELRAType_None(): SoftBodySharedSettings_ELRAType;
+    function _emscripten_enum_SoftBodySharedSettings_ELRAType_SoftBodySharedSettings_ELRAType_EuclideanDistance(): SoftBodySharedSettings_ELRAType;
+    function _emscripten_enum_SoftBodySharedSettings_ELRAType_SoftBodySharedSettings_ELRAType_GeodesicDistance(): SoftBodySharedSettings_ELRAType;
     class Vec3MemRef {
     }
     class Mat44MemRef {
@@ -612,6 +619,7 @@ declare module Jolt {
         get_mDirection(): Vec3;
         set_mDirection(mDirection: Vec3): void;
         readonly mDirection: Vec3;
+        GetPointOnRay(inFraction: number): Vec3;
     }
     class RShapeCast {
         constructor(inShape: Shape, inScale: Vec3, inCenterOfMassStart: RMat44, inDirection: Vec3);
@@ -627,6 +635,7 @@ declare module Jolt {
         get_mDirection(): Vec3;
         set_mDirection(mDirection: Vec3): void;
         readonly mDirection: Vec3;
+        GetPointOnRay(inFraction: number): Vec3;
     }
     class Plane {
         constructor(inNormal: Vec3, inConstant: number);
@@ -2757,6 +2766,12 @@ declare module Jolt {
         get_mBendCompliance(): number;
         set_mBendCompliance(mBendCompliance: number): void;
         mBendCompliance: number;
+        get_mLRAType(): SoftBodySharedSettings_ELRAType;
+        set_mLRAType(mLRAType: SoftBodySharedSettings_ELRAType): void;
+        mLRAType: SoftBodySharedSettings_ELRAType;
+        get_mLRAMaxDistanceMultiplier(): number;
+        set_mLRAMaxDistanceMultiplier(mLRAMaxDistanceMultiplier: number): void;
+        mLRAMaxDistanceMultiplier: number;
     }
     class ArraySoftBodySharedSettingsVertexAttributes {
         empty(): boolean;
@@ -2874,6 +2889,17 @@ declare module Jolt {
         get_mInvMass(): number;
         set_mInvMass(mInvMass: number): void;
         mInvMass: number;
+    }
+    class SoftBodyVertexTraits {
+        get_mPreviousPositionOffset(): number;
+        set_mPreviousPositionOffset(mPreviousPositionOffset: number): void;
+        readonly mPreviousPositionOffset: number;
+        get_mPositionOffset(): number;
+        set_mPositionOffset(mPositionOffset: number): void;
+        readonly mPositionOffset: number;
+        get_mVelocityOffset(): number;
+        set_mVelocityOffset(mVelocityOffset: number): void;
+        readonly mVelocityOffset: number;
     }
     class ArraySoftBodyVertex {
         empty(): boolean;

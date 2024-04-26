@@ -45,7 +45,8 @@
         "react-dom": "^18.2.0"
     },
     "dependencies": {
-        "@react-three/jolt": "0.0.1"
+        "@react-three/jolt": "0.0.1",
+        "gamepad.js": "^2.1.0"
     },
     "devDependencies": {
         "@react-three/fiber": "8.16.1",
