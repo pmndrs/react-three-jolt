@@ -314,7 +314,7 @@ export class ConstraintSystem {
 		return casted;
 	}
 
-	removeConstraint(constraint: any) {
+	removeConstraint(_constraint: any) {
 		// can we just destroy it?
 		//Raw.module.destroy(constraint);
 		//this.joltPhysicsSystem.RemoveConstraint(constraint);
