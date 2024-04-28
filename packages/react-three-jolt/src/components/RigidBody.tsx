@@ -106,6 +106,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 				//put the initial position, rotation, scale, and quaternion in the options
 				if (position) objectRef.current.position.copy(vec3.three(position));
 				if (rotation) objectRef.current.rotation.setFromVector3(vec3.three(rotation));
+
 				//@ts-ignore
 				const bodyHandle = bodySystem.addBody(objectRef.current, options);
 				const body = bodySystem.getBody(bodyHandle);

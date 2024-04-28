@@ -26,6 +26,7 @@ import { CubeHeap } from "./examples/CubeHeap";
 import { FourWheelDemo } from "./examples/FourWheelsWithHeightmap";
 import { CharacterVirtualDemo } from "./examples/CharacterVirtualDemo";
 import { Impulses } from "./examples/Impulses";
+import { ImpulseSources } from "./examples/ImpulseSources";
 const demoContext = createContext<{
 	debug: boolean;
 	paused: boolean;
@@ -137,6 +138,12 @@ const routes: Routes = {
 		target: [0, 0, 0],
 		background: "#141622",
 		element: <Impulses />
+	},
+	ImpulseSources: {
+		position: [0, 25, 15],
+		target: [0, 1, -15],
+		background: "#C1839F",
+		element: <ImpulseSources />
 	}
 };
 

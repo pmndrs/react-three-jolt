@@ -61,8 +61,8 @@ export class BodySystem {
 		this.shapeSystem = new ShapeSystem(this.joltPhysicsSystem);
 
 		// Activate the listeners
-		// this.initializeActivationListeners();
-		// this.initializeContactListeners();
+		this.initializeActivationListeners();
+		this.initializeContactListeners();
 	}
 	// create a body from an object
 	createBody(object: Object3D, options: GenerateBodyOptions = {}): Jolt.Body {
@@ -368,18 +368,23 @@ export class BodySystem {
 		settings?: Jolt.ContactSettings
 	) {
 		// go through the body system and trigger the contact listeners
-		const body = this.getBody(body1);
-		if (!body) return;
-		const target =
-			type === "added"
-				? body.contactAddedListeners
-				: type === "persisted"
-					? body.contactPersistedListeners
-					: body.contactRemovedListeners;
-		if (target.length)
-			target.forEach((listener) =>
-				listener(body1, body2, numContacts, context, manifold, settings)
-			);
+		const bodyState1 = this.getBody(body1);
+		const bodyState2 = this.getBody(body2);
+		if (!bodyState1 || !bodyState2) return;
+		// do both bodies
+		for (let i = 0; i < 2; i++) {
+			const body = i === 0 ? bodyState1 : bodyState2;
+			const target =
+				type === "added"
+					? body.contactAddedListeners
+					: type === "persisted"
+						? body.contactPersistedListeners
+						: body.contactRemovedListeners;
+			if (target.length)
+				target.forEach((listener) =>
+					listener(body1, body2, manifold, settings, numContacts, context)
+				);
+		}
 	}
 
 	// Contact Pairing ===================================
