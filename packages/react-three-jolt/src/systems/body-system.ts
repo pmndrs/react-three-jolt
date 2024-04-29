@@ -36,6 +36,8 @@ export interface GenerateBodyOptions {
 	jitter?: THREE.Vector3;
 	mass?: number;
 	size?: THREE.Vector3;
+	group?: number;
+	subGroup?: number;
 }
 
 // ================================================
@@ -53,6 +55,9 @@ export class BodySystem {
 	// lets defaults be set at the physics system level
 	defaultBodySettings: any = {};
 
+	standardGroupFilter = new Raw.module.GroupFilterJS();
+	standardCollisionGroup = new Raw.module.CollisionGroup();
+
 	constructor(joltPhysicsSystem: Jolt.PhysicsSystem) {
 		// set the interfaces
 		this.joltPhysicsSystem = joltPhysicsSystem;
@@ -63,7 +68,14 @@ export class BodySystem {
 		// Activate the listeners
 		this.initializeActivationListeners();
 		this.initializeContactListeners();
+		this.initializeGroupFilter();
 	}
+	//* Initializers ===================================
+	initializeGroupFilter() {
+		console.log("initializing group filter");
+	}
+
+	//* Body Management ================================
 	// create a body from an object
 	createBody(object: Object3D, options: GenerateBodyOptions = {}): Jolt.Body {
 		let settings = generateBodySettings(object, options);
@@ -71,6 +83,14 @@ export class BodySystem {
 		if (Object.keys(this.defaultBodySettings).length > 0) {
 			settings = mergeBodyCreationSettings(settings, this.defaultBodySettings);
 		}
+		// todo: remove this once we change collision group at runtime
+
+		if (options.group || options.subGroup) {
+			settings.mCollisionGroup = this.standardCollisionGroup;
+			if (options.group) settings.mCollisionGroup.SetGroupID(options.group);
+			if (options.subGroup) settings.mCollisionGroup.SetSubGroupID(options.subGroup);
+		}
+
 		const body = this.bodyInterface.CreateBody(settings);
 		// remove the settings
 		this.jolt.destroy(settings);

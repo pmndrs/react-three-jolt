@@ -77,6 +77,7 @@ export class BodyState {
 	private joltPhysicsSystem;
 	private bodyInterface: Jolt.BodyInterface;
 	private bodySystem;
+	private collisionGroupChanged = false;
 
 	constructor(
 		object: Object3D | InstancedMesh,
@@ -289,6 +290,33 @@ export class BodyState {
 	get restitution() {
 		return this.body.GetRestitution();
 	}
+	//mass
+	set mass(mass: number) {
+		this.bodySystem.setMass(this.handle, mass);
+	}
+
+	//* Group Filtering ----------------------------------
+	get group() {
+		return this.body.GetCollisionGroup().GetGroupID();
+	}
+	set group(group: number) {
+		// if we aren't using the core collisionGroup we need to change to it
+		/* we can't use this yet becuase the SetCollisionGroup method isnt exposed
+		if (!this.collisionGroupChanged) {
+			this.body.SetCollisionGroup(this.bodySystem.standardCollisionGroup);
+			this.collisionGroupChanged = true;
+		}
+		*/
+
+		// set the group
+		this.body.GetCollisionGroup().SetGroupID(group);
+	}
+	get subGroup() {
+		return this.body.GetCollisionGroup().GetSubGroupID();
+	}
+	set subGroup(subGroup: number) {
+		this.body.GetCollisionGroup().SetSubGroupID(subGroup);
+	}
 
 	//* Force Manipulation ----------------------------------
 	// apply a force to the body
@@ -319,7 +347,7 @@ export class BodyState {
 		Raw.module.destroy(newQuat);
 	}
 
-	//* Impulse Source ----------------------------------
+	//* Motion Source ----------------------------------
 	// activate the impulse source
 	activateMotionSource(linearVector = new THREE.Vector3(), angularVector?: THREE.Vector3) {
 		this.motionActive = true;

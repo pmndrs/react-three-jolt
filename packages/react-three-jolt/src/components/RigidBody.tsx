@@ -35,6 +35,10 @@ interface RigidBodyProps {
 	obstructionTimelimit?: number;
 	isSensor?: boolean;
 
+	// groups
+	group?: number;
+	subGroup?: number;
+
 	//physics props
 	linearDamping?: number;
 	angularDamping?: number;
@@ -73,6 +77,8 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			isSensor,
 			angularDamping,
 			linearDamping,
+			group,
+			subGroup,
 
 			// obstruction
 			allowObstruction,
@@ -195,6 +201,14 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			angularDamping,
 			rigidBodyRef
 		]);
+
+		// groups
+		useEffect(() => {
+			if (!rigidBodyRef.current) return;
+			const body = rigidBodyRef.current as BodyState;
+			if (group) body.group = group;
+			if (subGroup) body.subGroup = subGroup;
+		}, [group, subGroup, rigidBodyRef]);
 
 		// the context should update when a new handle is added
 		//@ts-ignore

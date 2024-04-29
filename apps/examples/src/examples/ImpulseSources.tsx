@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import {
@@ -7,9 +7,12 @@ import {
 	RaycastHit,
 	Raycaster,
 	RigidBody,
+	useConst,
+	useJolt,
 	useMount,
 	useMulticaster,
 	useRaycaster,
+	useSetInterval,
 	useSetTimeout,
 	useUnmount
 } from "@react-three/jolt";
@@ -44,14 +47,57 @@ export function ImpulseSources() {
 
 function Inner() {
 	const { scene } = useThree();
+	const { bodySystem } = useJolt();
 	const debugObject = useRef(new THREE.Object3D());
 	const rearConveyor = useRef<BodyState>();
 	const leftConveyor = useRef<BodyState>();
 	const angledBouncer = useRef<BodyState>();
 	const forcefield = useRef<BodyState>();
 
-	const timeouts = useSetTimeout();
+	const intervals = useSetInterval();
+	const getRandomGroup = () => Math.floor(Math.random() * 4);
+	const geGroupColor = (group: number) => {
+		switch (group) {
+			case 0:
+				return "#ff4060";
+			case 1:
+				return "#ffcc00";
+			case 2:
+				return "#20ffa0";
+			case 3:
+				return "#4060ff";
+			default:
+				return "#444";
+		}
+	};
+	let count = 0;
+	// dynamicly create bodies
+	useMount(() => {
+		const boxInterval = intervals.setInterval(() => {
+			const groupId = getRandomGroup();
+			const color = geGroupColor(groupId);
+			const geometry = new THREE.BoxGeometry(1, 1, 1);
+			const material = new THREE.MeshStandardMaterial({ color });
+			const cube = new THREE.Mesh(geometry, material);
+			// add to the scene
+			scene.add(cube);
+			// set the position
+			cube.position.set(0, 10, -15);
+			// add to physics
+			const bodyId = bodySystem.addBody(cube);
+			const body = bodySystem.getBody(bodyId);
+			// set the mass
+			body!.mass = 15;
+			body!.group = 0;
+			body!.subGroup = 3;
+			count++;
+			if (count > 100) {
+				intervals.clearInterval(boxInterval);
+			}
+		}, 4000);
+	});
 
+	// setup movement sources
 	useMount(() => {
 		if (!rearConveyor.current || !leftConveyor.current) return;
 		// setup the conveyors
@@ -60,7 +106,7 @@ function Inner() {
 		// setup the bouncer
 		angledBouncer.current!.activateMotionSource(new THREE.Vector3(0, 300, 0));
 		// setup the forcefield
-		forcefield.current!.activateMotionSource(new THREE.Vector3(3.6, 10, 0));
+		forcefield.current!.activateMotionSource(new THREE.Vector3(3.6, 10, -0.7));
 		//disable auto rotation of field vector
 		forcefield.current!.useRotation = false;
 	});
@@ -72,13 +118,12 @@ function Inner() {
 
 	return (
 		<>
-			<RigidBody mass={15} position={[0, 10, -13]}>
+			<RigidBody position={[0, 10, -13]} group={0} mass={15}>
 				<mesh>
 					<boxGeometry args={[1, 1, 1]} />
-					<meshStandardMaterial color="#FF5A5F" />
+					<meshStandardMaterial color="#ff4060" />
 				</mesh>
 			</RigidBody>
-
 			<RigidBody
 				ref={rearConveyor}
 				rotation={[0, 0, dtr(-15)]}
@@ -112,7 +157,7 @@ function Inner() {
 					<meshStandardMaterial color="#FE5E41" />
 				</mesh>
 			</RigidBody>
-			<RigidBody position={[-14, 4, 14]} type={"static"}>
+			<RigidBody position={[-14, 4, 14]} rotation={[0, dtr(15), 0]} type={"static"}>
 				<mesh>
 					<boxGeometry args={[8, 4, 0.5]} />
 					<meshStandardMaterial color="#D8F1A0" transparent opacity={0.5} />
@@ -134,7 +179,7 @@ function Inner() {
 					<meshStandardMaterial color="#00A878" transparent opacity={0.1} />
 				</mesh>
 			</RigidBody>
-			<RigidBody position={[22, 12, 4]} rotation={[0, 1.57, 0.3]} type={"static"}>
+			<RigidBody position={[24, 12, 2]} rotation={[0, 1.57, 0.3]} type={"static"}>
 				<mesh>
 					<boxGeometry args={[8, 8, 0.5]} />
 					<meshStandardMaterial color="#D8F1A0" transparent opacity={0.5} />
@@ -142,6 +187,19 @@ function Inner() {
 				<mesh position={[0, -2, -2]}>
 					<boxGeometry args={[8, 0.5, 4]} />
 					<meshStandardMaterial color="#D8F1A0" transparent opacity={0.5} />
+				</mesh>
+			</RigidBody>
+			{/* Filters */}
+			<RigidBody
+				position={[22, 6, 6]}
+				rotation={[dtr(-10), 0, 0]}
+				type="static"
+				group={0}
+				subGroup={3}
+			>
+				<mesh>
+					<boxGeometry args={[5, 0.5, 8]} />
+					<meshStandardMaterial color="#ff4060" />
 				</mesh>
 			</RigidBody>
 
