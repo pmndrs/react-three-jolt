@@ -26,7 +26,7 @@ import { CubeHeap } from "./examples/CubeHeap";
 import { FourWheelDemo } from "./examples/FourWheelsWithHeightmap";
 import { CharacterVirtualDemo } from "./examples/CharacterVirtualDemo";
 import { Impulses } from "./examples/Impulses";
-import { ImpulseSources } from "./examples/ImpulseSources";
+import { MotionSources } from "./examples/motionSources";
 const demoContext = createContext<{
 	debug: boolean;
 	paused: boolean;
@@ -85,6 +85,7 @@ type Routes = {
 		target?: number[];
 		background?: string;
 		element: JSX.Element;
+		label?: string;
 	};
 };
 
@@ -139,11 +140,12 @@ const routes: Routes = {
 		background: "#141622",
 		element: <Impulses />
 	},
-	ImpulseSources: {
+	MotionSources: {
+		label: "Motion Sources",
 		position: [0, 25, 15],
 		target: [0, 1, -15],
 		background: "#C1839F",
-		element: <ImpulseSources />
+		element: <MotionSources />
 	}
 };
 
@@ -229,7 +231,7 @@ export const App = () => {
 			>
 				{Object.keys(routes).map((key) => (
 					<Link key={key} to={key} end>
-						{key.replace(/-/g, " ") || "Raycaster"}
+						{routes[key].label || key.replace(/-/g, " ") || "Raycaster"}
 					</Link>
 				))}
 

@@ -107,7 +107,9 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 				//handle options from props
 				const options = {
 					bodyType: type || "dynamic", // default to dynamic
-					shapeType: shape || null
+					shapeType: shape || null,
+					group: group,
+					subGroup: subGroup
 				};
 				//put the initial position, rotation, scale, and quaternion in the options
 				if (position) objectRef.current.position.copy(vec3.three(position));

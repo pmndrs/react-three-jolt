@@ -349,6 +349,7 @@ export class BodyState {
 	applyTorque(torque: Vector3) {
 		const newVec = vec3.jolt(torque);
 		this.body.AddTorque(newVec);
+		Raw.module.destroy(newVec);
 	}
 	// add impulse to the body
 	addImpulse(impulse: Vector3) {
@@ -394,21 +395,36 @@ export class BodyState {
 		// get body rotations
 		const rotation1 = body1.rotation;
 		const rotation2 = body2.rotation;
+		const targetBody = body1.isMotionSource ? body2 : body1;
+		const sourceBody = body1.isMotionSource ? body1 : body2;
 
+		//if this is a teleporter
+		if (sourceBody.isTeleporter) {
+			//the target position is the linear vector
+			const target = sourceBody.motionLinearVector;
+			this.bodySystem.createPendingAction("position", targetBody.handle, target);
+			// if the angle is set we'll use that for rotation
+			if (sourceBody.motionAngularVector)
+				this.bodySystem.createPendingAction(
+					"rotation",
+					targetBody.handle,
+					sourceBody.motionAngularVector
+				);
+			// bail
+			return undefined;
+		}
 		// we need to determine which type of force to add
-		let doLinear = false;
-		if (body1.isMotionSource && body1.motionType === "linear") doLinear = true;
-		if (body2.isMotionSource && body2.motionType === "linear") doLinear = true;
+		//let doLinear = false;
+		//if (body1.isMotionSource && body1.motionType === "linear") doLinear = true;
+		//if (body2.isMotionSource && body2.motionType === "linear") doLinear = true;
 
-		if (doLinear) {
-			const targetBody = body1.isMotionSource ? body2 : body1;
-			const otherBody = body1.isMotionSource ? body1 : body2;
+		if (sourceBody.motionType === "linear") {
 			// get the linear vector
 			const linearVector =
 				body1.motionLinearVector?.clone() ||
 				body2.motionLinearVector?.clone() ||
 				new THREE.Vector3(-10, 0, 0);
-			if (this.motionAsSurfaceVelocity) {
+			if (sourceBody.motionAsSurfaceVelocity) {
 				// this seems like the wrong way to do this but I'll follow the original example
 				// Determine the world space surface velocity of both bodies
 				const cLocalSpaceVelocity = linearVector?.clone();
@@ -423,8 +439,47 @@ export class BodyState {
 			} else {
 				// do it as an impulse
 				// THis could be dangerous because it uses the bodyInterface to apply impulse
-				if (this.useRotation) linearVector.applyQuaternion(otherBody.rotation);
+				if (this.useRotation) linearVector.applyQuaternion(sourceBody.rotation);
 				targetBody.addImpulse(linearVector);
+			}
+		}
+		// angular
+		if (sourceBody.motionType === "angular") {
+			if (sourceBody.motionAsSurfaceVelocity) {
+				const cLocalSpaceAngularVelocity = new THREE.Vector3(
+					0,
+					THREE.MathUtils.degToRad(10.0),
+					0
+				);
+				const body1AngularSurfaceVelocity = body1.isMotionSource
+					? cLocalSpaceAngularVelocity.applyQuaternion(rotation1)
+					: new THREE.Vector3(0, 0, 0);
+				const body2AngularSurfaceVelocity = body2.isMotionSource
+					? cLocalSpaceAngularVelocity.applyQuaternion(rotation2)
+					: new THREE.Vector3(0, 0, 0);
+
+				// Note that the angular velocity is the angular velocity around body 1's center of mass, so we need to add the linear velocity of body 2's center of mass
+				const COM1 = vec3.three(body1.body.GetCenterOfMassPosition());
+				const COM2 = vec3.three(body2.body.GetCenterOfMassPosition());
+				const body2LinearSurfaceVelocity = body2.isMotionSource
+					? body2AngularSurfaceVelocity.cross(COM1.clone().sub(COM2))
+					: new THREE.Vector3(0, 0, 0);
+
+				// Calculate the relative angular surface velocity
+				const rls = body2LinearSurfaceVelocity;
+				settings.mRelativeLinearSurfaceVelocity.Set(rls.x, rls.y, rls.z);
+				const ras = body2AngularSurfaceVelocity.sub(body1AngularSurfaceVelocity);
+				settings.mRelativeAngularSurfaceVelocity.Set(ras.x, ras.y, ras.z);
+			} else {
+				const angularVector =
+					body1.motionAngularVector?.clone() ||
+					body2.motionAngularVector?.clone() ||
+					new THREE.Vector3(0, 0, 0);
+				this.bodySystem.createPendingAction(
+					"applyTorque",
+					targetBody.handle,
+					angularVector
+				);
 			}
 		}
 	};
