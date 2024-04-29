@@ -290,7 +290,27 @@ export class BodyState {
 	get restitution() {
 		return this.body.GetRestitution();
 	}
-	//mass
+	get angularDamping() {
+		return this.body.GetMotionProperties().GetAngularDamping();
+	}
+	set angularDamping(damping: number) {
+		this.body.GetMotionProperties().SetAngularDamping(damping);
+	}
+	get linearDamping() {
+		return this.body.GetMotionProperties().GetLinearDamping();
+	}
+	set linearDamping(damping: number) {
+		this.body.GetMotionProperties().SetLinearDamping(damping);
+	}
+	get gravityFactor() {
+		return this.body.GetMotionProperties().GetGravityFactor();
+	}
+	set gravityFactor(factor: number) {
+		this.body.GetMotionProperties().SetGravityFactor(factor);
+	}
+	get mass() {
+		return this.body.GetShape().GetMassProperties().mMass;
+	}
 	set mass(mass: number) {
 		this.bodySystem.setMass(this.handle, mass);
 	}
