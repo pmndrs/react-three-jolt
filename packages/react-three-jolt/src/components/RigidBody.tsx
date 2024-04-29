@@ -21,6 +21,7 @@ interface RigidBodyProps {
 	key?: number;
 	position?: number[];
 	rotation?: number[];
+	onlyInitialize?: boolean;
 	onContactAdded?: (body1: number, body2: number) => void;
 	onContactRemoved?: (body1: number, body2: number) => void;
 	onContactPersisted?: (body1: number, body2: number) => void;
@@ -71,6 +72,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			shape,
 			position,
 			rotation,
+			onlyInitialize,
 			scale,
 			mass,
 			quaternion,
@@ -142,7 +144,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 
 		//* Prop Updates -------------------------------------
 		useEffect(() => {
-			if (!rigidBodyRef.current) return;
+			if (!rigidBodyRef.current || onlyInitialize) return;
 			const body = rigidBodyRef.current as BodyState;
 			if (position) body.position = vec3.three(position);
 			if (rotation) {
@@ -153,8 +155,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 					: rotation;
 				body.rotation = quaternion;
 			}
-			if (isSensor !== undefined) body.body.SetIsSensor(isSensor);
-		}, [position, rotation, isSensor, rigidBodyRef]);
+		}, [onlyInitialize, position, rotation, rigidBodyRef]);
 
 		// add the contact listeners
 		useEffect(() => {
@@ -195,13 +196,15 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 					body.obstructionTimelimit = obstructionTimelimit;
 				}
 			}
+			if (isSensor !== undefined) body.body.SetIsSensor(isSensor);
 		}, [
 			mass,
 			allowObstruction,
 			obstructionTimelimit,
 			linearDamping,
 			angularDamping,
-			rigidBodyRef
+			rigidBodyRef,
+			isSensor
 		]);
 
 		// groups

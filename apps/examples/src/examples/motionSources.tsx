@@ -164,7 +164,7 @@ function Inner() {
 
 	return (
 		<>
-			<RigidBody position={[0, 10, -13]} group={0} mass={15}>
+			<RigidBody position={[0, 10, -13]} group={0} mass={15} onlyInitialize>
 				<mesh>
 					<boxGeometry args={[1, 1, 1]} />
 					<meshStandardMaterial color="#ff4060" />
