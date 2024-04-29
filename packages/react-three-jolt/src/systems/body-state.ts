@@ -77,7 +77,7 @@ export class BodyState {
 	private joltPhysicsSystem;
 	private bodyInterface: Jolt.BodyInterface;
 	private bodySystem;
-	private collisionGroupChanged = false;
+	//private collisionGroupChanged = false;
 
 	constructor(
 		object: Object3D | InstancedMesh,
@@ -385,7 +385,7 @@ export class BodyState {
 	motionAddedListener = (
 		body1Handle: number,
 		body2Handle: number,
-		manifold: Jolt.ContactManifold,
+		_manifold: Jolt.ContactManifold,
 		settings: Jolt.ContactSettings
 	) => {
 		// get the body states of the two bodies
@@ -483,10 +483,10 @@ export class BodyState {
 			}
 		}
 	};
-	motionRemovedListener = (
+	/*motionRemovedListener = (
 		body1: Jolt.BodyID,
 		body2: Jolt.BodyID,
 		manifold: Jolt.ContactManifold,
 		settings: Jolt.ContactSettings
-	) => {};
+	) => {};*/
 }

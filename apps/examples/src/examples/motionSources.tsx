@@ -1,24 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import * as THREE from "three";
-import { useThree } from "@react-three/fiber";
 import {
-	BodyState,
+	type BodyState,
 	Physics,
-	RaycastHit,
-	Raycaster,
 	RigidBody,
-	useConst,
 	useJolt,
 	useMount,
-	useMulticaster,
-	useRaycaster,
-	useSetInterval,
-	useSetTimeout,
-	useUnmount
+	useSetInterval
 } from "@react-three/jolt";
 import { Floor } from "@react-three/jolt-addons";
 import { useDemo } from "../App";
-import { max } from "three/examples/jsm/nodes/Nodes.js";
 // because im lazy
 const dtr = (degree: number) => THREE.MathUtils.degToRad(degree);
 
@@ -47,7 +38,6 @@ export function MotionSources() {
 }
 
 function Inner() {
-	const debugObject = useRef(new THREE.Object3D());
 	const rearConveyor = useRef<BodyState>();
 	const leftConveyor = useRef<BodyState>();
 	const angledBouncer = useRef<BodyState>();
@@ -59,7 +49,6 @@ function Inner() {
 
 	const intervals = useSetInterval();
 
-	const { scene } = useThree();
 	const { bodySystem } = useJolt();
 
 	// Helper functions ---------------------
@@ -116,7 +105,8 @@ function Inner() {
 	useMount(() => {
 		if (!rearConveyor.current || !leftConveyor.current) return;
 		// setup the conveyors
-		rearConveyor.current.activateMotionSource(new THREE.Vector3(-2.6, 0, 0));
+		rearConveyor.current.activateMotionSource(new THREE.Vector3(-3, 0, 0));
+		rearConveyor.current.motionAsSurfaceVelocity = true;
 		leftConveyor.current.activateMotionSource(new THREE.Vector3(-2.4, 0, 0));
 		// setup the bouncer
 		angledBouncer.current!.activateMotionSource(new THREE.Vector3(0, 300, 0));
@@ -154,11 +144,6 @@ function Inner() {
 		blender.current!.motionType = "angular";
 	});
 
-	useUnmount(() => {
-		// console.log('Raycast Simple Demo unmounting...');
-		scene.remove(debugObject.current);
-	});
-
 	return (
 		<>
 			{activeBodies.map((body, index) => (
@@ -179,7 +164,7 @@ function Inner() {
 
 			<RigidBody
 				ref={rearConveyor}
-				rotation={[0, 0, dtr(-15)]}
+				rotation={[0, 0, dtr(-2)]}
 				position={[0, 6, -15]}
 				type="static"
 			>
@@ -245,7 +230,7 @@ function Inner() {
 			{/* Filters */}
 			<RigidBody
 				position={[22, 7, 6]}
-				rotation={[dtr(-15), 0, dtr(-5)]}
+				rotation={[dtr(-15), 0, dtr(-2)]}
 				type="static"
 				group={0}
 				subGroup={0}

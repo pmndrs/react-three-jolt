@@ -37,7 +37,7 @@ The goal of this library is to allow quick and easy access to a world-class phys
 
 ### Physics
 
-`<Physics></Physics>`
+`<Physics>`
 
 Jolt works like many other physics libraries where a `<Physics>` component acts as the entrance point for the world.
 Just like everything in R3F must be within the `<Canvas>` Everything in R3/Jolt must be inside a `<Physics>`
@@ -236,6 +236,10 @@ Heightfields are heavy, so don’t make them too big or use too many. It’s bes
 Be warry of contact events on heightfields. Honestly, best not to even use them as they fire for every single triangle in the mesh and can easily confuse the contact listener. Meaning you’ll never correctly detect when the item stops contacting.
 
 It’s unclear if this is true from the perspective of the other shape, but know contact listening heightfields is currently buggy.
+
+---
+### Group Filtering
+Like 
 
 ---
 
