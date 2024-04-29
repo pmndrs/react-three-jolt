@@ -85,32 +85,29 @@ function Inner() {
 		);
 	};
 
-	const [activeBodies, setActiveBodies] = useState<number[]>([]);
+	const [activeBodies, setActiveBodies] = useState<{ groupId: number; color: string }[]>([
+		{ groupId: 0, color: "#ff4060" }
+	]);
 
-	// dynamicly create bodies
+	// dynamicly create bodies. When above 100 move a random body to the origin
 	useMount(() => {
-		const boxInterval = intervals.setInterval(() => {
-			const groupId = getRandomGroup();
-			const geometry = new THREE.BoxGeometry(1, 1, 1);
-			const material = new THREE.MeshStandardMaterial({ color: geGroupColor(groupId) });
-			const cube = new THREE.Mesh(geometry, material);
-			// add to the scene
-			scene.add(cube);
-			// set the position
-			cube.position.set(0, 10, -15);
-			// add to physics
-
-			const bodyId = bodySystem.addBody(cube, { group: groupId, subGroup: 1 });
-			const body = bodySystem.getBody(bodyId);
-			// set the mass
-			body!.mass = 15;
-			// disable internal collision for group 2 by setting the subGroup to 0
-			if (groupId === 2) body!.subGroup = 0;
-			// add to the active bodies
-			setActiveBodies((current) => [...current, bodyId]);
-
-			if (activeBodies.length > 100) {
-				intervals.clearInterval(boxInterval);
+		let count = 0;
+		intervals.setInterval(() => {
+			if (count < 100) {
+				const groupId = getRandomGroup();
+				const color: string = geGroupColor(groupId) || "#ff4060";
+				setActiveBodies((current) => {
+					count = current.length + 1;
+					return [...current, { groupId, color }];
+				});
+			} else {
+				// get a random body and set it to the initial position
+				const randomIndex = Math.floor(Math.random() * count);
+				const randomBody: BodyState = Array.from(bodySystem.dynamicBodies.values())[
+					randomIndex
+				];
+				randomBody.position = new THREE.Vector3(0, 10, -15);
+				randomBody.rotation = new THREE.Quaternion();
 			}
 		}, 4000);
 	});
@@ -164,12 +161,22 @@ function Inner() {
 
 	return (
 		<>
-			<RigidBody position={[0, 10, -13]} group={0} mass={15} onlyInitialize>
-				<mesh>
-					<boxGeometry args={[1, 1, 1]} />
-					<meshStandardMaterial color="#ff4060" />
-				</mesh>
-			</RigidBody>
+			{activeBodies.map((body, index) => (
+				<RigidBody
+					key={index}
+					position={[0, 10, -15]}
+					group={body.groupId}
+					subGroup={body.groupId === 2 ? 0 : 1}
+					mass={15}
+					onlyInitialize
+				>
+					<mesh>
+						<boxGeometry args={[1, 1, 1]} />
+						<meshStandardMaterial color={body.color} />
+					</mesh>
+				</RigidBody>
+			))}
+
 			<RigidBody
 				ref={rearConveyor}
 				rotation={[0, 0, dtr(-15)]}
