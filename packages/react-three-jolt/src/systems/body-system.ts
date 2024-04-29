@@ -24,6 +24,7 @@ import {
 
 // TYPES ========================================
 export type BodyType = "dynamic" | "static" | "kinematic" | "rig";
+export type PendingAction = { action: string; handle: number; value: any };
 
 // We call things "bodySettings" to clarify from shapes or other similar labels
 export interface GenerateBodyOptions {
@@ -36,6 +37,8 @@ export interface GenerateBodyOptions {
 	jitter?: THREE.Vector3;
 	mass?: number;
 	size?: THREE.Vector3;
+	group?: number;
+	subGroup?: number;
 }
 
 // ================================================
@@ -45,6 +48,10 @@ export class BodySystem {
 	staticBodies = new Map<number, BodyState>();
 	kinematicBodies = new Map<number, BodyState>();
 
+	// pending actions to be called at the begining of a frame
+	//todo: type these
+	pendingActions: PendingAction[] = [];
+
 	joltPhysicsSystem: Jolt.PhysicsSystem;
 	bodyInterface: Jolt.BodyInterface;
 
@@ -52,6 +59,9 @@ export class BodySystem {
 
 	// lets defaults be set at the physics system level
 	defaultBodySettings: any = {};
+
+	standardGroupFilter = new Raw.module.GroupFilterJS();
+	standardCollisionGroup = new Raw.module.CollisionGroup();
 
 	constructor(joltPhysicsSystem: Jolt.PhysicsSystem) {
 		// set the interfaces
@@ -61,9 +71,41 @@ export class BodySystem {
 		this.shapeSystem = new ShapeSystem(this.joltPhysicsSystem);
 
 		// Activate the listeners
-		// this.initializeActivationListeners();
-		// this.initializeContactListeners();
+		this.initializeActivationListeners();
+		this.initializeContactListeners();
+		this.initializeGroupFilter();
 	}
+	//* Initializers ===================================
+	initializeGroupFilter() {
+		this.standardGroupFilter.CanCollide = (inGroup1, inGroup2) => {
+			// we have to wrap these to access them
+			const group1 = Raw.module.wrapPointer(inGroup1, Raw.module.CollisionGroup);
+			const group2 = Raw.module.wrapPointer(inGroup2, Raw.module.CollisionGroup);
+
+			// because either group may be a subgroup we have to test both
+			const activeSubGroups = [false, false, false];
+			const sameGroup = group1.GetGroupID() === group2.GetGroupID();
+
+			const subGroup1 = group1.GetSubGroupID();
+			const subGroup2 = group2.GetSubGroupID();
+			activeSubGroups[subGroup1] = true;
+			activeSubGroups[subGroup2] = true;
+
+			// group 2 ONLY collides if the groups match, so we need to test it first
+			if (activeSubGroups[2] && sameGroup) return true;
+			// if the groups are different and group 2 isnt active
+			if (!activeSubGroups[2] && !sameGroup) return true;
+			// from now on the main group is always the same
+			// if both are group 1, they collide
+			if (subGroup1 === 1 && subGroup2 === 1) return true;
+
+			//console.log('group filter', group1, group2);
+			return false;
+		};
+		this.standardCollisionGroup.SetGroupFilter(this.standardGroupFilter);
+	}
+
+	//* Body Management ================================
 	// create a body from an object
 	createBody(object: Object3D, options: GenerateBodyOptions = {}): Jolt.Body {
 		let settings = generateBodySettings(object, options);
@@ -71,6 +113,17 @@ export class BodySystem {
 		if (Object.keys(this.defaultBodySettings).length > 0) {
 			settings = mergeBodyCreationSettings(settings, this.defaultBodySettings);
 		}
+		// todo: remove this once we change collision group at runtime
+		//console.log("options", options);
+		if (options.group !== undefined || options.subGroup !== undefined) {
+			settings.mCollisionGroup = this.standardCollisionGroup;
+			if (options.group !== undefined) {
+				settings.mCollisionGroup.SetGroupID(options.group);
+			}
+			if (options.subGroup !== undefined)
+				settings.mCollisionGroup.SetSubGroupID(options.subGroup);
+		}
+
 		const body = this.bodyInterface.CreateBody(settings);
 		// remove the settings
 		this.jolt.destroy(settings);
@@ -193,12 +246,49 @@ export class BodySystem {
 		//this.jolt.destroy(shape);
 		return this.addExistingBody(planeMesh, body, { bodyType: "static" });
 	}
-	// Body Modification ===================================
+	//* Body Modification ===================================
 	// change the mass of a body
 	setMass(bodyHandle: number, mass: number) {
 		const body = this.getBody(bodyHandle);
 		if (!body) return;
 		changeMassInertia(body.body, mass);
+	}
+
+	//* Loop Functions ===================================
+	createPendingAction(action: string, handle: number, value: any) {
+		this.pendingActions.push({ action, handle, value });
+	}
+	handlePendingActions() {
+		if (!this.pendingActions.length) return;
+		// { action: string, handle: number, value: any }
+		// lets try this first utilizing setters
+		this.pendingActions.forEach((action) => {
+			const body = this.getBody(action.handle);
+			if (!body) return;
+
+			switch (action.action) {
+				case "mass":
+					body.mass = action.value;
+					break;
+				case "position":
+					body.position = action.value;
+					break;
+				case "rotation":
+					body.rotation = action.value;
+					break;
+				case "applyTorque":
+					body.applyTorque(action.value);
+					break;
+				case "applyForce":
+					body.applyForce(action.value);
+					break;
+				case "addImpulse":
+					body.addImpulse(action.value);
+					break;
+			}
+		});
+		// clear the actions
+		this.pendingActions = [];
 	}
 
 	// Activation Listeners ================================
@@ -368,18 +458,23 @@ export class BodySystem {
 		settings?: Jolt.ContactSettings
 	) {
 		// go through the body system and trigger the contact listeners
-		const body = this.getBody(body1);
-		if (!body) return;
-		const target =
-			type === "added"
-				? body.contactAddedListeners
-				: type === "persisted"
-					? body.contactPersistedListeners
-					: body.contactRemovedListeners;
-		if (target.length)
-			target.forEach((listener) =>
-				listener(body1, body2, numContacts, context, manifold, settings)
-			);
+		const bodyState1 = this.getBody(body1);
+		const bodyState2 = this.getBody(body2);
+		if (!bodyState1 || !bodyState2) return;
+		// do both bodies
+		for (let i = 0; i < 2; i++) {
+			const body = i === 0 ? bodyState1 : bodyState2;
+			const target =
+				type === "added"
+					? body.contactAddedListeners
+					: type === "persisted"
+						? body.contactPersistedListeners
+						: body.contactRemovedListeners;
+			if (target.length)
+				target.forEach((listener) =>
+					listener(body1, body2, manifold, settings, numContacts, context)
+				);
+		}
 	}
 
 	// Contact Pairing ===================================

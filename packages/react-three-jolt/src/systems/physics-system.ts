@@ -237,6 +237,7 @@ export class PhysicsSystem {
 	// Step the physics simulation
 	private stepSimulation(delta: number, steps: number) {
 		this.triggerStepListener(delta);
+		this.bodySystem.handlePendingActions();
 		this.joltInterface.Step(delta, steps);
 		this.triggerStepListener(delta, "post");
 		this.currentSubframe = (this.currentSubframe + 1) % 4;

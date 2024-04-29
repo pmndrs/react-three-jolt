@@ -30,12 +30,21 @@ export class BodyState {
 	obstructionTimelimit = 5000;
 	allowCollision = false;
 
-	// for conveyor systems
+	// for conveyor systems willl be replaced with impulse source
 	isConveyor = false;
 	conveyorVector?: THREE.Vector3;
 	isTeleporter = false;
 	teleporterVector?: THREE.Vector3;
 
+	//* motionSource Props ===================================
+	//todo: should these be on their own class?
+	isMotionSource = false;
+	motionActive = false;
+	useRotation = true;
+	motionLinearVector?: THREE.Vector3;
+	motionAngularVector?: THREE.Vector3;
+	motionType: "linear" | "angular" = "linear";
+	motionAsSurfaceVelocity = false;
 	/**
 	 * Required for instanced rigid bodies. (from r3/rapier)
 	 */
@@ -68,6 +77,7 @@ export class BodyState {
 	private joltPhysicsSystem;
 	private bodyInterface: Jolt.BodyInterface;
 	private bodySystem;
+	//private collisionGroupChanged = false;
 
 	constructor(
 		object: Object3D | InstancedMesh,
@@ -208,7 +218,7 @@ export class BodyState {
 	}
 	// get the rotation of the body and wrap it in a three quaternion
 	get rotation(): THREE.Quaternion {
-		return quat.joltToThree(this.bodyInterface.GetRotation(this.BodyID));
+		return quat.joltToThree(this.body.GetRotation());
 	}
 	// set both position and rotation
 	setPositionAndRotation(position: THREE.Vector3, rotation: THREE.Quaternion) {
@@ -305,9 +315,32 @@ export class BodyState {
 		this.bodySystem.setMass(this.handle, mass);
 	}
 
+	//* Group Filtering ----------------------------------
+	get group() {
+		return this.body.GetCollisionGroup().GetGroupID();
+	}
+	set group(group: number) {
+		// if we aren't using the core collisionGroup we need to change to it
+		/* we can't use this yet becuase the SetCollisionGroup method isnt exposed
+		if (!this.collisionGroupChanged) {
+			this.body.SetCollisionGroup(this.bodySystem.standardCollisionGroup);
+			this.collisionGroupChanged = true;
+		}
+		*/
+
+		// set the group
+		this.body.GetCollisionGroup().SetGroupID(group);
+	}
+	get subGroup() {
+		return this.body.GetCollisionGroup().GetSubGroupID();
+	}
+	set subGroup(subGroup: number) {
+		this.body.GetCollisionGroup().SetSubGroupID(subGroup);
+	}
+
 	//* Force Manipulation ----------------------------------
 	// apply a force to the body
-	addForce(force: Vector3) {
+	applyForce(force: Vector3) {
 		const newVec = vec3.jolt(force);
 		this.body.AddForce(newVec);
 		Raw.module.destroy(newVec);
@@ -316,22 +349,144 @@ export class BodyState {
 	applyTorque(torque: Vector3) {
 		const newVec = vec3.jolt(torque);
 		this.body.AddTorque(newVec);
+		Raw.module.destroy(newVec);
 	}
 	// add impulse to the body
 	addImpulse(impulse: Vector3) {
+		//console.log("adding impulse", impulse);
 		const newVec = vec3.jolt(impulse);
-		this.bodyInterface.AddImpulse(this.BodyID, newVec);
-		//we have to activate the body after applying impulse
-		//this.bodyInterface.ActivateBody(this.BodyID);
+		this.body.AddImpulse(newVec);
 		Raw.module.destroy(newVec);
 	}
 	//move kinematic
-	moveKinematic(position: Vector3, rotation = this.rotation, deltaTime = 0.16) {
+	moveKinematic(position: Vector3, rotation: THREE.Quaternion, deltaTime = 0) {
 		const newVec = vec3.jolt(position);
-		const newQuat = quat.jolt(rotation);
+		const newQuat = rotation ? quat.jolt(rotation) : new Raw.module.Quat(0, 0, 0, 1);
 
 		this.bodyInterface.MoveKinematic(this.BodyID, newVec, newQuat, deltaTime);
 		Raw.module.destroy(newVec);
 		Raw.module.destroy(newQuat);
 	}
+
+	//* Motion Source ----------------------------------
+	// activate the impulse source
+	activateMotionSource(linearVector = new THREE.Vector3(), angularVector?: THREE.Vector3) {
+		this.motionActive = true;
+		this.isMotionSource = true;
+		this.motionType = angularVector ? "angular" : "linear";
+		this.motionLinearVector = linearVector;
+		if (angularVector) this.motionAngularVector = angularVector;
+		// if you want to use the normal for a bouncepad call it separately
+
+		// add the listeners
+		this.addContactListener(this.motionAddedListener, "added");
+		this.addContactListener(this.motionAddedListener, "persisted");
+	}
+	motionAddedListener = (
+		body1Handle: number,
+		body2Handle: number,
+		_manifold: Jolt.ContactManifold,
+		settings: Jolt.ContactSettings
+	) => {
+		// get the body states of the two bodies
+		const body1 = this.bodySystem.getBody(body1Handle);
+		const body2 = this.bodySystem.getBody(body2Handle);
+		if (!body1 || !body2) return;
+		// get body rotations
+		const rotation1 = body1.rotation;
+		const rotation2 = body2.rotation;
+		const targetBody = body1.isMotionSource ? body2 : body1;
+		const sourceBody = body1.isMotionSource ? body1 : body2;
+
+		//if this is a teleporter
+		if (sourceBody.isTeleporter) {
+			//the target position is the linear vector
+			const target = sourceBody.motionLinearVector;
+			this.bodySystem.createPendingAction("position", targetBody.handle, target);
+			// if the angle is set we'll use that for rotation
+			if (sourceBody.motionAngularVector)
+				this.bodySystem.createPendingAction(
+					"rotation",
+					targetBody.handle,
+					sourceBody.motionAngularVector
+				);
+			// bail
+			return undefined;
+		}
+		// we need to determine which type of force to add
+		//let doLinear = false;
+		//if (body1.isMotionSource && body1.motionType === "linear") doLinear = true;
+		//if (body2.isMotionSource && body2.motionType === "linear") doLinear = true;
+
+		if (sourceBody.motionType === "linear") {
+			// get the linear vector
+			const linearVector =
+				body1.motionLinearVector?.clone() ||
+				body2.motionLinearVector?.clone() ||
+				new THREE.Vector3(-10, 0, 0);
+			if (sourceBody.motionAsSurfaceVelocity) {
+				// this seems like the wrong way to do this but I'll follow the original example
+				// Determine the world space surface velocity of both bodies
+				const cLocalSpaceVelocity = linearVector?.clone();
+				const body1LinearSurfaceVelocity = body1.isMotionSource
+					? cLocalSpaceVelocity.applyQuaternion(rotation1)
+					: new THREE.Vector3(0, 0, 0);
+				const body2LinearSurfaceVelocity = body2.isMotionSource
+					? cLocalSpaceVelocity.applyQuaternion(rotation2)
+					: new THREE.Vector3(0, 0, 0);
+				const v = body2LinearSurfaceVelocity.sub(body1LinearSurfaceVelocity);
+				settings.mRelativeLinearSurfaceVelocity.Set(v.x, v.y, v.z);
+			} else {
+				// do it as an impulse
+				// THis could be dangerous because it uses the bodyInterface to apply impulse
+				if (this.useRotation) linearVector.applyQuaternion(sourceBody.rotation);
+				targetBody.addImpulse(linearVector);
+			}
+		}
+		// angular
+		if (sourceBody.motionType === "angular") {
+			if (sourceBody.motionAsSurfaceVelocity) {
+				const cLocalSpaceAngularVelocity = new THREE.Vector3(
+					0,
+					THREE.MathUtils.degToRad(10.0),
+					0
+				);
+				const body1AngularSurfaceVelocity = body1.isMotionSource
+					? cLocalSpaceAngularVelocity.applyQuaternion(rotation1)
+					: new THREE.Vector3(0, 0, 0);
+				const body2AngularSurfaceVelocity = body2.isMotionSource
+					? cLocalSpaceAngularVelocity.applyQuaternion(rotation2)
+					: new THREE.Vector3(0, 0, 0);
+
+				// Note that the angular velocity is the angular velocity around body 1's center of mass, so we need to add the linear velocity of body 2's center of mass
+				const COM1 = vec3.three(body1.body.GetCenterOfMassPosition());
+				const COM2 = vec3.three(body2.body.GetCenterOfMassPosition());
+				const body2LinearSurfaceVelocity = body2.isMotionSource
+					? body2AngularSurfaceVelocity.cross(COM1.clone().sub(COM2))
+					: new THREE.Vector3(0, 0, 0);
+
+				// Calculate the relative angular surface velocity
+				const rls = body2LinearSurfaceVelocity;
+				settings.mRelativeLinearSurfaceVelocity.Set(rls.x, rls.y, rls.z);
+				const ras = body2AngularSurfaceVelocity.sub(body1AngularSurfaceVelocity);
+				settings.mRelativeAngularSurfaceVelocity.Set(ras.x, ras.y, ras.z);
+			} else {
+				const angularVector =
+					body1.motionAngularVector?.clone() ||
+					body2.motionAngularVector?.clone() ||
+					new THREE.Vector3(0, 0, 0);
+				this.bodySystem.createPendingAction(
+					"applyTorque",
+					targetBody.handle,
+					angularVector
+				);
+			}
+		}
+	};
+	/*motionRemovedListener = (
+		body1: Jolt.BodyID,
+		body2: Jolt.BodyID,
+		manifold: Jolt.ContactManifold,
+		settings: Jolt.ContactSettings
+	) => {};*/
 }
