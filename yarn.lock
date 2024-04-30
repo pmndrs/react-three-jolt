@@ -1603,9 +1603,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@react-three/drei@npm:^9.105.1":
-  version: 9.105.1
-  resolution: "@react-three/drei@npm:9.105.1"
+"@react-three/drei@npm:^9.105.5":
+  version: 9.105.5
+  resolution: "@react-three/drei@npm:9.105.5"
   dependencies:
     "@babel/runtime": "npm:^7.11.2"
     "@mediapipe/tasks-vision": "npm:0.10.8"
@@ -1624,7 +1624,7 @@ __metadata:
     stats.js: "npm:^0.17.0"
     suspend-react: "npm:^0.1.3"
     three-mesh-bvh: "npm:^0.7.0"
-    three-stdlib: "npm:^2.29.4"
+    three-stdlib: "npm:^2.29.9"
     troika-three-text: "npm:^0.49.0"
     tunnel-rat: "npm:^0.1.2"
     utility-types: "npm:^3.10.0"
@@ -1638,7 +1638,7 @@ __metadata:
   peerDependenciesMeta:
     react-dom:
       optional: true
-  checksum: 10c0/d9cf31df00eb1f596b5d72fc24595c3b8296a31d95bd6afe992cb2baab31ea10df9bf75f1d6ead6df38b462c3107c370c640ef92f7e2763f2017c112d94eb7ca
+  checksum: 10c0/fbcd36422c0f8acdb7b85f85a4009f324558695f7a4901d5bffe371e457ab067a9c0d6b91ad6735219185c9971bfb48c5bebb8e35c68c629b9b3e2bf0cb0b56c
   languageName: node
   linkType: hard
 
@@ -4059,7 +4059,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "examples@workspace:apps/examples"
   dependencies:
-    "@react-three/drei": "npm:^9.105.1"
+    "@react-three/drei": "npm:^9.105.5"
     "@react-three/jolt": "npm:0.0.1"
     "@react-three/jolt-addons": "npm:0.0.1"
     "@react-three/jolt-controllers": "npm:0.0.1"
@@ -7813,6 +7813,22 @@ __metadata:
   peerDependencies:
     three: ">=0.128.0"
   checksum: 10c0/1dd54a4a5652eae5f245d5c748877cfe5e55cff421dacf1beb900b0911c5bdfb846c1ff9dfdc75ebe71cb4c6a1676ff6dca5bead02f5c7a6ec498cf59385f853
+  languageName: node
+  linkType: hard
+
+"three-stdlib@npm:^2.29.9":
+  version: 2.29.9
+  resolution: "three-stdlib@npm:2.29.9"
+  dependencies:
+    "@types/draco3d": "npm:^1.4.0"
+    "@types/offscreencanvas": "npm:^2019.6.4"
+    "@types/webxr": "npm:^0.5.2"
+    draco3d: "npm:^1.4.1"
+    fflate: "npm:^0.6.9"
+    potpack: "npm:^1.0.1"
+  peerDependencies:
+    three: ">=0.128.0"
+  checksum: 10c0/8d5cb603a563c03bfcb9c3c4b01076ce3e0a5ae4b1d2f67c7ec8a2130605892470e56296c5c6c61ecf13961d502f7b69ceba88cba2a16c93ef031442378d44fd
   languageName: node
   linkType: hard
 
