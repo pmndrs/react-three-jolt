@@ -931,16 +931,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@jridgewell/trace-mapping@npm:^0.3.12, @jridgewell/trace-mapping@npm:^0.3.23, @jridgewell/trace-mapping@npm:^0.3.24":
-  version: 0.3.25
-  resolution: "@jridgewell/trace-mapping@npm:0.3.25"
-  dependencies:
-    "@jridgewell/resolve-uri": "npm:^3.1.0"
-    "@jridgewell/sourcemap-codec": "npm:^1.4.14"
-  checksum: 10c0/3d1ce6ebc69df9682a5a8896b414c6537e428a1d68b02fcc8363b04284a8ca0df04d0ee3013132252ab14f2527bc13bea6526a912ecb5658f0e39fd2860b4df4
-  languageName: node
-  linkType: hard
-
 "@jridgewell/trace-mapping@npm:^0.3.17, @jridgewell/trace-mapping@npm:^0.3.9":
   version: 0.3.20
   resolution: "@jridgewell/trace-mapping@npm:0.3.20"
@@ -948,6 +938,16 @@ __metadata:
     "@jridgewell/resolve-uri": "npm:^3.1.0"
     "@jridgewell/sourcemap-codec": "npm:^1.4.14"
   checksum: 10c0/0ea0b2675cf513ec44dc25605616a3c9b808b9832e74b5b63c44260d66b58558bba65764f81928fc1033ead911f8718dca1134049c3e7a93937faf436671df31
+  languageName: node
+  linkType: hard
+
+"@jridgewell/trace-mapping@npm:^0.3.23, @jridgewell/trace-mapping@npm:^0.3.24":
+  version: 0.3.25
+  resolution: "@jridgewell/trace-mapping@npm:0.3.25"
+  dependencies:
+    "@jridgewell/resolve-uri": "npm:^3.1.0"
+    "@jridgewell/sourcemap-codec": "npm:^1.4.14"
+  checksum: 10c0/3d1ce6ebc69df9682a5a8896b414c6537e428a1d68b02fcc8363b04284a8ca0df04d0ee3013132252ab14f2527bc13bea6526a912ecb5658f0e39fd2860b4df4
   languageName: node
   linkType: hard
 
@@ -1696,7 +1696,7 @@ __metadata:
     "@types/three": "npm:^0.163.0"
     "@typescript-eslint/eslint-plugin": "npm:^7.7.1"
     "@typescript-eslint/parser": "npm:^7.5.0"
-    "@vitest/coverage-v8": "npm:^1.4.0"
+    "@vitest/coverage-v8": "npm:^1.5.2"
     eslint: "npm:^9.0.0"
     gamepad.js: "npm:^2.1.0"
     happy-dom: "npm:^14.7.1"
@@ -1729,7 +1729,7 @@ __metadata:
     "@types/three": "npm:^0.163.0"
     "@typescript-eslint/eslint-plugin": "npm:^7.7.1"
     "@typescript-eslint/parser": "npm:^7.5.0"
-    "@vitest/coverage-v8": "npm:^1.4.0"
+    "@vitest/coverage-v8": "npm:^1.5.2"
     camera-controls: "npm:^2.8.3"
     eslint: "npm:^9.0.0"
     happy-dom: "npm:^14.7.1"
@@ -1761,7 +1761,7 @@ __metadata:
     "@types/three": "npm:^0.163.0"
     "@typescript-eslint/eslint-plugin": "npm:^7.7.1"
     "@typescript-eslint/parser": "npm:^7.5.0"
-    "@vitest/coverage-v8": "npm:^1.4.0"
+    "@vitest/coverage-v8": "npm:^1.5.2"
     eslint: "npm:^9.0.0"
     gamepad.js: "npm:^2.1.0"
     happy-dom: "npm:^14.7.1"
@@ -2527,9 +2527,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@vitest/coverage-v8@npm:^1.4.0":
-  version: 1.4.0
-  resolution: "@vitest/coverage-v8@npm:1.4.0"
+"@vitest/coverage-v8@npm:^1.5.2":
+  version: 1.5.2
+  resolution: "@vitest/coverage-v8@npm:1.5.2"
   dependencies:
     "@ampproject/remapping": "npm:^2.2.1"
     "@bcoe/v8-coverage": "npm:^0.2.3"
@@ -2544,10 +2544,9 @@ __metadata:
     std-env: "npm:^3.5.0"
     strip-literal: "npm:^2.0.0"
     test-exclude: "npm:^6.0.0"
-    v8-to-istanbul: "npm:^9.2.0"
   peerDependencies:
-    vitest: 1.4.0
-  checksum: 10c0/1ff9db69c8f45c9e3f57d513d577331c23748c53d93122889b8634d1997a61a2a37a7284f520b647b837f44150656c1127b9c3392112139224bb86678aae1e7e
+    vitest: 1.5.2
+  checksum: 10c0/cc982753969ca31033072324121288fc1945bc7ad09cc00ade9e2d29852acbfb97b177e7bfd0ab6c4cacab1e6600da1e287ed11e340745ffbe55d19212c25cc7
   languageName: node
   linkType: hard
 
@@ -8188,17 +8187,6 @@ __metadata:
   bin:
     uuid: dist/bin/uuid
   checksum: 10c0/1607dd32ac7fc22f2d8f77051e6a64845c9bce5cd3dd8aa0070c074ec73e666a1f63c7b4e0f4bf2bc8b9d59dc85a15e17807446d9d2b17c8485fbc2147b27f9b
-  languageName: node
-  linkType: hard
-
-"v8-to-istanbul@npm:^9.2.0":
-  version: 9.2.0
-  resolution: "v8-to-istanbul@npm:9.2.0"
-  dependencies:
-    "@jridgewell/trace-mapping": "npm:^0.3.12"
-    "@types/istanbul-lib-coverage": "npm:^2.0.1"
-    convert-source-map: "npm:^2.0.0"
-  checksum: 10c0/e691ba4dd0dea4a884e52c37dbda30cce6f9eeafe9b26721e449429c6bb0f4b6d1e33fabe7711d0f67f7a34c3bfd56c873f7375bba0b1534e6a2843ce99550e5
   languageName: node
   linkType: hard
 
