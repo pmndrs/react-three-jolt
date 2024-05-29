@@ -52,7 +52,7 @@ interface RigidBodyProps {
 	quaternion?: number[];
 }
 export interface RigidBodyContext {
-	object: any;
+	body: BodyState | undefined;
 	type: string | undefined;
 	position: THREE.Vector3 | undefined;
 	rotation: THREE.Vector3 | undefined;
@@ -219,14 +219,14 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 		//@ts-ignore
 		const contextValue: RigidBodyContext = useMemo(() => {
 			return {
-				object: objectRef.current,
+				body: rigidBodyRef.current,
 				type,
 				position,
 				rotation,
 				scale,
 				quaternion
 			};
-		}, [objectRef, type, position, rotation, scale, quaternion]);
+		}, [rigidBodyRef, type, position, rotation, scale, quaternion]);
 		return (
 			<RigidBodyContext.Provider value={contextValue}>
 				<object3D ref={objectRef} {...objectProps}>

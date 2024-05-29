@@ -11,7 +11,7 @@ import { BufferGeometry, Mesh, Object3D, Vector3 } from "three";
 import { SphereGeometry, BoxGeometry, CapsuleGeometry, CylinderGeometry } from "three";
 import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
 import { Raw } from "../raw";
-import { quat, vec3 } from "../utils";
+import { anyVec3, quat, vec3 } from "../utils";
 
 export class ShapeSystem {
 	private physicsSystem: Jolt.PhysicsSystem;
@@ -27,6 +27,7 @@ export type AutoShape =
 	| "box"
 	| "sphere"
 	| "capsule"
+	| "taperedCapsule"
 	| "cylinder"
 	| "convex"
 	| "trimesh"
@@ -225,6 +226,109 @@ export const getShapeSettingsFromGeometry = (
 	}
 
 	return { shapeSettings, offset };
+};
+
+// create a shape manually
+export const generateShapeSettings = (
+	shapeType: AutoShape,
+	options?: any,
+	inSettings?: Jolt.ShapeSettings
+): Jolt.ShapeSettings => {
+	const jolt = Raw.module;
+	let shapeSettings = inSettings;
+
+	// Switch based on shapeType to set the shapeSettings
+	switch (shapeType) {
+		case "sphere": {
+			const radius = options.radius || 1;
+			shapeSettings = new jolt.SphereShapeSettings(radius);
+			break;
+		}
+		case "capsule": {
+			const radius = options.radius || 1;
+			const height = options.height || 1;
+			shapeSettings = new jolt.CapsuleShapeSettings(height / 2, radius);
+			break;
+		}
+		case "taperedCapsule": {
+			const radius = options.radius || 1;
+			const height = options.height || 1;
+			const topRadius = options.topRadius || 0.5;
+			shapeSettings = new jolt.TaperedCapsuleShapeSettings(height / 2, radius, topRadius);
+			break;
+		}
+		case "cylinder": {
+			const radius = options.radius || 1;
+			const height = options.height || 1;
+			shapeSettings = new jolt.CylinderShapeSettings(height / 2, radius, 0.5);
+			break;
+		}
+
+		case "convex": {
+			// if we passed a geometry pass to getShapeSettingsFromGeometry
+			if (options.geometry) {
+				const settings = getShapeSettingsFromGeometry(options.geometry, "convex");
+				shapeSettings = settings!.shapeSettings;
+				break;
+			}
+			const points = options.points || [];
+			shapeSettings = new jolt.ConvexHullShapeSettings();
+			points.forEach((point: Vector3) => {
+				//@ts-ignore
+				shapeSettings!.mPoints.push_back(new jolt.Vec3(point.x, point.y, point.z));
+			});
+			break;
+		}
+		// this one is heavy
+		case "trimesh": {
+			if (options.geometry) {
+				const settings = getShapeSettingsFromGeometry(options.geometry, "trimesh");
+				shapeSettings = settings!.shapeSettings;
+				break;
+			}
+			const vertices = options.vertices || [];
+			const indices = options.indices || [];
+			const verts = new jolt.VertexList();
+			vertices.forEach((point: Vector3) => {
+				verts.push_back(new jolt.Float3(point.x, point.y, point.z));
+			});
+			const tris = new jolt.IndexedTriangleList();
+			indices.forEach((tri: number[]) => {
+				tris.push_back(new jolt.IndexedTriangle(tri[0], tri[1], tri[2], 0));
+			});
+			const mats = new jolt.PhysicsMaterialList();
+			mats.push_back(new jolt.PhysicsMaterial());
+
+			shapeSettings = new jolt.MeshShapeSettings(verts, tris, mats);
+			break;
+		}
+	}
+	// typescript needs this for some reason
+	// TODO: remove this and get ts to recognize the default in the switch
+	if (!shapeSettings) {
+		shapeSettings = new jolt.BoxShapeSettings(new jolt.Vec3(1, 1, 1));
+	}
+	return shapeSettings;
+};
+
+export type CompoundShapeData = {
+	shapeSettings: Jolt.ShapeSettings;
+	position: anyVec3;
+	quaternion: THREE.Quaternion;
+};
+export const generateCompoundShapeSettings = (shapes: CompoundShapeData[], dynamic = false) => {
+	const jolt = Raw.module;
+	//const compoundShapeSettings = dynamic ? new jolt.MutableCompoundShapeSettings new jolt.StaticCompoundShapeSettings();
+	const compoundShapeSettings = new jolt.StaticCompoundShapeSettings();
+	shapes.forEach(({ shapeSettings, position: inPosition, quaternion: inQuaternion }) => {
+		const position = vec3.jolt(inPosition);
+		const quaternion = quat.jolt(inQuaternion);
+		compoundShapeSettings.AddShape(position, quaternion, shapeSettings, 0);
+		//destroy the memory
+		jolt.destroy(position);
+		jolt.destroy(quaternion);
+	});
+	return compoundShapeSettings;
 };
 
 // take a threejs plane that is a heightfield and generate a Jolt heightfield shape
