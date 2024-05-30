@@ -315,11 +315,14 @@ export type CompoundShapeData = {
 	shapeSettings: Jolt.ShapeSettings;
 	position: anyVec3;
 	quaternion: THREE.Quaternion;
+	shape?: Jolt.Shape;
 };
 export const generateCompoundShapeSettings = (shapes: CompoundShapeData[], dynamic = false) => {
 	const jolt = Raw.module;
-	//const compoundShapeSettings = dynamic ? new jolt.MutableCompoundShapeSettings new jolt.StaticCompoundShapeSettings();
-	const compoundShapeSettings = new jolt.StaticCompoundShapeSettings();
+	const compoundShapeSettings = dynamic
+		? //@ts-ignore for now as it is loaded at runtime. Type will be added soon.
+			new jolt.MutableCompoundShapeSettings()
+		: new jolt.StaticCompoundShapeSettings();
 	shapes.forEach(({ shapeSettings, position: inPosition, quaternion: inQuaternion }) => {
 		const position = vec3.jolt(inPosition);
 		const quaternion = quat.jolt(inQuaternion);

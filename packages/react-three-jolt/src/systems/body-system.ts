@@ -559,6 +559,7 @@ export function generateBodySettings(
 	const { bodyType = "dynamic", shapeType } = options;
 	// Generate or pass along the shape settings
 	const shapeSettings = isObject ? getShapeSettingsFromObject(object, shapeType) : object;
+	console.log("object", object, isObject, shapeSettings);
 	if (!shapeSettings) throw new Error("No shape settings found");
 	// Due to a Jolt limitation we cant just pass the settings and have to generate the shape here
 	const shape = shapeSettings.Create().Get();

@@ -1,9 +1,11 @@
-import { BodyState, Physics, RigidBody } from "@react-three/jolt";
+import { BodyState, Physics, RigidBody, Shape } from "@react-three/jolt";
 import { useDemo } from "../App";
 import { useRef, useMemo, useReducer, useEffect } from "react";
 import * as THREE from "three";
 import { Environment, Lightformer } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
+import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
+
 import { easing } from "maath";
 
 // for random
@@ -47,6 +49,7 @@ export function BallBox() {
 	return (
 		<>
 			<Physics
+				module={InitJolt}
 				paused={paused}
 				key={physicsKey}
 				interpolate={interpolate}
@@ -54,6 +57,10 @@ export function BallBox() {
 				gravity={0}
 				defaultBodySettings={defaultBodySettings}
 			>
+				<RigidBody position={[0, 0, 0]}>
+					<pointLight intensity={0.5} position={[0, 0, 0]} />
+					<Shape />
+				</RigidBody>
 				<Pointer />
 				{connectors.map(
 					(

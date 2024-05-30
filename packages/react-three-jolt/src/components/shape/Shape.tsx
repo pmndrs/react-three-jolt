@@ -7,23 +7,27 @@ import React, {
 	useEffect,
 	useState,
 	//  useLayoutEffect,
-	useMemo,
+	//useMemo,
 	useRef,
 	forwardRef,
 	ReactNode
 } from "react";
 import * as THREE from "three";
-import { Object3D } from "three";
-import { useForwardedRef, useJolt, useMount } from "../../hooks";
+//import { Object3D } from "three";
+
+import { useForwardedRef, useJolt } from "../../hooks";
 import { vec3 } from "../../utils";
-import { AutoShape, BodyState, CompoundShapeData } from "../../systems";
-import { generateShapeSettings, generateCompoundShapeSettings } from "../../systems";
+import { AutoShape, CompoundShapeData } from "../../systems";
+import {
+	generateShapeSettings
+	//generateCompoundShapeSettings
+} from "../../systems";
 // creates a Jolt Shape from three.js meshes.
 //NOTE by default doesn't render them
 
 // Shape Props
 interface ShapeProps {
-	children: ReactNode;
+	children?: ReactNode;
 	position?: number[];
 	rotation?: [number, number, number];
 	scale?: number[];
@@ -37,6 +41,7 @@ interface ShapeProps {
 	geometry?: THREE.BufferGeometry;
 	verts?: number[];
 	indexes?: number[];
+	onMount?: (data: CompoundShapeData) => void;
 }
 
 export interface ShapeContext {
@@ -53,11 +58,15 @@ export const Shape: React.FC<ShapeProps> = memo(
 			position = [0, 0, 0],
 			rotation = [0, 0, 0],
 			scale = [1, 1, 1],
+			onMount,
 			...options
 		} = props;
 
-		const { jolt, physicsSystem } = useJolt();
-		const shapeSystem = physicsSystem.bodySystem.shapeSystem;
+		const {
+			jolt
+			// physicsSystem
+		} = useJolt();
+		//const shapeSystem = physicsSystem.bodySystem.shapeSystem;
 		const ref = useForwardedRef(forwardedRef);
 
 		// dynamic checker
@@ -74,14 +83,16 @@ export const Shape: React.FC<ShapeProps> = memo(
 		const baseShape = useRef<Jolt.Shape>();
 
 		// helper method to generate the compound shape data
-		const generatecompoundData = (settings): CompoundShapeData => {
+		const generatecompoundData = (settings: any): CompoundShapeData => {
 			const quaternion = new THREE.Quaternion().setFromEuler(
+				//@ts-ignore
 				new THREE.Euler().fromArray(options.rotation || [0, 0, 0])
 			);
 			return {
 				shapeSettings: settings,
 				position: position,
-				quaternion: quaternion
+				quaternion: quaternion,
+				shape: baseShape.current
 			};
 		};
 		// sets or updates the shape with scale
@@ -89,7 +100,7 @@ export const Shape: React.FC<ShapeProps> = memo(
 			if (!isScaled || !baseShape.current) return;
 			const currentScaledShape = shape;
 			//todo: do we need to cleanup this vec3?
-			setShape(new jolt.ScaledShape(baseShape.current, vec3.jolt(scale)));
+			setShape(baseShape.current.ScaleShape(vec3.jolt(scale)).Get());
 			// cleanup the old shape
 			jolt.destroy(currentScaledShape);
 		};
@@ -128,6 +139,8 @@ export const Shape: React.FC<ShapeProps> = memo(
 		// WHen the shape changes
 		useEffect(() => {
 			ref.current = generatecompoundData(shapeSettings.current);
+			console.log("shape changed", ref.current);
+			if (onMount) onMount(ref.current);
 		}, [shape]);
 
 		return (
@@ -141,3 +154,4 @@ export const Shape: React.FC<ShapeProps> = memo(
 		);
 	})
 );
+Shape.displayName = "Shape";

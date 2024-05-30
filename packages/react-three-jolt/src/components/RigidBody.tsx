@@ -7,7 +7,8 @@ import React, {
 	useMemo,
 	useRef,
 	forwardRef,
-	ReactNode
+	ReactNode,
+	Children
 } from "react";
 import * as THREE from "three";
 import { Object3D } from "three";
@@ -103,6 +104,23 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 		// this allows us to debug on the physics system or the component specifically
 		const debug = propDebug || physicsDebug;
 		//* Load the body -------------------------------------
+		// handler for when shapes load
+		const handleShapeMount = (shapeData: any) => {
+			console.log("Shape mounted", shapeData);
+			// You can now use the shapeData in your RigidBody component
+		};
+
+		// Add the onMount prop to any Shape children
+
+		const childrenWithProps = Children.map(children, (child) => {
+			//@ts-ignore
+			if (React.isValidElement(child) && child.type.displayName === "Shape") {
+				//@ts-ignore
+				return React.cloneElement(child, { onMount: handleShapeMount });
+			}
+			return child;
+		});
+
 		useEffect(() => {
 			if (!bodySystem) return;
 			if (objectRef.current) {
@@ -116,6 +134,17 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 				//put the initial position, rotation, scale, and quaternion in the options
 				if (position) objectRef.current.position.copy(vec3.three(position));
 				if (rotation) objectRef.current.rotation.setFromVector3(vec3.three(rotation));
+
+				// detect if any of the children are shapes
+				if (children) {
+					const possibleShapes = Children.toArray(children);
+					//@ts-ignore
+					const shapes = possibleShapes.filter(
+						//@ts-ignore
+						(child) => child.type.displayName === "Shape"
+					);
+					console.log("shapes", shapes);
+				}
 
 				//@ts-ignore
 				const bodyHandle = bodySystem.addBody(objectRef.current, options);
@@ -230,7 +259,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 		return (
 			<RigidBodyContext.Provider value={contextValue}>
 				<object3D ref={objectRef} {...objectProps}>
-					{children}
+					{childrenWithProps}
 					<mesh ref={debugMeshRef} visible={debug} ignore />
 				</object3D>
 			</RigidBodyContext.Provider>
