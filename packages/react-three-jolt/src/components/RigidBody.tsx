@@ -143,7 +143,6 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 				const bodyHandle = bodySystem.addBody(objectRef.current, options);
 				const body = bodySystem.getBody(bodyHandle);
 				rigidBodyRef.current = body;
-				console.log("body created", body);
 			}
 			bodyLoaded.current = true;
 		}, [activeShape, bodySystem, rigidBodyRef]);
@@ -156,28 +155,10 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 		});
 
 		//*/ Debugging -------------------------------------
-		// create the debug mesh
-		const createDebugMesh = () => {
-			const bodyState = rigidBodyRef.current as BodyState;
-			const newMesh = getThreeObjectForBody(bodyState.body);
-			newMesh.material = new THREE.MeshPhongMaterial({
-				color: 0xff0000,
-				wireframe: true
-			});
-			// set the debugMesh
-			debugMesh.current = newMesh;
-		};
-		useEffect(() => {
-			if (!rigidBodyRef.current) return;
-			if (debug) {
-				if (!debugMesh.current) createDebugMesh();
 
-				objectRef.current!.add(debugMesh.current!);
-			}
-			if (!debug && debugMesh.current) {
-				objectRef.current!.remove(debugMesh.current);
-			}
-		}, [debug, createDebugMesh, rigidBodyRef]);
+		useEffect(() => {
+			if (rigidBodyRef.current) (rigidBodyRef.current as BodyState).debug = debug;
+		}, [debug, rigidBodyRef]);
 
 		//* Shape Updates -------------------------------------
 		// Shape update
@@ -189,21 +170,6 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 				body.shape = activeShape;
 				// if there is a debug mesh, update it
 				// if we are debugging
-
-				if (debug) {
-					// remove the existing mesh
-					if (debugMesh.current) objectRef.current!.remove(debugMesh.current);
-					createDebugMesh();
-					objectRef.current!.add(debugMesh.current!);
-					console.log("Debug Mesh Reset");
-				} else {
-					// if we are not debugging, remove the debug mesh
-					if (debugMesh.current) {
-						// todo: probably can remove this, safty removal
-						objectRef.current!.remove(debugMesh.current);
-						debugMesh.current = undefined;
-					}
-				}
 			}
 		}, [activeShape, rigidBodyRef]);
 
@@ -212,6 +178,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			if (!rigidBodyRef.current || !bodyLoaded) return;
 			const body = rigidBodyRef.current as BodyState;
 			if (scale) {
+				console.log("setting scale", scale, body);
 				body.scale = vec3.three(scale);
 			}
 		}, [scale, rigidBodyRef]);

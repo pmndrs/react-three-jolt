@@ -54,10 +54,6 @@ export function BallBox() {
 			setOutScale([7, 7, 7]);
 			console.log("scale updated");
 		}, 6000);
-		timeout.setTimeout(() => {
-			setPosition([0, 0, 2]);
-			console.log("position updated", position);
-		}, 3000);
 	}, [timeout]);
 
 	return (
@@ -71,12 +67,17 @@ export function BallBox() {
 				gravity={0}
 				defaultBodySettings={defaultBodySettings}
 			>
-				<RigidBody position={position}>
+				<RigidBody scale={outScale}>
 					<pointLight intensity={10} />
-					<Shape scale={outScale}>
+					<Shape>
 						<Shape type="sphere" position={[-1, 0, 0]} />
 						<Shape type="sphere" position={[1, 0, 0]} />
 					</Shape>
+				</RigidBody>
+				<RigidBody scale={outScale} position={[-2, 0, 0]}>
+					<mesh>
+						<sphereGeometry args={[1, 32, 32]} />
+					</mesh>
 				</RigidBody>
 				{/*<Pointer /> */}
 				{/*connectors.map(

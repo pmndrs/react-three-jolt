@@ -12,7 +12,7 @@ import * as THREE from "three";
 import { Raw } from "../raw";
 
 import { vec3, quat, anyVec3 } from "../utils";
-import type { BodySystem } from "./body-system";
+import { getThreeObjectForBody, type BodySystem } from "./body-system";
 
 // Initital body object copied from r3/rapier's state object
 export class BodyState {
@@ -20,10 +20,12 @@ export class BodyState {
 	body: Jolt.Body;
 	BodyID: Jolt.BodyID;
 	object: Object3D | THREE.InstancedMesh;
+	debugMesh?: Object3D;
 	invertedWorldMatrix: Matrix4;
 	handle: number;
 	index?: number;
 	activeScale = new THREE.Vector3(1, 1, 1);
+	isDebugging = false;
 
 	// obstruction and collision
 	allowObstruction = true; // temporarily block obstruction
@@ -92,8 +94,7 @@ export class BodyState {
 		this.meshType = object instanceof InstancedMesh ? "instancedMesh" : "mesh";
 		this.invertedWorldMatrix = object.matrixWorld.clone().invert();
 		if (index !== undefined) this.index = index;
-		// not currently used
-		this.scale = object.scale.clone();
+
 		// not sure this is a good idea here
 		this.object.userData.body = body;
 		this.object.userData.bodyHandle = this.handle;
@@ -160,6 +161,35 @@ export class BodyState {
 	// set the shape of the body
 	set shape(shape: Jolt.Shape) {
 		this.bodyInterface.SetShape(this.BodyID, shape, false, Raw.module.EActivation_Activate);
+		// update the debug object if it exists
+		if (this.debugMesh) this.updateDebugMesh();
+	}
+
+	//* Debugging ===============================================
+	updateDebugMesh() {
+		const newMesh = getThreeObjectForBody(this.body);
+		// if the current object is visible it will have a parent
+		const currentParent = this.debugMesh?.parent;
+		if (currentParent) currentParent.remove(this.debugMesh!);
+		this.debugMesh = newMesh;
+		if (currentParent) currentParent.add(this.debugMesh);
+	}
+	// get and set debugging
+	get debug() {
+		return this.isDebugging;
+	}
+	set debug(newDebug: boolean) {
+		//if we are already debugging stop by removing from the object
+		if (!newDebug && this.isDebugging) {
+			this.object.remove(this.debugMesh!);
+			this.isDebugging = false;
+			return;
+		}
+		// check if the debug mesh already exists
+		if (!this.debugMesh) this.updateDebugMesh();
+		// add the debug mesh to the object
+		this.object.add(this.debugMesh!);
+		this.isDebugging = true;
 	}
 
 	//* Direct Manipulation ===================================
@@ -237,15 +267,54 @@ export class BodyState {
 	}
 
 	set scale(inScale: THREE.Vector3 | number[] | number) {
+		console.log("** Setting Scale **", inScale, typeof inScale);
 		const scale =
 			inScale instanceof Number
 				? vec3.three(inScale, inScale as number, inScale as number)
 				: vec3.three(inScale);
-		this.activeScale = scale;
 
+		const existingShape = this.body.GetShape() as Jolt.ScaledShape;
+		let baseShape: Jolt.Shape | Jolt.ScaledShape = existingShape;
+		// first, determine if the shape is a scaled shape
+		if (existingShape.GetSubType() === Raw.module.EShapeSubType_Scaled) {
+			// get the existing scale
+			const existingScale = existingShape.GetScale();
+			// compare existing scale to new scale
+			if (
+				existingScale.GetX() === scale.x &&
+				existingScale.GetY() === scale.y &&
+				existingScale.GetZ() === scale.z
+			) {
+				// if they are the same, we don't need to do anything
+				return;
+			}
+
+			baseShape = existingShape.GetInnerShape();
+		}
+		// create the new scaled shape
+		const joltScale = vec3.jolt(scale);
+		const newShape = new Raw.module.ScaledShape(baseShape, joltScale);
+		// set the new shape
+		this.bodyInterface.SetShape(this.BodyID, newShape, true, Raw.module.EActivation_Activate);
+		//cleanup the scale
+		Raw.module.destroy(joltScale);
+
+		// if we are a regular shape we can get an accurate actualScale
+		let actualScale = scale;
+
+		// check if the new shape is a scaled shape
+		if (newShape.GetSubType() === Raw.module.EShapeSubType_Scaled) {
+			console.log(
+				"this is a scaled shape",
+				newShape.GetSubType(),
+				Raw.module.EShapeSubType_Scaled
+			);
+			//actualScale = vec3.three(newShape.GetScale());
+		}
+		this.activeScale = actualScale;
 		// if not an instance update the object
 		if (!this.isInstance) {
-			this.object.scale.copy(scale);
+			this.object.scale.copy(actualScale);
 		}
 	}
 	// get the velocity of the body

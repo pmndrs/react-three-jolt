@@ -140,6 +140,8 @@ export const Shape: React.FC<ShapeProps> = memo(
 		};
 		// sets or updates the shape with scale
 		const updateScaleShape = () => {
+			console.warn("dont call this right now, will use in the future for compound shapes");
+			return; /*
 			if (!isScaled || !baseShape.current) return;
 			// because we can have no scale set and be dynamic have a scale fallback
 			const shapeScale = vec3.jolt(scale || [1, 1, 1]);
@@ -149,6 +151,7 @@ export const Shape: React.FC<ShapeProps> = memo(
 			// cleanup the old shape
 			//if (currentScaledShape) jolt.destroy(currentScaledShape);
 			jolt.destroy(shapeScale);
+			*/
 		};
 		// creates the shape from scratch
 		const generateShape = () => {
@@ -160,14 +163,15 @@ export const Shape: React.FC<ShapeProps> = memo(
 			//generate the shape
 			baseShape.current = shapeSettings.current.Create().Get();
 			// if we need to scale, wrap the shape in a transformShape
+			/* temporarily removing as the root shape doesn't need to scale, handled by BodyState
 			if (isScaled) {
 				updateScaleShape();
 			} else {
 				//console.log("Setting shape from generate shape");
 				setShape(baseShape.current);
 			}
-			// cleanup the old shape
-			//if (currentShape) jolt.destroy(currentShape);
+			*/
+			setShape(baseShape.current);
 		};
 		// updates the shape using the existing shapesettings
 
@@ -190,7 +194,7 @@ export const Shape: React.FC<ShapeProps> = memo(
 			if (!isScaled || scale === prevScale.current) return;
 			prevScale.current = scale;
 			console.log("Scale has changed in shape", scale);
-			updateScaleShape();
+			//updateScaleShape();
 		}, [scale]);
 
 		// WHen the shape changes
