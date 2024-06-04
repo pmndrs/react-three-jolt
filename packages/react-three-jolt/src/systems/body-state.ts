@@ -23,6 +23,7 @@ export class BodyState {
 	invertedWorldMatrix: Matrix4;
 	handle: number;
 	index?: number;
+	activeScale = new THREE.Vector3(1, 1, 1);
 
 	// obstruction and collision
 	allowObstruction = true; // temporarily block obstruction
@@ -45,10 +46,6 @@ export class BodyState {
 	motionAngularVector?: THREE.Vector3;
 	motionType: "linear" | "angular" = "linear";
 	motionAsSurfaceVelocity = false;
-	/**
-	 * Required for instanced rigid bodies. (from r3/rapier)
-	 */
-	scale: Vector3;
 
 	get isSleeping() {
 		return !this.body.IsActive();
@@ -155,6 +152,15 @@ export class BodyState {
 		// update the matrix
 		this.setMatrix(matrix);
 	}
+	//* Shapes ===============================================
+	// get the shape of the body
+	get shape() {
+		return this.body.GetShape();
+	}
+	// set the shape of the body
+	set shape(shape: Jolt.Shape) {
+		this.bodyInterface.SetShape(this.BodyID, shape, false, Raw.module.EActivation_Activate);
+	}
 
 	//* Direct Manipulation ===================================
 	// destroy the body
@@ -194,6 +200,7 @@ export class BodyState {
 	// TODO: NOTE. This is how to correctly cleanup a Jolt Vector
 	set position(position) {
 		const newPosition = vec3.jolt(position);
+		console.log("BodyState setting position", position);
 		this.bodyInterface.SetPosition(this.BodyID, newPosition, Raw.module.EActivation_Activate);
 		Raw.module.destroy(newPosition);
 	}
@@ -225,7 +232,22 @@ export class BodyState {
 		this.position = position;
 		this.rotation = rotation;
 	}
-	// physics related getters and setters
+	get scale() {
+		return this.activeScale;
+	}
+
+	set scale(inScale: THREE.Vector3 | number[] | number) {
+		const scale =
+			inScale instanceof Number
+				? vec3.three(inScale, inScale as number, inScale as number)
+				: vec3.three(inScale);
+		this.activeScale = scale;
+
+		// if not an instance update the object
+		if (!this.isInstance) {
+			this.object.scale.copy(scale);
+		}
+	}
 	// get the velocity of the body
 	get velocity() {
 		return vec3.three(this.body.GetLinearVelocity());

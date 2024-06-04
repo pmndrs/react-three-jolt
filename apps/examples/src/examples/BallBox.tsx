@@ -1,6 +1,6 @@
-import { BodyState, Physics, RigidBody, Shape } from "@react-three/jolt";
+import { BodyState, Physics, RigidBody, Shape, useSetTimeout } from "@react-three/jolt";
 import { useDemo } from "../App";
-import { useRef, useMemo, useReducer, useEffect } from "react";
+import { useRef, useMemo, useReducer, useEffect, useState } from "react";
 import * as THREE from "three";
 import { Environment, Lightformer } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
@@ -45,6 +45,20 @@ export function BallBox() {
 	const defaultBodySettings = {
 		mRestitution: 0.1
 	};
+	const [outScale, setOutScale] = useState([5, 5, 5]);
+	const [position, setPosition] = useState([0, 0, 0]);
+
+	const timeout = useSetTimeout();
+	useEffect(() => {
+		timeout.setTimeout(() => {
+			setOutScale([7, 7, 7]);
+			console.log("scale updated");
+		}, 6000);
+		timeout.setTimeout(() => {
+			setPosition([0, 0, 2]);
+			console.log("position updated", position);
+		}, 3000);
+	}, [timeout]);
 
 	return (
 		<>
@@ -57,19 +71,22 @@ export function BallBox() {
 				gravity={0}
 				defaultBodySettings={defaultBodySettings}
 			>
-				<RigidBody position={[0, 0, 0]}>
-					<pointLight intensity={0.5} position={[0, 0, 0]} />
-					<Shape />
+				<RigidBody position={position}>
+					<pointLight intensity={10} />
+					<Shape scale={outScale}>
+						<Shape type="sphere" position={[-1, 0, 0]} />
+						<Shape type="sphere" position={[1, 0, 0]} />
+					</Shape>
 				</RigidBody>
-				<Pointer />
-				{connectors.map(
+				{/*<Pointer /> */}
+				{/*connectors.map(
 					(
 						props,
 						i //@ts-ignore biome-ignore  Sphere props
 					) => (
 						<Sphere key={i} {...props} />
 					)
-				)}
+				) */}
 			</Physics>
 
 			<Environment resolution={256}>

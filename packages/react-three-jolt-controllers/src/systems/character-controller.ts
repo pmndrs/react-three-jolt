@@ -498,7 +498,7 @@ export class CharacterControllerSystem {
 	// create the anchor object for rigs
 	private createAnchor() {
 		const shapeSettings = new Raw.module.SphereShapeSettings(0.5);
-		const bodySettings = generateBodySettings(shapeSettings, {
+		const bodySettings = generateBodySettings(shapeSettings.Create().Get(), {
 			bodyType: "kinematic"
 		});
 		const anchor = this.physicsSystem.bodyInterface.CreateBody(bodySettings);

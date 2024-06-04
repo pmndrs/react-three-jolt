@@ -230,15 +230,24 @@ export const getShapeSettingsFromGeometry = (
 
 // create a shape manually
 export const generateShapeSettings = (
-	shapeType: AutoShape,
+	shapeType: AutoShape | "staticCompound" | "mutableCompound",
 	options?: any,
 	inSettings?: Jolt.ShapeSettings
 ): Jolt.ShapeSettings => {
 	const jolt = Raw.module;
 	let shapeSettings = inSettings;
+	// console.log("Generating shape shapeType", shapeType);
 
 	// Switch based on shapeType to set the shapeSettings
 	switch (shapeType) {
+		// Compound shapes ---------------------------------
+		/*case "staticCompound": {
+			const shapes = options.shapes || [];
+			shapeSettings = generateCompoundShapeSettings(shapes, false);
+			break;
+		}
+		*/
+		// Basic types -------------------------------------
 		case "sphere": {
 			const radius = options.radius || 1;
 			shapeSettings = new jolt.SphereShapeSettings(radius);
@@ -302,13 +311,17 @@ export const generateShapeSettings = (
 			shapeSettings = new jolt.MeshShapeSettings(verts, tris, mats);
 			break;
 		}
+
+		// default to box
+		default: {
+			const size = options.size ? vec3.three(options.size) : new THREE.Vector3(1, 1, 1);
+			shapeSettings = new jolt.BoxShapeSettings(
+				new jolt.Vec3(size.x / 2, size.y / 2, size.z / 2)
+			);
+			break;
+		}
 	}
-	// typescript needs this for some reason
-	// TODO: remove this and get ts to recognize the default in the switch
-	if (!shapeSettings) {
-		shapeSettings = new jolt.BoxShapeSettings(new jolt.Vec3(1, 1, 1));
-	}
-	return shapeSettings;
+	return shapeSettings!;
 };
 
 export type CompoundShapeData = {
@@ -386,7 +399,6 @@ export function createMeshForShape(shape: Jolt.Shape): THREE.BufferGeometry {
 		scale
 	);
 	Raw.module.destroy(scale);
-
 	// Get a view on the triangle data (does not make a copy)
 	const vertices = new Float32Array(
 		Raw.module.HEAPF32.buffer,
