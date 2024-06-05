@@ -71,7 +71,6 @@ export const Shape: React.FC<ShapeProps> = memo(
 		const { setActiveShape } = useContext(RigidBodyContext) as RigidBodyContext;
 		// if we are the child of another shape, we can get the shape context
 		const parentShape = useContext(ShapeContext);
-		//console.log("parentShape", parentShape);
 
 		// dynamic checker
 		const dynamicOnInit = useRef(dynamic);
@@ -81,7 +80,6 @@ export const Shape: React.FC<ShapeProps> = memo(
 			throw new Error("Cannot change dynamic prop after initialization");
 		}
 		const isScaled = scale || (dynamic && !children);
-		//console.log("isScaled", isScaled);
 
 		const [shape, setShape] = useState<Jolt.Shape>();
 		const shapeSettings = useRef<Jolt.ShapeSettings>();
@@ -128,8 +126,7 @@ export const Shape: React.FC<ShapeProps> = memo(
 		// helper method to generate the compound shape data
 		const generatecompoundData = (settings: any): CompoundShapeData => {
 			const quaternion = new THREE.Quaternion().setFromEuler(
-				//@ts-ignore
-				new THREE.Euler().fromArray(options.rotation || [0, 0, 0])
+				new THREE.Euler().fromArray(rotation || [0, 0, 0])
 			);
 			return {
 				shapeSettings: settings,
@@ -179,7 +176,6 @@ export const Shape: React.FC<ShapeProps> = memo(
 		useEffect(() => {
 			if (children) {
 				// we are a compound shape.
-				//console.log("compound shape", subShapes.current);
 				// for now lets do everything as static
 				shapeSettings.current = generateCompoundShapeSettings(subShapes.current);
 			} else {
@@ -193,7 +189,6 @@ export const Shape: React.FC<ShapeProps> = memo(
 		useEffect(() => {
 			if (!isScaled || scale === prevScale.current) return;
 			prevScale.current = scale;
-			console.log("Scale has changed in shape", scale);
 			//updateScaleShape();
 		}, [scale]);
 
@@ -204,7 +199,6 @@ export const Shape: React.FC<ShapeProps> = memo(
 			if (parentShape) {
 				if (!addedToParent.current) {
 					// if the parent is a compound shape we need to add this shape to it
-					console.log("Adding to parent shape", ref.current);
 					//@ts-ignore
 					if (ref.current) parentShape.addShape(ref.current);
 					addedToParent.current = true;
@@ -212,7 +206,6 @@ export const Shape: React.FC<ShapeProps> = memo(
 			} else {
 				if (shape === prevShape.current) return;
 				prevShape.current = shape;
-				console.log("Shape: Sending to RB new shape", ref.current);
 				// if we are the top level shape, we need to set the active shape
 				setActiveShape(shape);
 			}

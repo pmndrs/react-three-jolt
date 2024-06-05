@@ -1,12 +1,15 @@
 import { BodyState, Physics, RigidBody, Shape, useSetTimeout } from "@react-three/jolt";
 import { useDemo } from "../App";
-import { useRef, useMemo, useReducer, useEffect, useState } from "react";
+import { useRef, useMemo, useReducer, useEffect, useState, Suspense } from "react";
 import * as THREE from "three";
-import { Environment, Lightformer } from "@react-three/drei";
+import { CameraControls, Environment, Lightformer } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
 
 import { easing } from "maath";
+
+import { JoltBolt } from "./Bodies/joltBolt";
+import { BoxContainer } from "./Bodies/BoxContainer";
 
 // for random
 const r = THREE.MathUtils.randFloatSpread;
@@ -36,24 +39,35 @@ export function BallBox() {
 	const { debug, paused, interpolate, physicsKey } = useDemo();
 	const [accent, click] = useReducer((state) => ++state % accents.length, 0);
 	const connectors = useMemo(() => shuffle(accent), [accent]);
-	const { gl } = useThree();
-	// setup onclick from outside the canvas
+	const { gl, controls, camera } = useThree();
+	//disable controls
 	useEffect(() => {
-		gl.domElement.addEventListener("click", click);
-		return () => gl.domElement.removeEventListener("click", click);
-	}, [gl]);
+		if (!controls) return;
+		//controls.rotate(0, 0, false);
+		setTimeout(() => {
+			controls.enabled = false;
+		}, 100);
+		return () => {
+			controls!.enabled = true;
+		};
+	}, [controls, camera]);
+
 	const defaultBodySettings = {
 		mRestitution: 0.1
 	};
-	const [outScale, setOutScale] = useState([5, 5, 5]);
-	const [position, setPosition] = useState([0, 0, 0]);
-
+	const [outScale, setOutScale] = useState([1, 1, 1]);
+	const [showDropIn, setShowDropIn] = useState(false);
+	let ballColor = useRef("#8a4fc9");
 	const timeout = useSetTimeout();
 	useEffect(() => {
 		timeout.setTimeout(() => {
-			setOutScale([7, 7, 7]);
+			setOutScale([3, 3, 3]);
 			console.log("scale updated");
-		}, 6000);
+			ballColor.current = "#FFD23F";
+		}, 3000);
+		timeout.setTimeout(() => {
+			setShowDropIn(true);
+		}, 5000);
 	}, [timeout]);
 
 	return (
@@ -67,15 +81,42 @@ export function BallBox() {
 				gravity={0}
 				defaultBodySettings={defaultBodySettings}
 			>
+				<BoxContainer />
+				<RigidBody position={[3, 3, 3]} onlyInitialize>
+					<JoltBolt />
+				</RigidBody>
+				{/*]
 				<RigidBody scale={outScale}>
 					<pointLight intensity={10} />
 					<Shape>
-						<Shape type="sphere" position={[-1, 0, 0]} />
+						<Shape type="box" rotation={[1, 1.5, 0]} position={[-1, 0, 0]} />
 						<Shape type="sphere" position={[1, 0, 0]} />
 					</Shape>
 				</RigidBody>
-				<RigidBody scale={outScale} position={[-2, 0, 0]}>
-					<mesh>
+	*/}
+				{showDropIn && (
+					<RigidBody position={[0, -1, 0]} onlyInitialize>
+						<mesh receiveShadow>
+							<meshStandardMaterial color="#EE4266" />
+							<boxGeometry args={[2, 2, 2]} />
+						</mesh>
+					</RigidBody>
+				)}
+				<RigidBody position={[-1, 0, 0]} onlyInitialize>
+					<mesh receiveShadow>
+						<meshStandardMaterial color="#8a4fc9" />
+						<sphereGeometry args={[1, 32, 32]} />
+					</mesh>
+				</RigidBody>
+				<RigidBody scale={outScale} onlyInitialize position={[0, 1, 0]}>
+					<mesh receiveShadow>
+						<meshStandardMaterial color={ballColor.current} />
+						<sphereGeometry args={[1, 32, 32]} />
+					</mesh>
+				</RigidBody>
+				<RigidBody position={[1, 0, 0]} onlyInitialize>
+					<mesh receiveShadow>
+						<meshStandardMaterial color="#8a4fc9" />
 						<sphereGeometry args={[1, 32, 32]} />
 					</mesh>
 				</RigidBody>

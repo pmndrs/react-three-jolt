@@ -149,9 +149,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 
 		// When destroying we need to do some stuff
 		useUnmount(() => {
-			console.log("RB Destroying");
-			//@ts-ignore
-			bodySystem.removeBody(rigidBodyRef.current.handle);
+			bodySystem.removeBody((rigidBodyRef.current! as BodyState).handle);
 		});
 
 		//*/ Debugging -------------------------------------
@@ -164,23 +162,15 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 		// Shape update
 		useEffect(() => {
 			if (!rigidBodyRef.current || !bodyLoaded) return;
-			console.log("RB setting shape");
 			const body = rigidBodyRef.current as BodyState;
-			if (activeShape) {
-				body.shape = activeShape;
-				// if there is a debug mesh, update it
-				// if we are debugging
-			}
+			if (activeShape) body.shape = activeShape;
 		}, [activeShape, rigidBodyRef]);
 
 		// scale the shape when the input scale changes
 		useEffect(() => {
 			if (!rigidBodyRef.current || !bodyLoaded) return;
 			const body = rigidBodyRef.current as BodyState;
-			if (scale) {
-				console.log("setting scale", scale, body);
-				body.scale = vec3.three(scale);
-			}
+			if (scale) body.scale = vec3.three(scale);
 		}, [scale, rigidBodyRef]);
 		//* Prop Updates -------------------------------------
 		useEffect(() => {

@@ -759,7 +759,7 @@ export function getThreeObjectForBody(body: Jolt.Body, color = "#E07A5F") {
 			threeObject = new THREE.Mesh(createMeshForShape(shape), material);
 			break;
 	}
-
+	// todo: these may not be needed. When used to create a debug shape this is actually wrong
 	threeObject.position.copy(vec3.three(body.GetPosition()));
 	threeObject.quaternion.copy(quat.joltToThree(body.GetRotation()));
 

@@ -168,6 +168,8 @@ export class BodyState {
 	//* Debugging ===============================================
 	updateDebugMesh() {
 		const newMesh = getThreeObjectForBody(this.body);
+		// reset any weird position data
+		newMesh.position.set(0, 0, 0);
 		// if the current object is visible it will have a parent
 		const currentParent = this.debugMesh?.parent;
 		if (currentParent) currentParent.remove(this.debugMesh!);
@@ -180,7 +182,7 @@ export class BodyState {
 	}
 	set debug(newDebug: boolean) {
 		//if we are already debugging stop by removing from the object
-		if (!newDebug && this.isDebugging) {
+		if (!newDebug) {
 			this.object.remove(this.debugMesh!);
 			this.isDebugging = false;
 			return;
@@ -230,7 +232,6 @@ export class BodyState {
 	// TODO: NOTE. This is how to correctly cleanup a Jolt Vector
 	set position(position) {
 		const newPosition = vec3.jolt(position);
-		console.log("BodyState setting position", position);
 		this.bodyInterface.SetPosition(this.BodyID, newPosition, Raw.module.EActivation_Activate);
 		Raw.module.destroy(newPosition);
 	}
@@ -267,16 +268,17 @@ export class BodyState {
 	}
 
 	set scale(inScale: THREE.Vector3 | number[] | number) {
-		console.log("** Setting Scale **", inScale, typeof inScale);
 		const scale =
 			inScale instanceof Number
 				? vec3.three(inScale, inScale as number, inScale as number)
 				: vec3.three(inScale);
 
-		const existingShape = this.body.GetShape() as Jolt.ScaledShape;
+		let existingShape = this.body.GetShape() as Jolt.ScaledShape;
 		let baseShape: Jolt.Shape | Jolt.ScaledShape = existingShape;
 		// first, determine if the shape is a scaled shape
 		if (existingShape.GetSubType() === Raw.module.EShapeSubType_Scaled) {
+			// we have to be 100% that this shape has what we need
+			existingShape = Raw.module.castObject(existingShape, Raw.module.ScaledShape);
 			// get the existing scale
 			const existingScale = existingShape.GetScale();
 			// compare existing scale to new scale
@@ -293,7 +295,10 @@ export class BodyState {
 		}
 		// create the new scaled shape
 		const joltScale = vec3.jolt(scale);
-		const newShape = new Raw.module.ScaledShape(baseShape, joltScale);
+		const newShape = Raw.module.castObject(
+			new Raw.module.ScaledShape(baseShape, joltScale),
+			Raw.module.ScaledShape
+		);
 		// set the new shape
 		this.bodyInterface.SetShape(this.BodyID, newShape, true, Raw.module.EActivation_Activate);
 		//cleanup the scale
@@ -304,12 +309,7 @@ export class BodyState {
 
 		// check if the new shape is a scaled shape
 		if (newShape.GetSubType() === Raw.module.EShapeSubType_Scaled) {
-			console.log(
-				"this is a scaled shape",
-				newShape.GetSubType(),
-				Raw.module.EShapeSubType_Scaled
-			);
-			//actualScale = vec3.three(newShape.GetScale());
+			actualScale = vec3.three(newShape.GetScale());
 		}
 		this.activeScale = actualScale;
 		// if not an instance update the object
@@ -444,7 +444,6 @@ export class BodyState {
 	}
 	// add impulse to the body
 	addImpulse(impulse: Vector3) {
-		//console.log("adding impulse", impulse);
 		const newVec = vec3.jolt(impulse);
 		this.body.AddImpulse(newVec);
 		Raw.module.destroy(newVec);
