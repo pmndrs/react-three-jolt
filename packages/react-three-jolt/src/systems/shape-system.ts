@@ -21,6 +21,9 @@ export class ShapeSystem {
 		this.physicsSystem = physicsSystem;
 		this.bodyInterface = this.physicsSystem.GetBodyInterface();
 	}
+	// I'm not sure which functions to expose to the runtime
+	//getShapeSettingsFromObject = (object: Object3D, shapeType?: AutoShape) => getShapeSettingsFromObject(object, shapeType);
+	//getShapeSettingsFromGeometry = (geometry: BufferGeometry, shapeType?: AutoShape) => getShapeSettingsFromGeometry(geometry, shapeType);
 }
 
 export type AutoShape =

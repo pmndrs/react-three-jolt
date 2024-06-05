@@ -10,6 +10,10 @@ import { easing } from "maath";
 
 import { JoltBolt } from "./Bodies/joltBolt";
 import { BoxContainer } from "./Bodies/BoxContainer";
+import Changer from "./Bodies/Changer";
+import Scaler from "./Bodies/Scaler";
+import { Floor } from "@react-three/jolt-addons";
+import { useControls } from "leva";
 
 // for random
 const r = THREE.MathUtils.randFloatSpread;
@@ -37,15 +41,15 @@ const shuffle = (accent = 0) => [
 
 export function BallBox() {
 	const { debug, paused, interpolate, physicsKey } = useDemo();
-	const [accent, click] = useReducer((state) => ++state % accents.length, 0);
-	const connectors = useMemo(() => shuffle(accent), [accent]);
+	const { boxColor } = useControls({ boxColor: { value: "#38165c", label: "Box Color" } });
+
 	const { gl, controls, camera } = useThree();
 	//disable controls
 	useEffect(() => {
 		if (!controls) return;
 		//controls.rotate(0, 0, false);
 		setTimeout(() => {
-			controls.enabled = false;
+			//controls.enabled = false;
 		}, 100);
 		return () => {
 			controls!.enabled = true;
@@ -53,22 +57,8 @@ export function BallBox() {
 	}, [controls, camera]);
 
 	const defaultBodySettings = {
-		mRestitution: 0.1
+		mRestitution: 0.5
 	};
-	const [outScale, setOutScale] = useState([1, 1, 1]);
-	const [showDropIn, setShowDropIn] = useState(false);
-	let ballColor = useRef("#8a4fc9");
-	const timeout = useSetTimeout();
-	useEffect(() => {
-		timeout.setTimeout(() => {
-			setOutScale([3, 3, 3]);
-			console.log("scale updated");
-			ballColor.current = "#FFD23F";
-		}, 3000);
-		timeout.setTimeout(() => {
-			setShowDropIn(true);
-		}, 5000);
-	}, [timeout]);
 
 	return (
 		<>
@@ -78,47 +68,57 @@ export function BallBox() {
 				key={physicsKey}
 				interpolate={interpolate}
 				debug={debug}
-				gravity={0}
+				gravity={9}
 				defaultBodySettings={defaultBodySettings}
 			>
 				<BoxContainer />
-				<RigidBody position={[3, 3, 3]} onlyInitialize>
+				<RigidBody position={[-1, 8, 0]} onlyInitialize>
 					<JoltBolt />
 				</RigidBody>
-				{/*]
-				<RigidBody scale={outScale}>
-					<pointLight intensity={10} />
-					<Shape>
-						<Shape type="box" rotation={[1, 1.5, 0]} position={[-1, 0, 0]} />
-						<Shape type="sphere" position={[1, 0, 0]} />
-					</Shape>
-				</RigidBody>
-	*/}
-				{showDropIn && (
-					<RigidBody position={[0, -1, 0]} onlyInitialize>
-						<mesh receiveShadow>
-							<meshStandardMaterial color="#EE4266" />
-							<boxGeometry args={[2, 2, 2]} />
-						</mesh>
-					</RigidBody>
-				)}
-				<RigidBody position={[-1, 0, 0]} onlyInitialize>
-					<mesh receiveShadow>
-						<meshStandardMaterial color="#8a4fc9" />
-						<sphereGeometry args={[1, 32, 32]} />
+				<Changer />
+				<Scaler position={[0.1, 5, 0]} />
+				<Changer position={[0.1, 7, 0]} />
+				<Scaler position={[0.1, 5, 0]} />
+				<Changer />
+				<Scaler position={[0.1, 5, 0]} />
+				<Changer position={[0.1, 7, 0]} />
+				<Scaler position={[0.1, 5, 0]} />
+				<Changer />
+				<Scaler position={[0.1, 5, 0]} />
+				<Changer position={[0.1, 7, 0]} />
+				<Scaler position={[0.1, 5, 0]} />
+				<Changer />
+				<Scaler position={[0.1, 7, 0]} />
+				<Changer position={[0.1, 7, 0]} />
+				<Scaler position={[0.1, 5, 0]} />
+				<Changer />
+				<Scaler position={[0.1, 5, 0]} />
+				<RigidBody position={[0, -8, 0]} type="static">
+					<mesh castShadow receiveShadow>
+						<boxGeometry args={[100, 1, 100]} />
+						<meshStandardMaterial color={boxColor} />
 					</mesh>
 				</RigidBody>
-				<RigidBody scale={outScale} onlyInitialize position={[0, 1, 0]}>
-					<mesh receiveShadow>
-						<meshStandardMaterial color={ballColor.current} />
-						<sphereGeometry args={[1, 32, 32]} />
+				<RigidBody position={[-5, 0, 0]} type="static">
+					<mesh castShadow receiveShadow>
+						<boxGeometry args={[1, 30, 10]} />
+						<meshStandardMaterial color={boxColor} />
 					</mesh>
 				</RigidBody>
-				<RigidBody position={[1, 0, 0]} onlyInitialize>
-					<mesh receiveShadow>
-						<meshStandardMaterial color="#8a4fc9" />
-						<sphereGeometry args={[1, 32, 32]} />
+				<RigidBody position={[5, 0, 0]} type="static">
+					<mesh castShadow receiveShadow>
+						<boxGeometry args={[1, 30, 10]} />
+						<meshStandardMaterial color={boxColor} />
 					</mesh>
+				</RigidBody>
+				<RigidBody position={[0, 0, -1]} type="static">
+					<mesh castShadow receiveShadow>
+						<boxGeometry args={[10, 30, 1]} />
+						<meshStandardMaterial color={boxColor} />
+					</mesh>
+				</RigidBody>
+				<RigidBody position={[0, 0, 4]} type="static">
+					<Shape size={[10, 30, 1]} />
 				</RigidBody>
 				{/*<Pointer /> */}
 				{/*connectors.map(
@@ -130,47 +130,17 @@ export function BallBox() {
 					)
 				) */}
 			</Physics>
-
-			<Environment resolution={256}>
-				<group rotation={[-Math.PI / 3, 0, 1]}>
-					<Lightformer
-						form="circle"
-						intensity={100}
-						rotation-x={Math.PI / 2}
-						position={[0, 5, -9]}
-						scale={2}
-					/>
-					<Lightformer
-						form="circle"
-						intensity={2}
-						rotation-y={Math.PI / 2}
-						position={[-5, 1, -1]}
-						scale={2}
-					/>
-					<Lightformer
-						form="circle"
-						intensity={2}
-						rotation-y={Math.PI / 2}
-						position={[-5, -1, -1]}
-						scale={2}
-					/>
-					<Lightformer
-						form="circle"
-						intensity={2}
-						rotation-y={-Math.PI / 2}
-						position={[10, 1, 0]}
-						scale={8}
-					/>
-					<Lightformer
-						form="ring"
-						color="#4060ff"
-						intensity={80}
-						onUpdate={(self) => self.lookAt(0, 0, 0)}
-						position={[10, 10, 0]}
-						scale={10}
-					/>
-				</group>
-			</Environment>
+			<directionalLight
+				position={[-10, 10, 10]}
+				shadow-camera-bottom={-10}
+				shadow-camera-top={10}
+				shadow-camera-left={-10}
+				shadow-camera-right={10}
+				shadow-mapSize-width={2048}
+				shadow-bias={-0.0001}
+				intensity={1}
+				castShadow
+			/>
 		</>
 	);
 }
