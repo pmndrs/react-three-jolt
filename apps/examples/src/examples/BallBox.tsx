@@ -88,8 +88,8 @@ export function BallBox() {
 		//@ts-ignore
 		if (typeof DeviceMotionEvent.requestPermission === "function") {
 			console.log("*** Requesting permission on iOS 13+ devices");
-			
-			if (window.confirm("Allow access to device motion?")) {
+
+			if (window.confirm("Allow access to device motion?"))
 				//@ts-ignore
 				DeviceMotionEvent.requestPermission()
 					.then((permissionState: PermissionState) => {
@@ -100,14 +100,6 @@ export function BallBox() {
 						}
 					})
 					.catch(console.error);
-			}
-					console.log("Permission state", permissionState);
-					if (permissionState === "granted") {
-						console.log("*** Permission granted, adding event listener");
-						window.addEventListener("devicemotion", updateGravityOnDevice);
-					}
-				})
-				.catch(console.error);
 		} else {
 			// handle regular non iOS 13+ devices
 			window.addEventListener("devicemotion", updateGravityOnDevice);
