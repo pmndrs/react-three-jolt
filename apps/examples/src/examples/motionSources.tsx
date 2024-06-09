@@ -10,6 +10,7 @@ import {
 } from "@react-three/jolt";
 import { Floor } from "@react-three/jolt-addons";
 import { useDemo } from "../App";
+import { Environment } from "@react-three/drei";
 // because im lazy
 const dtr = (degree: number) => THREE.MathUtils.degToRad(degree);
 
@@ -351,6 +352,17 @@ function Inner() {
 			<Floor position={[0, 0, 0]} size={100}>
 				<meshStandardMaterial color="#fdf0d5" />
 			</Floor>
+			<directionalLight
+				castShadow
+				position={[10, 10, 10]}
+				shadow-camera-bottom={-40}
+				shadow-camera-top={40}
+				shadow-camera-left={-40}
+				shadow-camera-right={40}
+				shadow-mapSize-width={1024}
+				shadow-bias={-0.0001}
+			/>
+			<Environment preset="apartment" />
 		</>
 	);
 }

@@ -154,8 +154,8 @@ export const Shape: React.FC<ShapeProps> = memo(
 		const generateShape = () => {
 			if (!shapeSettings.current) return;
 			// if there is already a shape, save it and destroy it in a minute
-			let currentShape: Jolt.Shape | undefined;
-			if (baseShape.current) currentShape = baseShape.current;
+			//let currentShape: Jolt.Shape | undefined;
+			//if (baseShape.current) currentShape = baseShape.current;
 
 			//generate the shape
 			baseShape.current = shapeSettings.current.Create().Get();

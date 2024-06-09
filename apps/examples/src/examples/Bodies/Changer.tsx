@@ -1,16 +1,18 @@
 // this body changes between shapes but keeps the same rigidBdy
 
 // use memo so it doesn't cycle on inputs
-import { RigidBody, useJolt, getShapeSettingsFromGeometry, BodyState } from "@react-three/jolt";
+import { RigidBody, getShapeSettingsFromGeometry, BodyState } from "@react-three/jolt";
 import { memo, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+type ChangerProps = {
+	position?: number[];
+};
 
-const Changer: React.FC = memo((props) => {
+const Changer: React.FC<ChangerProps> = memo((props) => {
 	//hold the refs
 	const meshRef = useRef<THREE.Mesh | null>(null);
 	const bodyRef = useRef<BodyState>();
 
-	const { jolt } = useJolt();
 	// original color: #6200B3
 	const [activeColor, setActiveColor] = useState("#188FA7");
 	const currentShape = useRef(0);
@@ -51,7 +53,7 @@ const Changer: React.FC = memo((props) => {
 	};
 
 	return (
-		<RigidBody {...props} ref={bodyRef}>
+		<RigidBody {...props} ref={bodyRef} onlyInitialize>
 			<mesh ref={meshRef} onClick={() => nextShape()} castShadow receiveShadow>
 				<sphereGeometry args={[1.3, 32, 32]} />
 				<meshStandardMaterial color={activeColor} />

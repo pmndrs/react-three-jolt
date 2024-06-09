@@ -1,7 +1,10 @@
 import { BodyState, RigidBody } from "@react-three/jolt";
 import { memo, useRef, useState } from "react";
 import * as THREE from "three";
-const Scaler: React.FC = memo((props) => {
+type ScalerProps = {
+	position?: number[];
+};
+const Scaler: React.FC<ScalerProps> = memo((props) => {
 	const [scale, setScale] = useState([1, 1, 1]);
 	const [activeColor, setActiveColor] = useState("#B4A6AB");
 	const bodyRef = useRef<BodyState>();

@@ -10,6 +10,7 @@ import { Teleport } from "./Bodies/Teleport";
 import { Conveyor } from "./Bodies/Conveyor";
 import { Stairs } from "./Bodies/Stairs";
 import { useThree } from "@react-three/fiber";
+import { Environment } from "@react-three/drei";
 /*
 import {
     useCommand,
@@ -96,6 +97,17 @@ export function CharacterVirtualDemo() {
 				</CharacterController>
 				<Floor size={150} position={[0, -0.5, 0]} />
 			</Physics>
+			<directionalLight
+				castShadow
+				position={[10, 10, 10]}
+				shadow-camera-bottom={-40}
+				shadow-camera-top={40}
+				shadow-camera-left={-40}
+				shadow-camera-right={40}
+				shadow-mapSize-width={1024}
+				shadow-bias={-0.0001}
+			/>
+			<Environment preset="apartment" />
 		</>
 	);
 }

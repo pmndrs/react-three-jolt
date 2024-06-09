@@ -149,7 +149,7 @@ export class BodyState {
 		}
 		// we are an instance. we have to build a matrix
 		const matrix = new Matrix4();
-		matrix.compose(vec3.three(position), quat.three(rotation), this.scale);
+		matrix.compose(vec3.three(position), quat.three(rotation), vec3.three(this.scale));
 		// update the matrix
 		this.setMatrix(matrix);
 	}
@@ -170,6 +170,10 @@ export class BodyState {
 		const newMesh = getThreeObjectForBody(this.body);
 		// reset any weird position data
 		newMesh.position.set(0, 0, 0);
+		newMesh.rotation.set(0, 0, 0);
+		// we have to put an inverted scale on the newMesh so it matches the actual body
+
+		newMesh.scale.copy(new THREE.Vector3(1, 1, 1).divide(this.activeScale));
 		// if the current object is visible it will have a parent
 		const currentParent = this.debugMesh?.parent;
 		if (currentParent) currentParent.remove(this.debugMesh!);
@@ -427,6 +431,94 @@ export class BodyState {
 	}
 	set subGroup(subGroup: number) {
 		this.body.GetCollisionGroup().SetSubGroupID(subGroup);
+	}
+
+	//* DOF Manipulation ------------------------------------
+	// get the raw DOF
+	get rawDOF() {
+		return this.body.GetMotionProperties().GetAllowedDOFs();
+	}
+	// set the raw DOF
+	set rawDOF(dof: number) {
+		// massProperties comes from the shape.
+		const massProperties = this.body.GetShape().GetMassProperties();
+		this.body.GetMotionProperties().SetMassProperties(dof, massProperties);
+	}
+
+	get dof() {
+		const rawDOF = this.rawDOF;
+		return {
+			x: (rawDOF & Raw.module.EAllowedDOFs_TranslationX) !== 0,
+			y: (rawDOF & Raw.module.EAllowedDOFs_TranslationY) !== 0,
+			z: (rawDOF & Raw.module.EAllowedDOFs_TranslationZ) !== 0,
+			rotX: (rawDOF & Raw.module.EAllowedDOFs_RotationX) !== 0,
+			rotY: (rawDOF & Raw.module.EAllowedDOFs_RotationY) !== 0,
+			rotZ: (rawDOF & Raw.module.EAllowedDOFs_RotationZ) !== 0
+		};
+	}
+	setDof(dof: {
+		x?: boolean;
+		y?: boolean;
+		z?: boolean;
+		rotX?: boolean;
+		rotY?: boolean;
+		rotZ?: boolean;
+	}) {
+		let newDOF = this.rawDOF;
+		console.log("Setting DOF", dof, "current DOF", this.dof, "rawDOF", this.rawDOF);
+		const allowedDOFs = [
+			{ key: "x", flag: Raw.module.EAllowedDOFs_TranslationX },
+			{ key: "y", flag: Raw.module.EAllowedDOFs_TranslationY },
+			{ key: "z", flag: Raw.module.EAllowedDOFs_TranslationZ },
+			{ key: "rotX", flag: Raw.module.EAllowedDOFs_RotationX },
+			{ key: "rotY", flag: Raw.module.EAllowedDOFs_RotationY },
+			{ key: "rotZ", flag: Raw.module.EAllowedDOFs_RotationZ }
+		];
+
+		allowedDOFs.forEach((optionalDof) => {
+			//console.log("checking", dof[optionalDof.key], dof[optionalDof.key] == undefined);
+			//@ts-ignore
+			if (dof[optionalDof.key]) {
+				newDOF |= optionalDof.flag;
+				// leaving these logs because its annoying to retype
+				/*console.log(
+					"setting",
+					optionalDof.key,
+					optionalDof.flag,
+					newDOF,
+					createBinaryString(newDOF)
+				);
+				*/
+			}
+			//@ts-ignore
+			else if (dof[optionalDof.key] !== undefined) {
+				newDOF &= ~optionalDof.flag;
+				/*console.log(
+					"unsetting",
+					optionalDof.key,
+					optionalDof.flag,
+					newDOF,
+					createBinaryString(newDOF)
+				);
+				*/
+			}
+		});
+
+		this.rawDOF = newDOF;
+	}
+	// Rapier stype
+	lockRotations() {
+		this.setDof({ rotX: false, rotY: false, rotZ: false });
+	}
+	lockTranslations() {
+		this.setDof({ x: false, y: false, z: false });
+	}
+	// rapier style activation
+	setEnabledRotations(x: boolean, y: boolean, z: boolean) {
+		this.setDof({ rotX: x, rotY: y, rotZ: z });
+	}
+	setEnabledTranslations(x: boolean, y: boolean, z: boolean) {
+		this.setDof({ x, y, z });
 	}
 
 	//* Force Manipulation ----------------------------------

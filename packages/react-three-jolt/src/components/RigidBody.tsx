@@ -14,9 +14,9 @@ import React, {
 import * as THREE from "three";
 import { Object3D } from "three";
 import { useForwardedRef, useJolt, useUnmount } from "../hooks";
-import { BodyType, GenerateBodyOptions, getThreeObjectForBody } from "../systems/body-system";
+import { BodyType, GenerateBodyOptions } from "../systems/body-system";
 import { vec3 } from "../utils";
-import { BodyState } from "../systems";
+import { AutoShape, BodyState } from "../systems";
 
 interface RigidBodyProps {
 	children: ReactNode;
@@ -31,7 +31,7 @@ interface RigidBodyProps {
 	//wake listener
 	// this is MOTION Type
 	type?: BodyType;
-	shape?: string;
+	shape?: AutoShape;
 	debug?: boolean;
 	ref?: any;
 	allowObstruction?: boolean;
@@ -46,9 +46,14 @@ interface RigidBodyProps {
 	linearDamping?: number;
 	angularDamping?: number;
 	friction?: number;
-
-	//TODO: do these work yet?
 	scale?: number[];
+
+	// dof
+	lockRotations?: boolean;
+	lockTranslations?: boolean;
+	dof?: { x?: boolean; y?: boolean; z?: boolean; rotX?: boolean; rotY?: boolean; rotZ?: boolean };
+	//TODO: do these work yet?
+
 	mass?: number;
 	// remove
 	quaternion?: number[];
@@ -90,6 +95,11 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			allowObstruction,
 			obstructionTimelimit,
 
+			//dof
+			lockRotations,
+			lockTranslations,
+			dof,
+
 			debug: propDebug,
 
 			onContactAdded,
@@ -101,7 +111,10 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 		const objectRef = useRef<Object3D>(null);
 		//TODO: Figure out way to put BodyState type on this ref
 		const rigidBodyRef = useForwardedRef(forwardedRef);
-		const debugMesh = useRef<THREE.Mesh>();
+
+		// state refs allow us to track if inputs have changed without triggering a re-render
+		const prevPosition = useRef<THREE.Vector3 | undefined>(undefined);
+		const prevRotation = useRef<THREE.Quaternion | undefined>(undefined);
 
 		// load the jolt stuff
 		const { bodySystem, debug: physicsDebug } = useJolt();
@@ -124,6 +137,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 					//@ts-ignore
 					if (child.type && child.type.displayName === "Shape") hasShapes = true;
 				});
+			//if (hasShapes) console.log("hasShapes", hasShapes, activeShape);
 			// if the children are shapes, we will wait for them to mount
 			if (hasShapes && !activeShape) return;
 			// todo: is this protection needed?
@@ -133,7 +147,8 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 					group: group,
 					subGroup: subGroup,
 					shape: activeShape,
-					bodyType: type
+					bodyType: type,
+					shapeType: shape
 				};
 				//put the initial position, rotation, scale, and quaternion in the options
 				if (position) objectRef.current.position.copy(vec3.three(position));
@@ -142,9 +157,19 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 				//@ts-ignore
 				const bodyHandle = bodySystem.addBody(objectRef.current, options);
 				const body = bodySystem.getBody(bodyHandle);
+				if (!body) throw new Error("Body not found");
 				rigidBodyRef.current = body;
+				bodyLoaded.current = true;
+
+				// for cycle reasons some stuff might have gotten missed
+				// try setting the debug
+				if (debug) body.debug = debug;
+				if (position) body.position = vec3.three(position);
+				if (rotation)
+					body.rotation = new THREE.Quaternion().setFromEuler(
+						new THREE.Euler(rotation[0], rotation[1], rotation[2])
+					);
 			}
-			bodyLoaded.current = true;
 		}, [activeShape, bodySystem, rigidBodyRef]);
 
 		// When destroying we need to do some stuff
@@ -164,6 +189,8 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			if (!rigidBodyRef.current || !bodyLoaded) return;
 			const body = rigidBodyRef.current as BodyState;
 			if (activeShape) body.shape = activeShape;
+			//if we have a scale we should also set the scale on this new shape
+			if (scale) body.scale = vec3.three(scale);
 		}, [activeShape, rigidBodyRef]);
 
 		// scale the shape when the input scale changes
@@ -176,14 +203,26 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 		useEffect(() => {
 			if (!rigidBodyRef.current || onlyInitialize) return;
 			const body = rigidBodyRef.current as BodyState;
-			if (position) body.position = vec3.three(position);
+			if (position) {
+				// this adds a little to things,and might be worth not doing onlyInitialize
+				// but if the input hasn't changed we should ignore this
+				const newPositon = vec3.three(position);
+				if (!prevPosition.current || !newPositon.equals(prevPosition.current)) {
+					body.position = newPositon;
+					prevPosition.current = newPositon;
+				}
+			}
 			if (rotation) {
 				const quaternion = Array.isArray(rotation)
 					? new THREE.Quaternion().setFromEuler(
 							new THREE.Euler(rotation[0], rotation[1], rotation[2])
 						)
 					: rotation;
-				body.rotation = quaternion;
+				// if the input hasn't changed we should ignore this
+				if (!prevRotation.current || !quaternion.equals(prevRotation.current)) {
+					body.rotation = quaternion;
+					prevRotation.current = quaternion;
+				}
 			}
 		}, [onlyInitialize, position, rotation, rigidBodyRef]);
 
@@ -218,7 +257,6 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			const isAllowing = body.allowObstruction;
 			if (allowObstruction !== undefined) {
 				if (isAllowing !== allowObstruction) {
-					console.log("setting allow obstruction", allowObstruction);
 					body.allowObstruction = allowObstruction as boolean;
 				}
 				if (obstructionTimelimit) {
@@ -237,13 +275,26 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			isSensor
 		]);
 
-		// groups
+		//* Groups -------------------------------------
 		useEffect(() => {
 			if (!rigidBodyRef.current) return;
 			const body = rigidBodyRef.current as BodyState;
 			if (group) body.group = group;
 			if (subGroup) body.subGroup = subGroup;
 		}, [group, subGroup, rigidBodyRef]);
+
+		//* DOF -------------------------------------
+		useEffect(() => {
+			if (!rigidBodyRef.current) return;
+			const body = rigidBodyRef.current as BodyState;
+			if (dof) {
+				const { x, y, z, rotX, rotY, rotZ } = dof;
+				body.setEnabledTranslations(x || false, y || false, z || false);
+				body.setEnabledRotations(rotX || false, rotY || false, rotZ || false);
+			}
+			if (lockRotations) body.lockRotations();
+			if (lockTranslations) body.lockTranslations();
+		}, [dof, lockRotations, lockTranslations, rigidBodyRef]);
 
 		// the context should update when a new handle is added
 		//@ts-ignore

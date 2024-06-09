@@ -1,57 +1,38 @@
-import { BodyState, Physics, RigidBody, Shape, useSetTimeout } from "@react-three/jolt";
+import { Physics, RigidBody } from "@react-three/jolt";
 import { useDemo } from "../App";
-import { useRef, useMemo, useReducer, useEffect, useState, Suspense } from "react";
-import * as THREE from "three";
-import { CameraControls, Environment, Lightformer } from "@react-three/drei";
-import { useFrame, useThree } from "@react-three/fiber";
+import { useMemo, useEffect, useState, Fragment } from "react";
+//import * as THREE from "three";
+import { useThree } from "@react-three/fiber";
 import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
-
-import { easing } from "maath";
 
 import { JoltBolt } from "./Bodies/joltBolt";
 import { BoxContainer } from "./Bodies/BoxContainer";
 import Changer from "./Bodies/Changer";
 import Scaler from "./Bodies/Scaler";
-import { Floor } from "@react-three/jolt-addons";
-import { useControls } from "leva";
 
-// for random
-const r = THREE.MathUtils.randFloatSpread;
-const accents = ["#ff4060", "#ffcc00", "#20ffa0", "#4060ff"];
-const shuffle = (accent = 0) => [
-	{ color: "#444", roughness: 0.1, metalness: 0.5 },
-	{ color: "#444", roughness: 0.1, metalness: 0.5 },
-	{ color: "#444", roughness: 0.1, metalness: 0.5 },
-	{ color: "white", roughness: 0.1, metalness: 0.1 },
-	{ color: "white", roughness: 0.1, metalness: 0.1 },
-	{ color: "white", roughness: 0.1, metalness: 0.1 },
-	{ color: accents[accent], roughness: 0.1, accent: true },
-	{ color: accents[accent], roughness: 0.1, accent: true },
-	{ color: accents[accent], roughness: 0.1, accent: true },
-	{ color: "#444", roughness: 0.1 },
-	{ color: "#444", roughness: 0.3 },
-	{ color: "#444", roughness: 0.3 },
-	{ color: "white", roughness: 0.1 },
-	{ color: "white", roughness: 0.2 },
-	{ color: "white", roughness: 0.1 },
-	{ color: accents[accent], roughness: 0.1, accent: true, transparent: true, opacity: 0.5 },
-	{ color: accents[accent], roughness: 0.3, accent: true },
-	{ color: accents[accent], roughness: 0.1, accent: true }
-];
+// fix typescript to know about permissions
+declare global {
+	interface Window {
+		DeviceMotionEvent: {
+			requestPermission: () => Promise<PermissionState>;
+		};
+	}
+}
 
 export function BallBox() {
 	const { debug, paused, interpolate, physicsKey } = useDemo();
-	const { boxColor } = useControls({ boxColor: { value: "#38165c", label: "Box Color" } });
-
-	const { gl, controls, camera } = useThree();
+	const { controls, camera } = useThree();
 	//disable controls
 	useEffect(() => {
 		if (!controls) return;
-		//controls.rotate(0, 0, false);
+		//@ts-ignore
+		controls.rotate(0, 0, false);
 		setTimeout(() => {
-			//controls.enabled = false;
+			//@ts-ignore
+			controls.enabled = false;
 		}, 100);
 		return () => {
+			//@ts-ignore
 			controls!.enabled = true;
 		};
 	}, [controls, camera]);
@@ -59,6 +40,66 @@ export function BallBox() {
 	const defaultBodySettings = {
 		mRestitution: 0.5
 	};
+
+	const positions = useMemo(() => {
+		const allPos = [];
+
+		for (let i = 0; i < 15; i++) {
+			allPos.push([Math.random() * 20 - 10, Math.random() * 10, 0]);
+		}
+		return allPos;
+	}, []);
+
+	const [gravity, setGravity] = useState([0, -9.8, 0]);
+
+	const updateGravityOnMouse = (e: MouseEvent) => {
+		// if the right click isn't pressed, don't update the gravity
+		if (!e.buttons || e.buttons !== 2) return;
+
+		const x = (e.clientX / window.innerWidth) * 20 - 10;
+		const y = (e.clientY / window.innerHeight) * 20 - 10;
+		setGravity([x, -y, 0]);
+	};
+	// attach event listener to mouse move with removal on return
+	useEffect(() => {
+		window.addEventListener("mousemove", updateGravityOnMouse);
+		function preventDefault(e: MouseEvent) {
+			e.preventDefault();
+		}
+		window.addEventListener("contextmenu", preventDefault);
+		return () => {
+			window.removeEventListener("mousemove", updateGravityOnMouse);
+			window.removeEventListener("contextmenu", preventDefault);
+		};
+	}, []);
+
+	// detect device orientation and set gravity
+	const updateGravityOnDevice = (e: DeviceMotionEvent) => {
+		if (!e.accelerationIncludingGravity || e.accelerationIncludingGravity.x === null) return;
+		const { x, y, z } = e.accelerationIncludingGravity!;
+		console.log("setting from device", e);
+		setGravity([x || 0, y || 0, z || 0]);
+	};
+
+	// attach event listener to device orientation with removal on return
+	useEffect(() => {
+		if (typeof window.DeviceMotionEvent.requestPermission === "function") {
+			window.DeviceMotionEvent.requestPermission()
+				.then((permissionState: PermissionState) => {
+					if (permissionState === "granted") {
+						window.addEventListener("devicemotion", updateGravityOnDevice);
+					}
+				})
+				.catch(console.error);
+		} else {
+			// handle regular non iOS 13+ devices
+			window.addEventListener("devicemotion", updateGravityOnDevice);
+		}
+
+		return () => {
+			window.removeEventListener("devicemotion", updateGravityOnDevice);
+		};
+	}, []);
 
 	return (
 		<>
@@ -68,137 +109,44 @@ export function BallBox() {
 				key={physicsKey}
 				interpolate={interpolate}
 				debug={debug}
-				gravity={9}
+				gravity={gravity}
 				defaultBodySettings={defaultBodySettings}
 			>
 				<BoxContainer />
-				<RigidBody position={[-1, 8, 0]} onlyInitialize>
+
+				<RigidBody
+					scale={[0.03, 0.03, 0.03]}
+					rotation={[3.14, 0, 0]}
+					position={[-1, 3, 1]}
+					onlyInitialize
+				>
 					<JoltBolt />
 				</RigidBody>
-				<Changer />
-				<Scaler position={[0.1, 5, 0]} />
-				<Changer position={[0.1, 7, 0]} />
-				<Scaler position={[0.1, 5, 0]} />
-				<Changer />
-				<Scaler position={[0.1, 5, 0]} />
-				<Changer position={[0.1, 7, 0]} />
-				<Scaler position={[0.1, 5, 0]} />
-				<Changer />
-				<Scaler position={[0.1, 5, 0]} />
-				<Changer position={[0.1, 7, 0]} />
-				<Scaler position={[0.1, 5, 0]} />
-				<Changer />
-				<Scaler position={[0.1, 7, 0]} />
-				<Changer position={[0.1, 7, 0]} />
-				<Scaler position={[0.1, 5, 0]} />
-				<Changer />
-				<Scaler position={[0.1, 5, 0]} />
-				<RigidBody position={[0, -8, 0]} type="static">
-					<mesh castShadow receiveShadow>
-						<boxGeometry args={[100, 1, 100]} />
-						<meshStandardMaterial color={boxColor} />
-					</mesh>
-				</RigidBody>
-				<RigidBody position={[-5, 0, 0]} type="static">
-					<mesh castShadow receiveShadow>
-						<boxGeometry args={[1, 30, 10]} />
-						<meshStandardMaterial color={boxColor} />
-					</mesh>
-				</RigidBody>
-				<RigidBody position={[5, 0, 0]} type="static">
-					<mesh castShadow receiveShadow>
-						<boxGeometry args={[1, 30, 10]} />
-						<meshStandardMaterial color={boxColor} />
-					</mesh>
-				</RigidBody>
-				<RigidBody position={[0, 0, -1]} type="static">
-					<mesh castShadow receiveShadow>
-						<boxGeometry args={[10, 30, 1]} />
-						<meshStandardMaterial color={boxColor} />
-					</mesh>
-				</RigidBody>
-				<RigidBody position={[0, 0, 4]} type="static">
-					<Shape size={[10, 30, 1]} />
-				</RigidBody>
-				{/*<Pointer /> */}
-				{/*connectors.map(
-					(
-						props,
-						i //@ts-ignore biome-ignore  Sphere props
-					) => (
-						<Sphere key={i} {...props} />
-					)
-				) */}
+
+				{positions.map((pos) => (
+					<Fragment key={pos.toString()}>
+						<Scaler position={pos} />
+						<Changer
+							position={[pos[0] - Math.random(), pos[1] + Math.random(), pos[2]]}
+						/>
+					</Fragment>
+				))}
 			</Physics>
+			<ambientLight intensity={0.5} />
 			<directionalLight
-				position={[-10, 10, 10]}
-				shadow-camera-bottom={-10}
-				shadow-camera-top={10}
-				shadow-camera-left={-10}
-				shadow-camera-right={10}
-				shadow-mapSize-width={2048}
-				shadow-bias={-0.0001}
-				intensity={1}
+				position={[-29, 5, 20]}
+				shadow-camera-bottom={-16}
+				shadow-camera-top={16}
+				shadow-camera-left={-16}
+				shadow-camera-right={16}
+				shadow-camera-near={0.1}
+				shadow-camera-far={70}
+				shadow-mapSize-width={1024}
+				shadow-bias={0.001}
+				shadow-normalBias={0.03}
+				intensity={3}
 				castShadow
 			/>
 		</>
-	);
-}
-
-function Sphere({ accent = false, color = "white", ...props }) {
-	const bodyRef = useRef();
-	const meshRef = useRef<THREE.Mesh>(null);
-	const pos = useMemo(() => [r(10), r(10), r(10)], []);
-	useFrame((_state: any, inDelta: number) => {
-		if (!bodyRef.current || !meshRef.current) return;
-		const delta = Math.min(0.1, inDelta);
-		const body = bodyRef.current as BodyState;
-		body.addImpulse(body.position.clone().negate().multiplyScalar(0.2));
-		//@ts-ignore
-		easing.dampC(meshRef.current.material.color, color, 0.2, delta);
-	});
-	return (
-		<RigidBody
-			mass={1}
-			linearDamping={4}
-			angularDamping={1}
-			friction={0.1}
-			position={pos}
-			ref={bodyRef}
-		>
-			<mesh ref={meshRef} castShadow receiveShadow>
-				<sphereGeometry args={[1, 64, 64]} />
-				<meshStandardMaterial {...props} />
-			</mesh>
-		</RigidBody>
-	);
-}
-
-function Pointer() {
-	const bodyRef = useRef(null);
-	const { camera } = useThree();
-	useFrame(({ pointer, viewport }, deltaTime) => {
-		if (!bodyRef.current) return;
-		const body = bodyRef.current as BodyState;
-		// with this setup 20 is a good distance to the center
-		const distance = camera.position.distanceTo(new THREE.Vector3(0, 0, 0));
-		const factor = 20 / distance;
-		const pointerVector = new THREE.Vector3(
-			(pointer.x * viewport.width) / 2 / factor,
-			(pointer.y * viewport.height) / 2 / factor,
-			1 - distance
-		);
-		//apply the camera space to the vector
-		pointerVector.applyMatrix4(camera.matrixWorld);
-		//@ts-ignore move the pointer with kinematic force
-		body.moveKinematic(pointerVector, undefined, deltaTime);
-	});
-	return (
-		<RigidBody ref={bodyRef} position={[10, 10, 10]} type={"kinematic"}>
-			<mesh visible={false}>
-				<sphereGeometry args={[1, 32, 32]} />
-				<meshStandardMaterial color="red" />
-			</mesh>
-		</RigidBody>
 	);
 }

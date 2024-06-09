@@ -64,7 +64,16 @@ export function Impulses() {
 					)
 				)}
 			</Physics>
-
+			<directionalLight
+				castShadow
+				position={[10, 10, 10]}
+				shadow-camera-bottom={-40}
+				shadow-camera-top={40}
+				shadow-camera-left={-40}
+				shadow-camera-right={40}
+				shadow-mapSize-width={1024}
+				shadow-bias={-0.0001}
+			/>
 			<Environment resolution={256}>
 				<group rotation={[-Math.PI / 3, 0, 1]}>
 					<Lightformer

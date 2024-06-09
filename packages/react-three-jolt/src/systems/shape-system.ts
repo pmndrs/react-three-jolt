@@ -7,7 +7,7 @@
 
 import type Jolt from "jolt-physics";
 import * as THREE from "three";
-import { BufferGeometry, Mesh, Object3D, Vector3 } from "three";
+import { BufferGeometry, Object3D, Vector3 } from "three";
 import { SphereGeometry, BoxGeometry, CapsuleGeometry, CylinderGeometry } from "three";
 import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
 import { Raw } from "../raw";
@@ -46,14 +46,14 @@ export const getShapeSettingsFromObject = (
 	const shapes: any = [];
 
 	object.traverse((child) => {
-		if (child instanceof Object3D) {
-			const geometry = (child as Mesh)?.geometry;
+		if (child instanceof THREE.Mesh) {
 			// adding ignore to meshes skips the shape generator
-			// TODO: Typescript HATES the ignore property.
-			//@ts-ignore
-			if (!child.ignore && geometry) {
+			if (child.geometry) {
 				// TODO: Until we understand the offsets we are going to get both here
-				const shapeSettingsAndOffset = getShapeSettingsFromGeometry(geometry, shapeType);
+				const shapeSettingsAndOffset = getShapeSettingsFromGeometry(
+					child.geometry,
+					shapeType
+				);
 
 				if (shapeSettingsAndOffset) {
 					const shape = {

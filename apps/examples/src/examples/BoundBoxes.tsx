@@ -1,3 +1,4 @@
+import { Environment } from "@react-three/drei";
 import {
 	useConstraint,
 	RigidBody
@@ -149,6 +150,17 @@ export function BoundBoxes() {
 					<meshStandardMaterial color="#8E443D" />
 				</mesh>
 			</RigidBody>
+			<directionalLight
+				castShadow
+				position={[10, 10, 10]}
+				shadow-camera-bottom={-40}
+				shadow-camera-top={40}
+				shadow-camera-left={-40}
+				shadow-camera-right={40}
+				shadow-mapSize-width={1024}
+				shadow-bias={-0.0001}
+			/>
+			<Environment preset="apartment" />
 		</>
 	);
 }

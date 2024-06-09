@@ -62,7 +62,8 @@ export class PhysicsSystem {
 	maxInterfaces = 3;
 	constructor(pid = "0") {
 		const jolt = Raw.module;
-		//console.log('*** R3/Jolt PhysicsSystem Initialized ***');
+
+		console.log("*** R3/Jolt PhysicsSystem Initialized ***");
 		/* setup collisions and broadphase */
 		const objectFilter = new jolt.ObjectLayerPairFilterTable(NUM_OBJECT_LAYERS);
 		objectFilter.EnableCollision(Layer.NON_MOVING, Layer.MOVING);
@@ -173,7 +174,11 @@ export class PhysicsSystem {
 				if (previousState) {
 					// Get previous simulated world position
 					_matrix4
-						.compose(previousState.position, previousState.quaternion, state.scale)
+						.compose(
+							previousState.position,
+							previousState.quaternion,
+							vec3.three(state.scale)
+						)
 						.premultiply(state.invertedWorldMatrix)
 						.decompose(_position, _rotation, _scale);
 
@@ -194,7 +199,7 @@ export class PhysicsSystem {
 				.compose(
 					vec3.joltToThree(pos as Jolt.Vec3, _vector3),
 					quat.joltToThree(rot, _quaternion),
-					state.scale
+					vec3.three(state.scale)
 				)
 				.premultiply(state.invertedWorldMatrix)
 				.decompose(_position, _rotation, _scale);

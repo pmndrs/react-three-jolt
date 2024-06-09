@@ -1,6 +1,6 @@
 // Base demo copied from r3/rapier
 //import * as THREE from 'three';
-import { Environment, CameraControls } from "@react-three/drei";
+import { CameraControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import { vec3 } from "@react-three/jolt";
 import { Perf } from "r3f-perf";
@@ -188,7 +188,7 @@ export const App = () => {
 		setCameraProps({
 			position: route.position,
 			target: route.target,
-			transition: route.transition
+			transition: route.transition!
 		});
 		setBackground(route.background || "#3d405b");
 	}, [location]);
@@ -208,18 +208,7 @@ export const App = () => {
 					camera={{ near: 1, fov: 45, position: cameraProps?.position }}
 				>
 					<color attach="background" args={[background]} />
-					{/*<directionalLight
-						castShadow
-						position={[10, 10, 10]}
-						shadow-camera-bottom={-40}
-						shadow-camera-top={40}
-						shadow-camera-left={-40}
-						shadow-camera-right={40}
-						shadow-mapSize-width={1024}
-						shadow-bias={-0.0001}
-					/>
-					<Environment preset="apartment" />
-					*/}
+
 					<ControlWrapper
 						position={cameraProps?.position}
 						target={cameraProps?.target}
