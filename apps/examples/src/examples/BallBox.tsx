@@ -20,7 +20,7 @@ export function BallBox() {
 		controls.rotate(0, 0, false);
 		setTimeout(() => {
 			//@ts-ignore
-			//controls.enabled = false;
+			controls.enabled = false;
 		}, 100);
 		return () => {
 			//@ts-ignore
