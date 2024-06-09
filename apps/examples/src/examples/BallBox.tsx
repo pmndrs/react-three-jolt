@@ -10,27 +10,17 @@ import { BoxContainer } from "./Bodies/BoxContainer";
 import Changer from "./Bodies/Changer";
 import Scaler from "./Bodies/Scaler";
 
-// fix typescript to know about permissions
-declare global {
-	interface Window {
-		DeviceMotionEvent: {
-			prototype: DeviceMotionEvent;
-			new (type: string, eventInitDict?: DeviceMotionEventInit): DeviceMotionEvent;
-			requestPermission?: () => Promise<PermissionState>;
-		};
-	}
-}
 export function BallBox() {
 	const { debug, paused, interpolate, physicsKey } = useDemo();
 	const { controls, camera } = useThree();
-	//disable controls
+	//* disable controls
 	useEffect(() => {
 		if (!controls) return;
 		//@ts-ignore
 		controls.rotate(0, 0, false);
 		setTimeout(() => {
 			//@ts-ignore
-			controls.enabled = false;
+			//controls.enabled = false;
 		}, 100);
 		return () => {
 			//@ts-ignore
@@ -52,7 +42,9 @@ export function BallBox() {
 	}, []);
 
 	const [gravity, setGravity] = useState([0, -9.8, 0]);
+	const [showPrompt, setShowPrompt] = useState(false);
 
+	//* Changing gravity with mouse ----------------------------
 	const updateGravityOnMouse = (e: MouseEvent) => {
 		// if the right click isn't pressed, don't update the gravity
 		if (!e.buttons || e.buttons !== 2) return;
@@ -74,11 +66,27 @@ export function BallBox() {
 		};
 	}, []);
 
+	//* Changing gravity with device ----------------------------
+
+	const promptUser = () => {
+		//@ts-ignore
+		DeviceMotionEvent.requestPermission()
+			.then((permissionState: PermissionState) => {
+				console.log("Permission state", permissionState);
+				if (permissionState === "granted") {
+					console.log("*** Permission granted, adding event listener");
+					window.addEventListener("devicemotion", updateGravityOnDevice);
+					setShowPrompt(false);
+				}
+			})
+			.catch(console.error);
+	};
+
 	// detect device orientation and set gravity
 	const updateGravityOnDevice = (e: DeviceMotionEvent) => {
 		if (!e.accelerationIncludingGravity || e.accelerationIncludingGravity.x === null) return;
 		const { x, y, z } = e.accelerationIncludingGravity!;
-		console.log("setting from device", e);
+		//console.log("setting from device", e);
 		setGravity([x || 0, y || 0, z || 0]);
 	};
 
@@ -86,14 +94,8 @@ export function BallBox() {
 	useEffect(() => {
 		//@ts-ignore
 		if (typeof DeviceMotionEvent.requestPermission === "function") {
-			//@ts-ignore
-			DeviceMotionEvent.requestPermission()
-				.then((permissionState: PermissionState) => {
-					if (permissionState === "granted") {
-						window.addEventListener("devicemotion", updateGravityOnDevice);
-					}
-				})
-				.catch(console.error);
+			// we are on an iOS 13+ device
+			setShowPrompt(true);
 		} else {
 			// handle regular non iOS 13+ devices
 			window.addEventListener("devicemotion", updateGravityOnDevice);
@@ -115,6 +117,13 @@ export function BallBox() {
 				gravity={gravity}
 				defaultBodySettings={defaultBodySettings}
 			>
+				{showPrompt && (
+					<mesh position={[0, -1, 0]} receiveShadow onClick={promptUser}>
+						<sphereGeometry args={[10, 32, 32]} />
+						<meshStandardMaterial color="#CE7B91" />
+					</mesh>
+				)}
+
 				<BoxContainer />
 
 				<RigidBody
