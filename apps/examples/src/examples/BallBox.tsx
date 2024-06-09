@@ -14,11 +14,12 @@ import Scaler from "./Bodies/Scaler";
 declare global {
 	interface Window {
 		DeviceMotionEvent: {
-			requestPermission: () => Promise<PermissionState>;
+			prototype: DeviceMotionEvent;
+			new (type: string, eventInitDict?: DeviceMotionEventInit): DeviceMotionEvent;
+			requestPermission?: () => Promise<PermissionState>;
 		};
 	}
 }
-
 export function BallBox() {
 	const { debug, paused, interpolate, physicsKey } = useDemo();
 	const { controls, camera } = useThree();
@@ -83,8 +84,10 @@ export function BallBox() {
 
 	// attach event listener to device orientation with removal on return
 	useEffect(() => {
-		if (typeof window.DeviceMotionEvent.requestPermission === "function") {
-			window.DeviceMotionEvent.requestPermission()
+		//@ts-ignore
+		if (typeof DeviceMotionEvent.requestPermission === "function") {
+			//@ts-ignore
+			DeviceMotionEvent.requestPermission()
 				.then((permissionState: PermissionState) => {
 					if (permissionState === "granted") {
 						window.addEventListener("devicemotion", updateGravityOnDevice);
