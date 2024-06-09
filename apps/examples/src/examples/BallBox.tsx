@@ -84,12 +84,16 @@ export function BallBox() {
 
 	// attach event listener to device orientation with removal on return
 	useEffect(() => {
+		console.log("*** Running useEffect for deviceMotion");
 		//@ts-ignore
 		if (typeof DeviceMotionEvent.requestPermission === "function") {
+			console.log("*** Requesting permission on iOS 13+ devices");
 			//@ts-ignore
 			DeviceMotionEvent.requestPermission()
 				.then((permissionState: PermissionState) => {
+					console.log("Permission state", permissionState);
 					if (permissionState === "granted") {
+						console.log("*** Permission granted, adding event listener");
 						window.addEventListener("devicemotion", updateGravityOnDevice);
 					}
 				})
