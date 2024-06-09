@@ -1,44 +1,56 @@
-import * as THREE from 'three';
-import { Physics, Heightfield, RigidBody } from '@react-three/jolt';
-import { Floor } from '@react-three/jolt-addons';
+import * as THREE from "three";
+import { Physics, Heightfield, RigidBody } from "@react-three/jolt";
+import { Floor } from "@react-three/jolt-addons";
 //import { CameraRig } from './lib/components/CameraRig';
-import { VehicleFourWheel } from '@react-three/jolt-controllers';
+import { VehicleFourWheel } from "@react-three/jolt-controllers";
+import { Environment } from "@react-three/drei";
 
 export function FourWheelDemo() {
-  //const controllerRef = useRef(null);
+	//const controllerRef = useRef(null);
 
-  //const options = useConst({ inverted: { y: true } });
-  //useGamepadForCameraControls('look', controls, options);
+	//const options = useConst({ inverted: { y: true } });
+	//useGamepadForCameraControls('look', controls, options);
 
-  // body settings so shapes bounce
-  const defaultBodySettings = {
-    mRestitution: 0,
-  };
+	// body settings so shapes bounce
+	const defaultBodySettings = {
+		mRestitution: 0
+	};
 
-  return (
-    <Physics gravity={25} defaultBodySettings={defaultBodySettings}>
-      <VehicleFourWheel position={[0, 25, 0]} />
-      <RigidBody
-        position={[0, 2, 0]}
-        rotation={[THREE.MathUtils.degToRad(10), 0, 0]}
-        type="static"
-      >
-        <mesh>
-          <boxGeometry args={[30, 0.3, 30]} />
-          <meshStandardMaterial color="#E2C2C6" />
-        </mesh>
-      </RigidBody>
-      <Heightfield
-        position={[0, 0, 0]}
-        url="heightmaps/wp1024.png"
-        size={256}
-        width={512}
-        height={512}
-      />
+	return (
+		<Physics gravity={25} defaultBodySettings={defaultBodySettings}>
+			<VehicleFourWheel position={[0, 25, 0]} />
+			<RigidBody
+				position={[0, 2, 0]}
+				rotation={[THREE.MathUtils.degToRad(10), 0, 0]}
+				type="static"
+			>
+				<mesh>
+					<boxGeometry args={[30, 0.3, 30]} />
+					<meshStandardMaterial color="#E2C2C6" />
+				</mesh>
+			</RigidBody>
+			<Heightfield
+				position={[0, 0, 0]}
+				url="heightmaps/wp1024.png"
+				size={256}
+				width={512}
+				height={512}
+			/>
 
-      <Floor size={150} position={[0, 0, 0]} />
-    </Physics>
-  );
+			<Floor size={150} position={[0, 0, 0]} />
+			<directionalLight
+				castShadow
+				position={[10, 10, 10]}
+				shadow-camera-bottom={-40}
+				shadow-camera-top={40}
+				shadow-camera-left={-40}
+				shadow-camera-right={40}
+				shadow-mapSize-width={1024}
+				shadow-bias={-0.0001}
+			/>
+			<Environment preset="apartment" />
+		</Physics>
+	);
 }
 /*
 

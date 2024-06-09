@@ -1,108 +1,115 @@
 import {
-  Physics,
-  BodyState,
-  InstancedRigidBodyMesh,
-  RigidBody,
-  useSetInterval,
-} from '@react-three/jolt';
-import { Floor } from '@react-three/jolt-addons';
-import { useControls } from 'leva';
-import { useEffect, useRef } from 'react';
-import * as THREE from 'three';
-import { useDemo } from '../App';
+	Physics,
+	BodyState,
+	InstancedRigidBodyMesh,
+	RigidBody,
+	useSetInterval
+} from "@react-three/jolt";
+import { Floor } from "@react-three/jolt-addons";
+import { useControls } from "leva";
+import { useEffect, useRef } from "react";
+import * as THREE from "three";
+import { useDemo } from "../App";
+import { Environment } from "@react-three/drei";
 
 export function CubeHeap() {
-  const { debug, paused, interpolate, physicsKey } = useDemo();
-  // body settings so shapes bounce
-  const defaultBodySettings = {
-    mRestitution: 0.7,
-  };
-  return (
-    <Physics
-      paused={paused}
-      key={physicsKey}
-      interpolate={interpolate}
-      debug={debug}
-      gravity={22}
-      defaultBodySettings={defaultBodySettings}
-    >
-      <CubeHeapInner />
-    </Physics>
-  );
+	const { debug, paused, interpolate, physicsKey } = useDemo();
+	// body settings so shapes bounce
+	const defaultBodySettings = {
+		mRestitution: 0.7
+	};
+	return (
+		<Physics
+			paused={paused}
+			key={physicsKey}
+			interpolate={interpolate}
+			debug={debug}
+			gravity={22}
+			defaultBodySettings={defaultBodySettings}
+		>
+			<CubeHeapInner />
+			<directionalLight
+				castShadow
+				position={[10, 10, 10]}
+				shadow-camera-bottom={-40}
+				shadow-camera-top={40}
+				shadow-camera-left={-40}
+				shadow-camera-right={40}
+				shadow-mapSize-width={1024}
+				shadow-bias={-0.0001}
+			/>
+			<Environment preset="apartment" />
+		</Physics>
+	);
 }
 
 // this is going to be the instancedMesh version
 function CubeHeapInner() {
-  const instancedRef = useRef<BodyState[]>(null);
-  const previousCount = useRef(0);
-  const fountainInterval = useRef(null);
+	const instancedRef = useRef<BodyState[]>(null);
+	const previousCount = useRef(0);
+	const fountainInterval = useRef(null);
 
-  //controls
-  const { count } = useControls({
-    count: { value: 200, min: 1, max: 2000, step: 1 },
-  });
+	//controls
+	const { count } = useControls({
+		count: { value: 200, min: 1, max: 2000, step: 1 }
+	});
 
-  // Utils -------------------------------------
-  const setColors = (index: number) => {
-    const color = new THREE.Color();
-    //loop over the instanceMesh starting at index and set a random color
-    for (let i = index; i < instancedRef.current!.length; i++) {
-      color.setHex(Math.random() * 0xffffff);
-      instancedRef.current![i].color = color;
-    }
-  };
-  // run when the count changes
-  useEffect(() => {
-    const previous = previousCount.current;
-    let index = 0;
-    // if the count is higher, dont reset colors on existing items.
-    if (count > previous) index = previous;
-    previousCount.current = count;
-    if (count < previous) return;
-    setColors(index);
-  }, [instancedRef, count]);
+	// Utils -------------------------------------
+	const setColors = (index: number) => {
+		const color = new THREE.Color();
+		//loop over the instanceMesh starting at index and set a random color
+		for (let i = index; i < instancedRef.current!.length; i++) {
+			color.setHex(Math.random() * 0xffffff);
+			instancedRef.current![i].color = color;
+		}
+	};
+	// run when the count changes
+	useEffect(() => {
+		const previous = previousCount.current;
+		let index = 0;
+		// if the count is higher, dont reset colors on existing items.
+		if (count > previous) index = previous;
+		previousCount.current = count;
+		if (count < previous) return;
+		setColors(index);
+	}, [instancedRef, count]);
 
-  // get a cancelable interval
-  const intervals = useSetInterval();
+	// get a cancelable interval
+	const intervals = useSetInterval();
 
-  // setup the teleporting of shapes
-  useEffect(() => {
-    if (fountainInterval.current)
-      intervals.clearInterval(fountainInterval.current);
-    //@ts-ignore
-    fountainInterval.current = intervals.setInterval(() => {
-      const index = Math.floor(Math.random() * count);
-      //@ts-ignore
-      instancedRef.current![index].position = [
-        Math.random() * 2,
-        20,
-        Math.random() * 2,
-      ];
-    }, 1000 / 60);
-  }, [instancedRef, count]);
+	// setup the teleporting of shapes
+	useEffect(() => {
+		if (fountainInterval.current) intervals.clearInterval(fountainInterval.current);
+		//@ts-ignore
+		fountainInterval.current = intervals.setInterval(() => {
+			const index = Math.floor(Math.random() * count);
+			//@ts-ignore
+			instancedRef.current![index].position = [Math.random() * 2, 20, Math.random() * 2];
+		}, 1000 / 60);
+	}, [instancedRef, count]);
 
-  return (
-    <>
-      <RigidBody position={[5, 10, 3]}>
-        <mesh>
-          <sphereGeometry args={[1, 32, 32]} />
-          <meshStandardMaterial color="#FF0000" />
-        </mesh>
-      </RigidBody>
-      <InstancedRigidBodyMesh
-        ref={instancedRef}
-        count={count}
-        position={[0, 18, 1]}
-        color="#ffffff"
-        rotation={[0, 0, 0]}
-      >
-        <boxGeometry args={[1, 1, 1]} />
-        <meshStandardMaterial color="#F2CC8F" />
-      </InstancedRigidBodyMesh>
+	return (
+		<>
+			<RigidBody position={[5, 10, 3]}>
+				<mesh>
+					<sphereGeometry args={[1, 32, 32]} />
+					<meshStandardMaterial color="#FF0000" />
+				</mesh>
+			</RigidBody>
+			<InstancedRigidBodyMesh
+				ref={instancedRef}
+				count={count}
+				position={[0, 18, 1]}
+				color="#ffffff"
+				rotation={[0, 0, 0]}
+			>
+				<boxGeometry args={[1, 1, 1]} />
+				<meshStandardMaterial color="#F2CC8F" />
+			</InstancedRigidBodyMesh>
 
-      <Floor position={[0, 0, 0]} size={100}>
-        <meshStandardMaterial />
-      </Floor>
-    </>
-  );
+			<Floor position={[0, 0, 0]} size={100}>
+				<meshStandardMaterial />
+			</Floor>
+		</>
+	);
 }

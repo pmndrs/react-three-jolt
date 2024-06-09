@@ -1,6 +1,6 @@
 // Base demo copied from r3/rapier
 //import * as THREE from 'three';
-import { Environment, CameraControls } from "@react-three/drei";
+import { CameraControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import { vec3 } from "@react-three/jolt";
 import { Perf } from "r3f-perf";
@@ -27,6 +27,7 @@ import { FourWheelDemo } from "./examples/FourWheelsWithHeightmap";
 import { CharacterVirtualDemo } from "./examples/CharacterVirtualDemo";
 import { Impulses } from "./examples/Impulses";
 import { MotionSources } from "./examples/motionSources";
+import { BallBox } from "./examples/BallBox";
 const demoContext = createContext<{
 	debug: boolean;
 	paused: boolean;
@@ -60,7 +61,7 @@ const ToggleButton = ({
 
 //* Controls Wrapper. We have to do this to get root state
 export function ControlWrapper(props: any) {
-	const { position = [0, 10, 10], target = [0, 1, 0], ...rest } = props;
+	const { position = [0, 10, 10], target = [0, 1, 0], transition = true, ...rest } = props;
 	const { controls } = useThree();
 	useEffect(() => {
 		const newPosition = vec3.three(position);
@@ -74,7 +75,7 @@ export function ControlWrapper(props: any) {
 				newTarget.x,
 				newTarget.y,
 				newTarget.z,
-				true
+				transition
 			);
 	}, [position]);
 	return <CameraControls makeDefault {...rest} />;
@@ -83,6 +84,7 @@ type Routes = {
 	[key: string]: {
 		position?: number[];
 		target?: number[];
+		transition?: boolean;
 		background?: string;
 		element: JSX.Element;
 		label?: string;
@@ -146,6 +148,13 @@ const routes: Routes = {
 		target: [0, 1, -15],
 		background: "#C1839F",
 		element: <MotionSources />
+	},
+	BallBoxes: {
+		position: [0, 0, 30],
+		target: [0, 0, 0],
+		transition: false,
+		background: "#141622",
+		element: <BallBox />
 	}
 };
 
@@ -162,6 +171,7 @@ export const App = () => {
 	const [cameraProps, setCameraProps] = useState<{
 		position: any;
 		target: any;
+		transition: boolean;
 	} | null>(null);
 	const location = useLocation();
 
@@ -175,7 +185,11 @@ export const App = () => {
 		// set the camera position
 		//@ts-ignore
 		const route = routes[location.pathname.replace("/", "")];
-		setCameraProps({ position: route.position, target: route.target });
+		setCameraProps({
+			position: route.position,
+			target: route.target,
+			transition: route.transition!
+		});
 		setBackground(route.background || "#3d405b");
 	}, [location]);
 
@@ -194,19 +208,12 @@ export const App = () => {
 					camera={{ near: 1, fov: 45, position: cameraProps?.position }}
 				>
 					<color attach="background" args={[background]} />
-					<directionalLight
-						castShadow
-						position={[10, 10, 10]}
-						shadow-camera-bottom={-40}
-						shadow-camera-top={40}
-						shadow-camera-left={-40}
-						shadow-camera-right={40}
-						shadow-mapSize-width={1024}
-						shadow-bias={-0.0001}
-					/>
-					<Environment preset="apartment" />
 
-					<ControlWrapper position={cameraProps?.position} target={cameraProps?.target} />
+					<ControlWrapper
+						position={cameraProps?.position}
+						target={cameraProps?.target}
+						transition={cameraProps?.transition}
+					/>
 					<demoContext.Provider value={{ debug, paused, interpolate, physicsKey }}>
 						<Routes>
 							{Object.keys(routes).map((key) => (

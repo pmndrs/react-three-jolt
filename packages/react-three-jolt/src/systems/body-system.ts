@@ -39,6 +39,7 @@ export interface GenerateBodyOptions {
 	size?: THREE.Vector3;
 	group?: number;
 	subGroup?: number;
+	shape?: Jolt.Shape;
 }
 
 // ================================================
@@ -106,20 +107,17 @@ export class BodySystem {
 	}
 
 	//* Body Management ================================
-	// create a body from an object
-	createBody(object: Object3D, options: GenerateBodyOptions = {}): Jolt.Body {
-		let settings = generateBodySettings(object, options);
+	// create a body from an object or shape
+	createBody(objectOrShape: Object3D | Jolt.Shape, options: GenerateBodyOptions = {}): Jolt.Body {
+		let settings = generateBodySettings(objectOrShape, options);
 		// if there are properties in the default, merge them with settings
-		if (Object.keys(this.defaultBodySettings).length > 0) {
+		if (Object.keys(this.defaultBodySettings).length > 0)
 			settings = mergeBodyCreationSettings(settings, this.defaultBodySettings);
-		}
+
 		// todo: remove this once we change collision group at runtime
-		//console.log("options", options);
 		if (options.group !== undefined || options.subGroup !== undefined) {
 			settings.mCollisionGroup = this.standardCollisionGroup;
-			if (options.group !== undefined) {
-				settings.mCollisionGroup.SetGroupID(options.group);
-			}
+			if (options.group !== undefined) settings.mCollisionGroup.SetGroupID(options.group);
 			if (options.subGroup !== undefined)
 				settings.mCollisionGroup.SetSubGroupID(options.subGroup);
 		}
@@ -129,9 +127,12 @@ export class BodySystem {
 		this.jolt.destroy(settings);
 		return body;
 	}
+	// Create a new body and add it to the system
 	addBody(object: Object3D, options?: GenerateBodyOptions) {
-		const body = this.createBody(object, options);
-		//console.log('adding body', object, body);
+		//if we have a shape we need to pass that to the body creation, not the object
+		const body = options?.shape
+			? this.createBody(options.shape, options)
+			: this.createBody(object, options);
 		return this.addExistingBody(object, body, options);
 	}
 	// add an EXISTING Jolt body to the system
@@ -550,20 +551,17 @@ export function mergeBodyCreationSettings(
 }
 
 export function generateBodySettings(
-	object: Object3D | Jolt.ShapeSettings,
+	object: Object3D | Jolt.Shape,
 	options: GenerateBodyOptions = {}
 ): Jolt.BodyCreationSettings {
 	const jolt = Raw.module;
 	const isObject = object instanceof Object3D;
-	// can I move this into the args?
-	const { bodyType = "dynamic", shapeType } = options;
-	// Generate or pass along the shape settings
-	const shapeSettings = isObject ? getShapeSettingsFromObject(object, shapeType) : object;
-	if (!shapeSettings) throw new Error("No shape settings found");
-	// Due to a Jolt limitation we cant just pass the settings and have to generate the shape here
-	const shape = shapeSettings.Create().Get();
-	// TODO: do we need to destroy the shapeSettings?
-	// jolt.destroy(shapeSettings);
+	let shape = object as Jolt.Shape;
+	if (isObject) {
+		const shapeSettings = getShapeSettingsFromObject(object, options.shapeType);
+		if (!shapeSettings) throw new Error("No shape settings found");
+		shape = shapeSettings.Create().Get();
+	}
 
 	// create position and quaternion from three to jolt
 	let position: any = new THREE.Vector3();
@@ -598,7 +596,7 @@ export function generateBodySettings(
 
 	// type bases on bodyType (Dynamic by default)
 	let layer, motionType;
-	switch (bodyType) {
+	switch (options.bodyType) {
 		case "static":
 			motionType = jolt.EMotionType_Static;
 			layer = Layer.NON_MOVING;
@@ -642,28 +640,23 @@ export function generateBodySettings(
 		new jolt.BodyCreationSettings(shape, position, quaternion, motionType, layer),
 		options.bodySettings
 	);
+	// if we passed in a shape the options shapeType wont be set. we need to detect trimesh from the shape
+	const isMesh = shape.GetSubType() === jolt.EShapeSubType_Mesh;
 	// Trimesh override to add mass and inertia
 	// see: https://jrouwe.github.io/JoltPhysics/#dynamic-mesh-shapes
-	if (shapeType === "trimesh" && motionType === jolt.EMotionType_Dynamic) {
+	if (isMesh && motionType === jolt.EMotionType_Dynamic) {
 		settings.mOverrideMassProperties =
 			Raw.module.EOverrideMassProperties_MassAndInertiaProvided;
 		// if the object is an object we need to get the size from it
-		let size;
-		let mass = options?.mass || 200;
-		if (isObject) {
-			const box = new THREE.Box3().setFromObject(object);
-			size = box.getSize(new Vector3());
-		} else {
-			size = options?.size || new THREE.Vector3(1, 1, 1);
-		}
-		//size = new jolt.Vec3(1, 1, 1);
-		//console.log('trimesh size', size, mass);
+		let size: any = options?.size || new THREE.Vector3(1, 1, 1);
+		const mass = options?.mass || 200;
+		if (isObject) size = new THREE.Box3().setFromObject(object).getSize(new Vector3());
 		settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(vec3.jolt(size), mass);
 	}
 	// destroy the position and quaternion
 	jolt.destroy(position);
 	jolt.destroy(quaternion);
-	// return the settings
+
 	return settings;
 }
 
@@ -766,7 +759,7 @@ export function getThreeObjectForBody(body: Jolt.Body, color = "#E07A5F") {
 			threeObject = new THREE.Mesh(createMeshForShape(shape), material);
 			break;
 	}
-
+	// todo: these may not be needed. When used to create a debug shape this is actually wrong
 	threeObject.position.copy(vec3.three(body.GetPosition()));
 	threeObject.quaternion.copy(quat.joltToThree(body.GetRotation()));
 

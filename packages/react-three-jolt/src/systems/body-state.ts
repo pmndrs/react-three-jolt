@@ -12,7 +12,7 @@ import * as THREE from "three";
 import { Raw } from "../raw";
 
 import { vec3, quat, anyVec3 } from "../utils";
-import type { BodySystem } from "./body-system";
+import { getThreeObjectForBody, type BodySystem } from "./body-system";
 
 // Initital body object copied from r3/rapier's state object
 export class BodyState {
@@ -20,9 +20,12 @@ export class BodyState {
 	body: Jolt.Body;
 	BodyID: Jolt.BodyID;
 	object: Object3D | THREE.InstancedMesh;
+	debugMesh?: Object3D;
 	invertedWorldMatrix: Matrix4;
 	handle: number;
 	index?: number;
+	activeScale = new THREE.Vector3(1, 1, 1);
+	isDebugging = false;
 
 	// obstruction and collision
 	allowObstruction = true; // temporarily block obstruction
@@ -45,10 +48,6 @@ export class BodyState {
 	motionAngularVector?: THREE.Vector3;
 	motionType: "linear" | "angular" = "linear";
 	motionAsSurfaceVelocity = false;
-	/**
-	 * Required for instanced rigid bodies. (from r3/rapier)
-	 */
-	scale: Vector3;
 
 	get isSleeping() {
 		return !this.body.IsActive();
@@ -95,8 +94,7 @@ export class BodyState {
 		this.meshType = object instanceof InstancedMesh ? "instancedMesh" : "mesh";
 		this.invertedWorldMatrix = object.matrixWorld.clone().invert();
 		if (index !== undefined) this.index = index;
-		// not currently used
-		this.scale = object.scale.clone();
+
 		// not sure this is a good idea here
 		this.object.userData.body = body;
 		this.object.userData.bodyHandle = this.handle;
@@ -151,9 +149,53 @@ export class BodyState {
 		}
 		// we are an instance. we have to build a matrix
 		const matrix = new Matrix4();
-		matrix.compose(vec3.three(position), quat.three(rotation), this.scale);
+		matrix.compose(vec3.three(position), quat.three(rotation), vec3.three(this.scale));
 		// update the matrix
 		this.setMatrix(matrix);
+	}
+	//* Shapes ===============================================
+	// get the shape of the body
+	get shape() {
+		return this.body.GetShape();
+	}
+	// set the shape of the body
+	set shape(shape: Jolt.Shape) {
+		this.bodyInterface.SetShape(this.BodyID, shape, false, Raw.module.EActivation_Activate);
+		// update the debug object if it exists
+		if (this.debugMesh) this.updateDebugMesh();
+	}
+
+	//* Debugging ===============================================
+	updateDebugMesh() {
+		const newMesh = getThreeObjectForBody(this.body);
+		// reset any weird position data
+		newMesh.position.set(0, 0, 0);
+		newMesh.rotation.set(0, 0, 0);
+		// we have to put an inverted scale on the newMesh so it matches the actual body
+
+		newMesh.scale.copy(new THREE.Vector3(1, 1, 1).divide(this.activeScale));
+		// if the current object is visible it will have a parent
+		const currentParent = this.debugMesh?.parent;
+		if (currentParent) currentParent.remove(this.debugMesh!);
+		this.debugMesh = newMesh;
+		if (currentParent) currentParent.add(this.debugMesh);
+	}
+	// get and set debugging
+	get debug() {
+		return this.isDebugging;
+	}
+	set debug(newDebug: boolean) {
+		//if we are already debugging stop by removing from the object
+		if (!newDebug) {
+			this.object.remove(this.debugMesh!);
+			this.isDebugging = false;
+			return;
+		}
+		// check if the debug mesh already exists
+		if (!this.debugMesh) this.updateDebugMesh();
+		// add the debug mesh to the object
+		this.object.add(this.debugMesh!);
+		this.isDebugging = true;
 	}
 
 	//* Direct Manipulation ===================================
@@ -225,7 +267,60 @@ export class BodyState {
 		this.position = position;
 		this.rotation = rotation;
 	}
-	// physics related getters and setters
+	get scale() {
+		return this.activeScale;
+	}
+
+	set scale(inScale: THREE.Vector3 | number[] | number) {
+		const scale =
+			inScale instanceof Number
+				? vec3.three(inScale, inScale as number, inScale as number)
+				: vec3.three(inScale);
+
+		let existingShape = this.body.GetShape() as Jolt.ScaledShape;
+		let baseShape: Jolt.Shape | Jolt.ScaledShape = existingShape;
+		// first, determine if the shape is a scaled shape
+		if (existingShape.GetSubType() === Raw.module.EShapeSubType_Scaled) {
+			// we have to be 100% that this shape has what we need
+			existingShape = Raw.module.castObject(existingShape, Raw.module.ScaledShape);
+			// get the existing scale
+			const existingScale = existingShape.GetScale();
+			// compare existing scale to new scale
+			if (
+				existingScale.GetX() === scale.x &&
+				existingScale.GetY() === scale.y &&
+				existingScale.GetZ() === scale.z
+			) {
+				// if they are the same, we don't need to do anything
+				return;
+			}
+
+			baseShape = existingShape.GetInnerShape();
+		}
+		// create the new scaled shape
+		const joltScale = vec3.jolt(scale);
+		const newShape = Raw.module.castObject(
+			new Raw.module.ScaledShape(baseShape, joltScale),
+			Raw.module.ScaledShape
+		);
+		// set the new shape
+		this.bodyInterface.SetShape(this.BodyID, newShape, true, Raw.module.EActivation_Activate);
+		//cleanup the scale
+		Raw.module.destroy(joltScale);
+
+		// if we are a regular shape we can get an accurate actualScale
+		let actualScale = scale;
+
+		// check if the new shape is a scaled shape
+		if (newShape.GetSubType() === Raw.module.EShapeSubType_Scaled) {
+			actualScale = vec3.three(newShape.GetScale());
+		}
+		this.activeScale = actualScale;
+		// if not an instance update the object
+		if (!this.isInstance) {
+			this.object.scale.copy(actualScale);
+		}
+	}
 	// get the velocity of the body
 	get velocity() {
 		return vec3.three(this.body.GetLinearVelocity());
@@ -338,6 +433,94 @@ export class BodyState {
 		this.body.GetCollisionGroup().SetSubGroupID(subGroup);
 	}
 
+	//* DOF Manipulation ------------------------------------
+	// get the raw DOF
+	get rawDOF() {
+		return this.body.GetMotionProperties().GetAllowedDOFs();
+	}
+	// set the raw DOF
+	set rawDOF(dof: number) {
+		// massProperties comes from the shape.
+		const massProperties = this.body.GetShape().GetMassProperties();
+		this.body.GetMotionProperties().SetMassProperties(dof, massProperties);
+	}
+
+	get dof() {
+		const rawDOF = this.rawDOF;
+		return {
+			x: (rawDOF & Raw.module.EAllowedDOFs_TranslationX) !== 0,
+			y: (rawDOF & Raw.module.EAllowedDOFs_TranslationY) !== 0,
+			z: (rawDOF & Raw.module.EAllowedDOFs_TranslationZ) !== 0,
+			rotX: (rawDOF & Raw.module.EAllowedDOFs_RotationX) !== 0,
+			rotY: (rawDOF & Raw.module.EAllowedDOFs_RotationY) !== 0,
+			rotZ: (rawDOF & Raw.module.EAllowedDOFs_RotationZ) !== 0
+		};
+	}
+	setDof(dof: {
+		x?: boolean;
+		y?: boolean;
+		z?: boolean;
+		rotX?: boolean;
+		rotY?: boolean;
+		rotZ?: boolean;
+	}) {
+		let newDOF = this.rawDOF;
+		console.log("Setting DOF", dof, "current DOF", this.dof, "rawDOF", this.rawDOF);
+		const allowedDOFs = [
+			{ key: "x", flag: Raw.module.EAllowedDOFs_TranslationX },
+			{ key: "y", flag: Raw.module.EAllowedDOFs_TranslationY },
+			{ key: "z", flag: Raw.module.EAllowedDOFs_TranslationZ },
+			{ key: "rotX", flag: Raw.module.EAllowedDOFs_RotationX },
+			{ key: "rotY", flag: Raw.module.EAllowedDOFs_RotationY },
+			{ key: "rotZ", flag: Raw.module.EAllowedDOFs_RotationZ }
+		];
+
+		allowedDOFs.forEach((optionalDof) => {
+			//console.log("checking", dof[optionalDof.key], dof[optionalDof.key] == undefined);
+			//@ts-ignore
+			if (dof[optionalDof.key]) {
+				newDOF |= optionalDof.flag;
+				// leaving these logs because its annoying to retype
+				/*console.log(
+					"setting",
+					optionalDof.key,
+					optionalDof.flag,
+					newDOF,
+					createBinaryString(newDOF)
+				);
+				*/
+			}
+			//@ts-ignore
+			else if (dof[optionalDof.key] !== undefined) {
+				newDOF &= ~optionalDof.flag;
+				/*console.log(
+					"unsetting",
+					optionalDof.key,
+					optionalDof.flag,
+					newDOF,
+					createBinaryString(newDOF)
+				);
+				*/
+			}
+		});
+
+		this.rawDOF = newDOF;
+	}
+	// Rapier stype
+	lockRotations() {
+		this.setDof({ rotX: false, rotY: false, rotZ: false });
+	}
+	lockTranslations() {
+		this.setDof({ x: false, y: false, z: false });
+	}
+	// rapier style activation
+	setEnabledRotations(x: boolean, y: boolean, z: boolean) {
+		this.setDof({ rotX: x, rotY: y, rotZ: z });
+	}
+	setEnabledTranslations(x: boolean, y: boolean, z: boolean) {
+		this.setDof({ x, y, z });
+	}
+
 	//* Force Manipulation ----------------------------------
 	// apply a force to the body
 	applyForce(force: Vector3) {
@@ -353,7 +536,6 @@ export class BodyState {
 	}
 	// add impulse to the body
 	addImpulse(impulse: Vector3) {
-		//console.log("adding impulse", impulse);
 		const newVec = vec3.jolt(impulse);
 		this.body.AddImpulse(newVec);
 		Raw.module.destroy(newVec);

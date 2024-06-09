@@ -31,6 +31,16 @@ declare module Jolt {
         clear(): void;
         data(): Vec3MemRef;
     }
+    class ArrayQuat {
+        empty(): boolean;
+        size(): number;
+        at(inIndex: number): Quat;
+        push_back(inValue: Quat): void;
+        reserve(inSize: number): void;
+        resize(inSize: number): void;
+        clear(): void;
+        data(): QuatMemRef;
+    }
     class ArrayMat44 {
         empty(): boolean;
         size(): number;
@@ -282,6 +292,8 @@ declare module Jolt {
     function _emscripten_enum_SoftBodySharedSettings_ELRAType_SoftBodySharedSettings_ELRAType_GeodesicDistance(): SoftBodySharedSettings_ELRAType;
     class Vec3MemRef {
     }
+    class QuatMemRef {
+    }
     class Mat44MemRef {
     }
     class FloatMemRef {
@@ -500,6 +512,7 @@ declare module Jolt {
         SetAxisZ(inV: Vec3): void;
         SetTranslation(inV: Vec3): void;
         SetColumn4(inCol: number, inV: Vec4): void;
+        GetColumn4(inCol: number): Vec4;
     }
     class RMat44 {
         constructor();
@@ -531,6 +544,7 @@ declare module Jolt {
         SetAxisZ(inV: Vec3): void;
         SetTranslation(inV: RVec3): void;
         SetColumn4(inCol: number, inV: Vec4): void;
+        GetColumn4(inCol: number): Vec4;
     }
     class AABox {
         constructor();
@@ -635,7 +649,7 @@ declare module Jolt {
         get_mDirection(): Vec3;
         set_mDirection(mDirection: Vec3): void;
         readonly mDirection: Vec3;
-        GetPointOnRay(inFraction: number): Vec3;
+        GetPointOnRay(inFraction: number): RVec3;
     }
     class Plane {
         constructor(inNormal: Vec3, inConstant: number);
@@ -893,6 +907,9 @@ declare module Jolt {
     }
     class ConvexHullShape extends ConvexShape {
     }
+    class CompoundShapeSettings extends ShapeSettings {
+        AddShape(inPosition: Vec3, inRotation: Quat, inShape: ShapeSettings, inUserData: number): void;
+    }
     class CompoundShapeSubShape {
         GetPositionCOM(): Vec3;
         GetRotation(): Quat;
@@ -907,11 +924,21 @@ declare module Jolt {
         GetNumSubShapes(): number;
         GetSubShape(inIdx: number): CompoundShapeSubShape;
     }
-    class StaticCompoundShapeSettings extends ShapeSettings {
+    class StaticCompoundShapeSettings extends CompoundShapeSettings {
         constructor();
-        AddShape(inPosition: Vec3, inRotation: Quat, inShape: ShapeSettings, inUserData: number): void;
     }
     class StaticCompoundShape extends CompoundShape {
+    }
+    class MutableCompoundShapeSettings extends CompoundShapeSettings {
+        constructor();
+    }
+    class MutableCompoundShape extends CompoundShape {
+        AddShape(inPosition: Vec3, inRotation: Quat, inShape: Shape, inUserData: number): number;
+        RemoveShape(inIndex: number): void;
+        ModifyShape(inIndex: number, inPosition: Vec3, inRotation: Quat): void;
+        ModifyShape(inIndex: number, inPosition: Vec3, inRotation: Quat, inShape: Shape): void;
+        ModifyShapes(inStartIndex: number, inNumber: number, inPositions: Vec3MemRef, inRotations: QuatMemRef): void;
+        AdjustCenterOfMass(): void;
     }
     class DecoratedShapeSettings extends ShapeSettings {
     }
@@ -1019,6 +1046,8 @@ declare module Jolt {
         GetBlockSize(): number;
         GetPosition(inX: number, inY: number): Vec3;
         IsNoCollision(inX: number, inY: number): boolean;
+        GetMinHeightValue(): number;
+        GetMaxHeightValue(): number;
         GetHeights(inX: number, inY: number, inSizeX: number, inSizeY: number, outHeights: FloatMemRef, inHeightsStride: number): void;
         SetHeights(inX: number, inY: number, inSizeX: number, inSizeY: number, inHeights: FloatMemRef, inHeightsStride: number, inAllocator: TempAllocator, inActiveEdgeCosThresholdAngle?: number): void;
         GetMaterials(inX: number, inY: number, inSizeX: number, inSizeY: number, outMaterials: Uint8MemRef, inMaterialsStride: number): void;
@@ -1799,6 +1828,7 @@ declare module Jolt {
         ActivateBodiesInAABox(inBox: AABox, inBroadPhaseLayerFilter: BroadPhaseLayerFilter, inObjectLayerFilter: ObjectLayerFilter): void;
         DeactivateBody(inBodyID: BodyID): void;
         IsActive(inBodyID: BodyID): boolean;
+        ResetSleepTimer(inBodyID: BodyID): void;
         GetBodyType(inBodyID: BodyID): EBodyType;
         SetMotionType(inBodyID: BodyID, inMotionType: EMotionType, inActivationMode: EActivation): void;
         GetMotionType(inBodyID: BodyID): EMotionType;
@@ -1813,10 +1843,11 @@ declare module Jolt {
         GetGravityFactor(inBodyID: BodyID): number;
         SetUseManifoldReduction(inBodyID: BodyID, inUseReduction: boolean): void;
         GetUseManifoldReduction(inBodyID: BodyID): boolean;
-        AddForce(inBodyID: BodyID, inForce: Vec3): void;
-        AddForce(inBodyID: BodyID, inForce: Vec3, inPoint: RVec3): void;
-        AddTorque(inBodyID: BodyID, inTorque: Vec3): void;
-        AddForceAndTorque(inBodyID: BodyID, inForce: Vec3, inTorque: Vec3): void;
+        AddForce(inBodyID: BodyID, inForce: Vec3, inActivationMode: EActivation): void;
+        AddForce(inBodyID: BodyID, inForce: Vec3, inPoint: RVec3, inActivationMode: EActivation): void;
+        AddTorque(inBodyID: BodyID, inTorque: Vec3, inActivationMode: EActivation): void;
+        AddForceAndTorque(inBodyID: BodyID, inForce: Vec3, inTorque: Vec3, inActivationMode: EActivation): void;
+        ApplyBuoyancyImpulse(inBodyID: BodyID, inSurfacePosition: RVec3, inSurfaceNormal: Vec3, inBuoyancy: number, inLinearDrag: number, inAngularDrag: number, inFluidVelocity: Vec3, inGravity: Vec3, inDeltaTime: number): boolean;
         AddImpulse(inBodyID: BodyID, inImpulse: Vec3): void;
         AddImpulse(inBodyID: BodyID, inImpulse: Vec3, inPosition: RVec3): void;
         AddAngularImpulse(inBodyID: BodyID, inAngularImpulse: Vec3): void;
@@ -2948,6 +2979,9 @@ declare module Jolt {
         get_mMaxSlopeAngle(): number;
         set_mMaxSlopeAngle(mMaxSlopeAngle: number): void;
         mMaxSlopeAngle: number;
+        get_mEnhancedInternalEdgeRemoval(): boolean;
+        set_mEnhancedInternalEdgeRemoval(mEnhancedInternalEdgeRemoval: boolean): void;
+        mEnhancedInternalEdgeRemoval: boolean;
         get_mShape(): Shape;
         set_mShape(mShape: Shape): void;
         mShape: Shape;
@@ -3260,6 +3294,10 @@ declare module Jolt {
         constructor(inVehicleBody: Body, inSettings: VehicleConstraintSettings);
         SetMaxPitchRollAngle(inMaxPitchRollAngle: number): void;
         SetVehicleCollisionTester(inTester: VehicleCollisionTester): void;
+        OverrideGravity(inGravity: Vec3): void;
+        IsGravityOverridden(): boolean;
+        GetGravityOverride(): Vec3;
+        ResetGravityOverride(): void;
         GetLocalUp(): Vec3;
         GetLocalForward(): Vec3;
         GetWorldUp(): Vec3;

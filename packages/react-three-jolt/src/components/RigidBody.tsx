@@ -1,4 +1,5 @@
 // ridged body wrapping and mesh components
+import Jolt from "jolt-physics";
 import React, {
 	createContext,
 	memo,
@@ -7,14 +8,15 @@ import React, {
 	useMemo,
 	useRef,
 	forwardRef,
-	ReactNode
+	ReactNode,
+	Children
 } from "react";
 import * as THREE from "three";
 import { Object3D } from "three";
-import { useForwardedRef, useJolt } from "../hooks";
-import { getThreeObjectForBody } from "../systems/body-system";
+import { useForwardedRef, useJolt, useUnmount } from "../hooks";
+import { BodyType, GenerateBodyOptions } from "../systems/body-system";
 import { vec3 } from "../utils";
-import { BodyState } from "../systems";
+import { AutoShape, BodyState } from "../systems";
 
 interface RigidBodyProps {
 	children: ReactNode;
@@ -28,8 +30,8 @@ interface RigidBodyProps {
 	// sleep listener
 	//wake listener
 	// this is MOTION Type
-	type?: string;
-	shape?: string;
+	type?: BodyType;
+	shape?: AutoShape;
 	debug?: boolean;
 	ref?: any;
 	allowObstruction?: boolean;
@@ -44,20 +46,27 @@ interface RigidBodyProps {
 	linearDamping?: number;
 	angularDamping?: number;
 	friction?: number;
-
-	//TODO: do these work yet?
 	scale?: number[];
+
+	// dof
+	lockRotations?: boolean;
+	lockTranslations?: boolean;
+	dof?: { x?: boolean; y?: boolean; z?: boolean; rotX?: boolean; rotY?: boolean; rotZ?: boolean };
+	//TODO: do these work yet?
+
 	mass?: number;
 	// remove
 	quaternion?: number[];
 }
 export interface RigidBodyContext {
-	object: any;
-	type: string | undefined;
+	body: BodyState | undefined;
+	type: BodyType | undefined;
 	position: THREE.Vector3 | undefined;
 	rotation: THREE.Vector3 | undefined;
 	scale: THREE.Vector3 | undefined;
 	quaternion: THREE.Quaternion | undefined;
+	// methods
+	setActiveShape: (shape: any) => void;
 }
 export const RigidBodyContext = createContext<RigidBodyContext | undefined>(undefined!);
 
@@ -86,6 +95,11 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			allowObstruction,
 			obstructionTimelimit,
 
+			//dof
+			lockRotations,
+			lockTranslations,
+			dof,
+
 			debug: propDebug,
 
 			onContactAdded,
@@ -97,21 +111,44 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 		const objectRef = useRef<Object3D>(null);
 		//TODO: Figure out way to put BodyState type on this ref
 		const rigidBodyRef = useForwardedRef(forwardedRef);
-		const debugMeshRef = useRef<THREE.Mesh>(null);
+
+		// state refs allow us to track if inputs have changed without triggering a re-render
+		const prevPosition = useRef<THREE.Vector3 | undefined>(undefined);
+		const prevRotation = useRef<THREE.Quaternion | undefined>(undefined);
+
 		// load the jolt stuff
 		const { bodySystem, debug: physicsDebug } = useJolt();
+
+		// States
+		const bodyLoaded = useRef(false);
+		const [activeShape, setActiveShape] = React.useState<Jolt.Shape>();
+
 		// this allows us to debug on the physics system or the component specifically
 		const debug = propDebug || physicsDebug;
+
 		//* Load the body -------------------------------------
+		// todo: we cant use useMount here because we need the shape dependencies
 		useEffect(() => {
-			if (!bodySystem) return;
+			if (!bodySystem || bodyLoaded.current) return;
+			// detect if any of the children are shapes
+			let hasShapes = false;
+			if (children)
+				Children.toArray(children).forEach((child) => {
+					//@ts-ignore
+					if (child.type && child.type.displayName === "Shape") hasShapes = true;
+				});
+			//if (hasShapes) console.log("hasShapes", hasShapes, activeShape);
+			// if the children are shapes, we will wait for them to mount
+			if (hasShapes && !activeShape) return;
+			// todo: is this protection needed?
 			if (objectRef.current) {
 				//handle options from props
-				const options = {
-					bodyType: type || "dynamic", // default to dynamic
-					shapeType: shape || null,
+				const options: GenerateBodyOptions = {
 					group: group,
-					subGroup: subGroup
+					subGroup: subGroup,
+					shape: activeShape,
+					bodyType: type,
+					shapeType: shape
 				};
 				//put the initial position, rotation, scale, and quaternion in the options
 				if (position) objectRef.current.position.copy(vec3.three(position));
@@ -120,40 +157,72 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 				//@ts-ignore
 				const bodyHandle = bodySystem.addBody(objectRef.current, options);
 				const body = bodySystem.getBody(bodyHandle);
+				if (!body) throw new Error("Body not found");
 				rigidBodyRef.current = body;
-			}
-			//destroy the rigidBody When this component is unmounted
-			return () => {
-				//@ts-ignore
-				bodySystem.removeBody(rigidBodyRef.current.handle);
-			};
-		}, [bodySystem]);
-		//*/ Debugging -------------------------------------
-		useEffect(() => {
-			if (debug && debugMeshRef.current) {
-				// get the debug threeObject for this body
-				//@ts-ignore
-				const debugObject = getThreeObjectForBody(rigidBodyRef.current.body);
-				debugMeshRef.current.geometry = debugObject.geometry;
-				debugMeshRef.current.material = new THREE.MeshStandardMaterial({
-					color: 0xff0000,
-					wireframe: true
-				});
-			}
-		}, [debug]);
+				bodyLoaded.current = true;
 
+				// for cycle reasons some stuff might have gotten missed
+				// try setting the debug
+				if (debug) body.debug = debug;
+				if (position) body.position = vec3.three(position);
+				if (rotation)
+					body.rotation = new THREE.Quaternion().setFromEuler(
+						new THREE.Euler(rotation[0], rotation[1], rotation[2])
+					);
+			}
+		}, [activeShape, bodySystem, rigidBodyRef]);
+
+		// When destroying we need to do some stuff
+		useUnmount(() => {
+			bodySystem.removeBody((rigidBodyRef.current! as BodyState).handle);
+		});
+
+		//*/ Debugging -------------------------------------
+
+		useEffect(() => {
+			if (rigidBodyRef.current) (rigidBodyRef.current as BodyState).debug = debug;
+		}, [debug, rigidBodyRef]);
+
+		//* Shape Updates -------------------------------------
+		// Shape update
+		useEffect(() => {
+			if (!rigidBodyRef.current || !bodyLoaded) return;
+			const body = rigidBodyRef.current as BodyState;
+			if (activeShape) body.shape = activeShape;
+			//if we have a scale we should also set the scale on this new shape
+			if (scale) body.scale = vec3.three(scale);
+		}, [activeShape, rigidBodyRef]);
+
+		// scale the shape when the input scale changes
+		useEffect(() => {
+			if (!rigidBodyRef.current || !bodyLoaded) return;
+			const body = rigidBodyRef.current as BodyState;
+			if (scale) body.scale = vec3.three(scale);
+		}, [scale, rigidBodyRef]);
 		//* Prop Updates -------------------------------------
 		useEffect(() => {
 			if (!rigidBodyRef.current || onlyInitialize) return;
 			const body = rigidBodyRef.current as BodyState;
-			if (position) body.position = vec3.three(position);
+			if (position) {
+				// this adds a little to things,and might be worth not doing onlyInitialize
+				// but if the input hasn't changed we should ignore this
+				const newPositon = vec3.three(position);
+				if (!prevPosition.current || !newPositon.equals(prevPosition.current)) {
+					body.position = newPositon;
+					prevPosition.current = newPositon;
+				}
+			}
 			if (rotation) {
 				const quaternion = Array.isArray(rotation)
 					? new THREE.Quaternion().setFromEuler(
 							new THREE.Euler(rotation[0], rotation[1], rotation[2])
 						)
 					: rotation;
-				body.rotation = quaternion;
+				// if the input hasn't changed we should ignore this
+				if (!prevRotation.current || !quaternion.equals(prevRotation.current)) {
+					body.rotation = quaternion;
+					prevRotation.current = quaternion;
+				}
 			}
 		}, [onlyInitialize, position, rotation, rigidBodyRef]);
 
@@ -188,7 +257,6 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			const isAllowing = body.allowObstruction;
 			if (allowObstruction !== undefined) {
 				if (isAllowing !== allowObstruction) {
-					console.log("setting allow obstruction", allowObstruction);
 					body.allowObstruction = allowObstruction as boolean;
 				}
 				if (obstructionTimelimit) {
@@ -207,7 +275,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			isSensor
 		]);
 
-		// groups
+		//* Groups -------------------------------------
 		useEffect(() => {
 			if (!rigidBodyRef.current) return;
 			const body = rigidBodyRef.current as BodyState;
@@ -215,23 +283,36 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 			if (subGroup) body.subGroup = subGroup;
 		}, [group, subGroup, rigidBodyRef]);
 
+		//* DOF -------------------------------------
+		useEffect(() => {
+			if (!rigidBodyRef.current) return;
+			const body = rigidBodyRef.current as BodyState;
+			if (dof) {
+				const { x, y, z, rotX, rotY, rotZ } = dof;
+				body.setEnabledTranslations(x || false, y || false, z || false);
+				body.setEnabledRotations(rotX || false, rotY || false, rotZ || false);
+			}
+			if (lockRotations) body.lockRotations();
+			if (lockTranslations) body.lockTranslations();
+		}, [dof, lockRotations, lockTranslations, rigidBodyRef]);
+
 		// the context should update when a new handle is added
 		//@ts-ignore
 		const contextValue: RigidBodyContext = useMemo(() => {
 			return {
-				object: objectRef.current,
+				body: rigidBodyRef.current,
 				type,
 				position,
 				rotation,
 				scale,
-				quaternion
+				quaternion,
+				setActiveShape
 			};
-		}, [objectRef, type, position, rotation, scale, quaternion]);
+		}, [rigidBodyRef, type, position, rotation, scale, quaternion]);
 		return (
 			<RigidBodyContext.Provider value={contextValue}>
 				<object3D ref={objectRef} {...objectProps}>
 					{children}
-					<mesh ref={debugMeshRef} visible={debug} ignore />
 				</object3D>
 			</RigidBodyContext.Provider>
 		);
