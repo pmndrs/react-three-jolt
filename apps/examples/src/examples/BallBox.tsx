@@ -86,7 +86,7 @@ export function BallBox() {
 	const updateGravityOnDevice = (e: DeviceMotionEvent) => {
 		if (!e.accelerationIncludingGravity || e.accelerationIncludingGravity.x === null) return;
 		const { x, y, z } = e.accelerationIncludingGravity!;
-		console.log("setting from device", e);
+		//console.log("setting from device", e);
 		setGravity([x || 0, y || 0, z || 0]);
 	};
 
