@@ -1,8 +1,9 @@
 // creates a jolt constrain given two bodies
-import { useJolt, useUnmount } from './hooks';
-import { useMemo } from 'react';
+import { useRef } from 'react';
 import * as THREE from 'three';
-import { Raycaster, AdvancedRaycaster, Multicaster } from '../systems';
+import { AdvancedRaycaster, Multicaster, Raycaster } from '../systems';
+import { useJolt } from './hooks';
+import { useImperativeInstance } from './use-imperative-instance';
 
 // helper function to take a list of bodies and add them to the same filter group
 
@@ -12,35 +13,41 @@ export const useRaycaster = (
     type?: string
 ) => {
     const { physicsSystem } = useJolt();
-    const raycaster: Raycaster = useMemo(() => {
-        const caster: Raycaster = physicsSystem.getRaycaster();
-        //@ts-ignore
-        if (origin) caster.origin = origin;
-        //@ts-ignore
-        if (direction) caster.direction = direction;
-        if (type) caster.setCollector(type);
 
-        return caster;
-    }, [origin, direction, type, physicsSystem]);
-    /* lets try with a memo first
-    useImperativeInstance(
+    const raycaster = useRef<Raycaster | null>(null);
+
+    const get = useImperativeInstance(
         () => {
-            raycaster.current = physicsSystem.getRaycaster();
-        if (origin) raycaster.current.origin = origin;
-        if (direction) raycaster.current.direction = direction;
+            const caster = physicsSystem.getRaycaster();
 
+            if (origin) {
+                //@ts-ignore
+                caster.origin = origin;
+            }
+
+            if (direction) {
+                //@ts-ignore
+                caster.direction = direction;
+            }
+
+            if (type) {
+                caster.setCollector(type);
+            }
+
+            raycaster.current = caster;
+
+            return caster;
         },
-        (rawConstraint) => {
-            //  physicsSystem.constraintSystem.removeConstraint(rawConstraint);
+        (instance) => {
+            raycaster.current = null;
+            instance.destroy();
         },
-        []
+        [origin, direction, type, physicsSystem]
     );
-    */
-    useUnmount(() => {
-        console.log('hook destroying raycaster');
-        raycaster.destroy();
-    });
-    return raycaster;
+
+    get();
+
+    return raycaster.current!;
 };
 
 export const useAdvancedRaycaster = (
@@ -49,15 +56,39 @@ export const useAdvancedRaycaster = (
     type?: string
 ) => {
     const { physicsSystem } = useJolt();
-    const raycaster: AdvancedRaycaster = useMemo(() => {
-        const caster = physicsSystem.getAdvancedRaycaster();
-        if (origin) caster.origin = origin;
-        if (direction) caster.direction = direction;
-        if (type) caster.setCollector(type);
 
-        return caster;
-    }, [origin, direction, type, physicsSystem]);
-    return raycaster;
+    const raycaster = useRef<AdvancedRaycaster | null>(null);
+
+    const get = useImperativeInstance(
+        () => {
+            const caster = physicsSystem.getAdvancedRaycaster();
+
+            if (origin) {
+                caster.origin = origin;
+            }
+
+            if (direction) {
+                caster.direction = direction;
+            }
+
+            if (type) {
+                caster.setCollector(type);
+            }
+
+            raycaster.current = caster;
+
+            return caster;
+        },
+        (instance) => {
+            raycaster.current = null;
+            instance.destroy();
+        },
+        [origin, direction, type, physicsSystem]
+    );
+
+    get();
+
+    return raycaster.current!;
 };
 
 export const useMulticaster = (
@@ -66,16 +97,37 @@ export const useMulticaster = (
     type?: string
 ) => {
     const { physicsSystem } = useJolt();
-    const raycaster: Multicaster = useMemo(() => {
-        const caster = physicsSystem.getMulticaster();
-        if (origin) caster.origin = origin;
-        if (direction) caster.direction = direction;
-        if (type) caster.setCollector(type);
-        return caster;
-    }, [origin, direction, type, physicsSystem]);
 
-    useUnmount(() => {
-        raycaster.raycaster.destroy();
-    });
-    return raycaster;
+    const raycaster = useRef<Multicaster | null>(null);
+
+    const get = useImperativeInstance(
+        () => {
+            const caster = physicsSystem.getMulticaster();
+
+            if (origin) {
+                caster.origin = origin;
+            }
+
+            if (direction) {
+                caster.direction = direction;
+            }
+
+            if (type) {
+                caster.setCollector(type);
+            }
+
+            raycaster.current = caster;
+
+            return caster;
+        },
+        (instance) => {
+            raycaster.current = null;
+            instance.raycaster.destroy();
+        },
+        [origin, direction, type, physicsSystem]
+    );
+
+    get();
+
+    return raycaster.current!;
 };

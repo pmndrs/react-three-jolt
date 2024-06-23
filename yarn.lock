@@ -1765,7 +1765,7 @@ __metadata:
     eslint: "npm:^9.0.0"
     gamepad.js: "npm:^2.1.0"
     happy-dom: "npm:^14.7.1"
-    jolt-physics: "npm:^0.22.0"
+    jolt-physics: "npm:^0.24.0"
     prettier: "npm:^3.2.5"
     react: "npm:^18.2.0"
     react-dom: "npm:^18.2.0"
@@ -5257,10 +5257,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"jolt-physics@npm:^0.22.0":
-  version: 0.22.0
-  resolution: "jolt-physics@npm:0.22.0"
-  checksum: 10c0/3cd81811c0c520e0a72feadfa9be6ab92f7c3f51dc3713f424f1a0b5b9bd5c6b6bb386632f0dafd08d733eb856b6ab413878acf2a5b22f52ef352fb00778eaab
+"jolt-physics@npm:^0.24.0":
+  version: 0.24.0
+  resolution: "jolt-physics@npm:0.24.0"
+  checksum: 10c0/53ec9fe45014b36ae7b12f72441dad40fe2b3c8509cdeefd3ec2088ce617345fe66392f4122e9534763aeaa66f651962aee56105f36528636d74f3e99325414a
   languageName: node
   linkType: hard
 

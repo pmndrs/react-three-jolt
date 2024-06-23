@@ -4,7 +4,6 @@ import { useThree } from "@react-three/fiber";
 import {
 	Physics,
 	RaycastHit,
-	Raycaster,
 	RigidBody,
 	useMulticaster,
 	useRaycaster,
@@ -52,7 +51,7 @@ export function RaycastSimpleDemo() {
 }
 
 function RaycastSimple() {
-	const raycaster: Raycaster = useRaycaster();
+	const raycaster = useRaycaster();
 	const multicaster = useMulticaster();
 	const { scene } = useThree();
 	const debugObject = useRef(new THREE.Object3D());

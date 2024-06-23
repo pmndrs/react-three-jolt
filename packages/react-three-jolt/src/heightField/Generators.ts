@@ -78,7 +78,7 @@ export function applyHeightmapImgDataToPlane(
     // This is the size data of the image, not the plane
     // const { width, height } = heightmap;
     const { width } = heightmap;
-    const geometry = plane instanceof THREE.Mesh ? plane.geometry : plane;
+    const geometry = (plane as THREE.Mesh).isMesh ? (plane as THREE.Mesh).geometry : (plane as THREE.BufferGeometry);
     const vertices = geometry.attributes.position.array as Float32Array;
     const vertexCount = vertices.length / 3;
     // This is the size of the plane, which may not be the same as the image

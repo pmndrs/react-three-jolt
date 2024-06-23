@@ -46,7 +46,7 @@
     },
     "dependencies": {
         "gamepad.js": "^2.1.0",
-        "jolt-physics": "^0.22.0"
+        "jolt-physics": "^0.24.0"
     },
     "devDependencies": {
         "@react-three/fiber": "8.16.1",

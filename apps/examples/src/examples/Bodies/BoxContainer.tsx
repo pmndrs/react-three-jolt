@@ -1,4 +1,4 @@
-import { useThree } from "@react-three/fiber";
+import { useThree, Vector3 } from "@react-three/fiber";
 import { RigidBody, Shape } from "@react-three/jolt";
 
 export function BoxContainer(props: any) {
@@ -54,6 +54,13 @@ function Wall({
 	position = [0, 0, 0],
 	color = "#114929",
 	scale = [1, 1, 1]
+}: {
+	cast?: boolean;
+	receive?: boolean;
+	position?: Vector3
+	color?: string;
+	scale?: Vector3;
+
 }) {
 	return (
 		<RigidBody position={position} scale={scale} type="static">

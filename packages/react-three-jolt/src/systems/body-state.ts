@@ -11,8 +11,9 @@ import {
 import * as THREE from "three";
 import { Raw } from "../raw";
 
-import { vec3, quat, anyVec3 } from "../utils";
-import { getThreeObjectForBody, type BodySystem } from "./body-system";
+import { vec3, quat, anyVec3, isColor } from "../utils";
+import type { BodySystem } from "./body-system";
+import { getThreeObjectForBody } from "./debug";
 
 // Initital body object copied from r3/rapier's state object
 export class BodyState {
@@ -91,7 +92,7 @@ export class BodyState {
 		this.handle = this.BodyID.GetIndexAndSequenceNumber();
 
 		// Instance properties
-		this.meshType = object instanceof InstancedMesh ? "instancedMesh" : "mesh";
+		this.meshType = (object as THREE.InstancedMesh).isInstancedMesh ? "instancedMesh" : "mesh";
 		this.invertedWorldMatrix = object.matrixWorld.clone().invert();
 		if (index !== undefined) this.index = index;
 
@@ -239,6 +240,7 @@ export class BodyState {
 		this.bodyInterface.SetPosition(this.BodyID, newPosition, Raw.module.EActivation_Activate);
 		Raw.module.destroy(newPosition);
 	}
+
 	// get the position of the body and wrap it in a three vector
 	getPosition(asJolt?: boolean): THREE.Vector3 | Jolt.Vec3 {
 		if (asJolt) return this.bodyInterface.GetPosition(this.BodyID) as Jolt.Vec3;
@@ -271,11 +273,8 @@ export class BodyState {
 		return this.activeScale;
 	}
 
-	set scale(inScale: THREE.Vector3 | number[] | number) {
-		const scale =
-			inScale instanceof Number
-				? vec3.three(inScale, inScale as number, inScale as number)
-				: vec3.three(inScale);
+	set scale(inScale: THREE.Vector3) {
+		const scale = inScale;
 
 		let existingShape = this.body.GetShape() as Jolt.ScaledShape;
 		let baseShape: Jolt.Shape | Jolt.ScaledShape = existingShape;
@@ -353,14 +352,15 @@ export class BodyState {
 		return _color;
 	}
 	set color(color: THREE.Color | string | number) {
-		color = color instanceof THREE.Color ? color : new THREE.Color(color);
+		const threeColor = isColor(color) ? color : new THREE.Color(color);
+
 		// if we are a mesh, set the material color of the mesh
 		if (!this.isInstance) {
 			//@ts-ignore
 			(this.object as THREE.Mesh).material.color = color;
 		}
 		// if we are an instance, set the color of the instanced mesh
-		(this.object as InstancedMesh).setColorAt(this.index!, color);
+		(this.object as InstancedMesh).setColorAt(this.index!, threeColor);
 	}
 
 	//* Physics Properties ----------------------------------

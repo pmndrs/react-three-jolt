@@ -1,7 +1,7 @@
 import type Jolt from 'jolt-physics';
 
 export type Vector3Tuple = [number, number, number];
-export type Vector4Tuple = [number, number, number, number] | number[];
+export type Vector4Tuple = [number, number, number, number];
 
 export type PhysicsConfig = {
     timeStep: number | 'vary';

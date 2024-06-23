@@ -1,148 +1,154 @@
 // This is the core component that manages and stores the simulation
-import * as THREE from "three";
-import type Jolt from "jolt-physics";
+import type Jolt from 'jolt-physics';
+import * as THREE from 'three';
 //import InitJolt from 'jolt-physics/wasm-compat'
-import { suspend } from "suspend-react";
-import { Raw, initJolt } from "../raw";
-import { JoltContext, joltContext } from "../context";
-import {
-	FC,
-	ReactNode,
-	//  ReactNode,
-	useCallback,
-	useEffect,
-	//useMemo,
-	useId,
-	// useRef,
-	useState
-} from "react";
+import { FC, ReactNode, useCallback, useEffect, useId, useState } from 'react';
+import { suspend } from 'suspend-react';
+import { JoltContext, joltContext } from '../context';
+import { Raw, initJolt } from '../raw';
 // to clear weird TS error
-import React from "react";
+import React from 'react';
 
-import { useMount, useUnmount } from "../hooks";
 // library imports
-import { FrameStepper } from "./FrameStepper";
+import { FrameStepper } from './FrameStepper';
 
 // physics system import
-import { PhysicsSystem } from "../systems/physics-system";
+import { Vector3 } from '@react-three/fiber';
+import { PhysicsSystem } from '../systems/physics-system';
+import { vec3 } from '../utils';
 
 // TODO: Move this to a better place
-declare module "three" {
-	interface Mesh {
-		shape: string;
-		ignore: boolean;
-	}
+declare module 'three' {
+    interface Mesh {
+        shape: string;
+        ignore: boolean;
+    }
 }
 
 // stepping state object
 export interface SteppingState {
-	accumulator: number;
-	previousState: Map<
-		Jolt.Body,
-		{
-			position: THREE.Vector3;
-			quaternion: THREE.Quaternion;
-		}
-	>;
+    accumulator: number;
+    previousState: Map<
+        Jolt.Body,
+        {
+            position: THREE.Vector3;
+            quaternion: THREE.Quaternion;
+        }
+    >;
 }
 
 // Core component
 export type PhysicsProps = {
-	defaultBodySettings?: any;
-	children: ReactNode;
-	gravity?: number | number[] | THREE.Vector3;
-	paused?: boolean;
-	interpolate?: boolean;
-	updatePriority?: any;
-	updateLoop?: "follow" | "independent";
-	debug?: boolean;
-	module?: any;
+    defaultBodySettings?: any;
+    children: ReactNode;
+    gravity?: Vector3 | number;
+    paused?: boolean;
+    interpolate?: boolean;
+    updatePriority?: any;
+    updateLoop?: 'follow' | 'independent';
+    debug?: boolean;
+    module?: any;
 };
 
 export const Physics: FC<PhysicsProps> = (props) => {
-	const {
-		defaultBodySettings,
-		// TODO: determine and apply/remove these defaults
-		children,
-		gravity,
+    const {
+        defaultBodySettings,
+        // TODO: determine and apply/remove these defaults
+        children,
+        gravity,
 
-		paused = false,
-		debug = false,
-		//interpolate = true,
-		updatePriority,
-		updateLoop = "follow",
+        paused = false,
+        debug = false,
+        //interpolate = true,
+        updatePriority,
+        updateLoop = 'follow',
 
-		//possible module or path?
-		module
-	} = props;
+        //possible module or path?
+        module
+    } = props;
 
-	// =================================================
-	//* Module initialization
-	//if the user passed a module path try to load it
-	if (module) {
-		suspend(() => initJolt(module), ["jolt", module]);
-	} else {
-		suspend(() => initJolt(), ["jolt"]);
-	}
-	// =================================================
-	const jolt = Raw.module;
-	const pid = useId();
+    // =================================================
+    //* Module initialization
+    //if the user passed a module path try to load it
+    if (module) {
+        suspend(() => initJolt(module), ['jolt', module]);
+    } else {
+        suspend(() => initJolt(), ['jolt']);
+    }
+    // =================================================
+    const jolt = Raw.module;
+    const pid = useId();
 
-	const [physicsSystem, setPhysicsSystem] = useState<PhysicsSystem>();
-	const [contextApi, setContextApi] = useState<JoltContext>();
+    const [physicsSystem, setPhysicsSystem] = useState<PhysicsSystem>();
+    const [contextApi, setContextApi] = useState<JoltContext>();
 
-	useMount(() => {
-		if (debug) console.log("** Physics Component: " + pid + " Mounted **");
-		const ps = new PhysicsSystem(pid);
+    ;(window as any).contextApi = contextApi;
+
+    useEffect(() => {
+        if (debug) console.log('** Physics Component: ' + pid + ' Mounted **');
+        const ps = new PhysicsSystem(pid);
+        
 		// we have to pass this here to catch before body creation
-		if (defaultBodySettings) ps.bodySystem.defaultBodySettings = defaultBodySettings;
-		setPhysicsSystem(ps);
-	});
+        if (defaultBodySettings) {
+			ps.bodySystem.defaultBodySettings = defaultBodySettings;
+		}
 
-	// setup the step
-	const step = useCallback(
-		(dt: number) => {
-			// TODO: does running a conditional cause a performance hit?
-			if (physicsSystem) physicsSystem.onUpdate(dt);
-		},
-		[physicsSystem]
-	);
-	// cleanup and destruction of system when component unmounts
-	useUnmount(() => {
-		if (physicsSystem) physicsSystem.destroy(pid);
-	});
+        setPhysicsSystem(ps);
 
-	// These will be effects for props to send to the correct systems
+        return () => {
+            ps.destroy(pid);
+        }
+    }, []);
 
-	useEffect(() => {
-		if (!physicsSystem) return;
-		//@ts-ignore
-		if (gravity != null) physicsSystem.setGravity(gravity);
-	}, [gravity, physicsSystem]);
+    // setup the step
+    const step = useCallback(
+        (dt: number) => {
+            // TODO: does running a conditional cause a performance hit?
+            if (physicsSystem) physicsSystem.onUpdate(dt);
+        },
+        [physicsSystem]
+    );
 
-	// set the context
-	useEffect(() => {
-		if (!physicsSystem) return;
-		setContextApi({
-			jolt,
-			physicsSystem,
-			bodySystem: physicsSystem.bodySystem,
-			joltInterface: physicsSystem.joltInterface,
-			paused,
-			debug,
-			step
-		});
-		// set the paused and debug state on the physics system
-		if (physicsSystem.debug !== debug) physicsSystem.debug = debug;
-		if (physicsSystem.paused !== paused) physicsSystem.paused = paused;
-	}, [debug, jolt, paused, physicsSystem, step]);
+    // These will be effects for props to send to the correct systems
+    useEffect(() => {
+        if (!physicsSystem) return;
+        if (gravity === undefined) return;
 
-	if (!contextApi || !contextApi.physicsSystem) return null;
+        physicsSystem.setGravity(
+            typeof gravity === 'number' ? new THREE.Vector3(0, -gravity, 0) : vec3.three(gravity)
+        );
+    }, [gravity, physicsSystem]);
 
-	return (
-		<joltContext.Provider value={contextApi}>
-			<FrameStepper type={updateLoop} onStep={step} updatePriority={updatePriority} />
-			{children}
-		</joltContext.Provider>
-	);
+    // set the context
+    useEffect(() => {
+        if (!physicsSystem) return;
+
+        setContextApi({
+            jolt,
+            physicsSystem,
+            bodySystem: physicsSystem.bodySystem,
+            joltInterface: physicsSystem.joltInterface,
+            paused,
+            debug,
+            step
+        });
+
+        // set the paused and debug state on the physics system
+        if (physicsSystem.debug !== debug) {
+            physicsSystem.debug = debug;
+        }
+
+        if (physicsSystem.paused !== paused) {
+            physicsSystem.paused = paused;
+        }
+    }, [debug, jolt, paused, physicsSystem, step]);
+
+    if (!contextApi || !contextApi.physicsSystem) return null;
+
+    return (
+        <joltContext.Provider value={contextApi}>
+            <FrameStepper type={updateLoop} onStep={step} updatePriority={updatePriority} />
+            {children}
+        </joltContext.Provider>
+    );
 };

@@ -6,8 +6,6 @@ import React, {
 	memo,
 	useEffect,
 	useState,
-	//  useLayoutEffect,
-	//useMemo,
 	useRef,
 	forwardRef,
 	ReactNode,
@@ -24,14 +22,15 @@ import {
 	//generateCompoundShapeSettings
 } from "../../systems";
 import { RigidBodyContext } from "../RigidBody";
+import { Vector3 } from "@react-three/fiber";
 // creates a Jolt Shape from three.js meshes.
 //NOTE by default doesn't render them
 
 // Shape Props
 interface ShapeProps {
 	children?: ReactNode;
-	position?: number[];
-	rotation?: [number, number, number];
+	position?: Vector3;
+	rotation?: Vector3;
 	scale?: number[];
 
 	dynamic?: boolean;
@@ -126,7 +125,7 @@ export const Shape: React.FC<ShapeProps> = memo(
 		// helper method to generate the compound shape data
 		const generatecompoundData = (settings: any): CompoundShapeData => {
 			const quaternion = new THREE.Quaternion().setFromEuler(
-				new THREE.Euler().fromArray(rotation || [0, 0, 0])
+				new THREE.Euler().fromArray(vec3.tuple(rotation) || [0, 0, 0])
 			);
 			return {
 				shapeSettings: settings,

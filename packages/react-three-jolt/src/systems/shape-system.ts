@@ -11,7 +11,7 @@ import { BufferGeometry, Object3D, Vector3 } from "three";
 import { SphereGeometry, BoxGeometry, CapsuleGeometry, CylinderGeometry } from "three";
 import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
 import { Raw } from "../raw";
-import { anyVec3, quat, vec3 } from "../utils";
+import { anyVec3, isBoxGeometry, isBufferGeometry, isCapsuleGeometry, isCylinderGeometry, isMesh, isSphereGeometry, quat, vec3 } from "../utils";
 
 export class ShapeSystem {
 	private physicsSystem: Jolt.PhysicsSystem;
@@ -46,7 +46,7 @@ export const getShapeSettingsFromObject = (
 	const shapes: any = [];
 
 	object.traverse((child) => {
-		if (child instanceof THREE.Mesh) {
+		if (isMesh(child)) {
 			// adding ignore to meshes skips the shape generator
 			if (child.geometry) {
 				// TODO: Until we understand the offsets we are going to get both here
@@ -93,20 +93,20 @@ type PossibleGeometry =
 	| SphereGeometry
 	| CapsuleGeometry
 	| CylinderGeometry;
-// check the instanceOf value against known three geometries
+
 const getShapeTypeFromGeometry = (geometry: PossibleGeometry): AutoShape => {
-	//hack the switch statement to check the instanceOf value
+	//hack the switch statement to check the type
 	switch (true) {
-		case geometry instanceof BoxGeometry:
+		case isBoxGeometry(geometry):
 			return "box";
-		case geometry instanceof SphereGeometry:
+		case isSphereGeometry(geometry):
 			return "sphere";
-		case geometry instanceof CapsuleGeometry:
+		case isCapsuleGeometry(geometry):
 			return "capsule";
-		case geometry instanceof CylinderGeometry:
+		case isCylinderGeometry(geometry):
 			return "cylinder";
 		// if unknown do a convex hull
-		case geometry instanceof BufferGeometry:
+		case isBufferGeometry(geometry):
 			return "convex";
 		default:
 			// bail out with sphere
@@ -128,14 +128,18 @@ export const getShapeSettingsFromGeometry = (
 	let shapeSettings, offset;
 
 	// if the user passes the shape use that, if not, try to infer it from the geometry
-	if (!shapeType) shapeType = getShapeTypeFromGeometry(geometry);
+	if (!shapeType) {
+		shapeType = getShapeTypeFromGeometry(geometry);
+	}
+
+	console.log('shapeType', shapeType)
 	switch (shapeType) {
 		case "box": {
 			geometry.computeBoundingBox();
 			const { boundingBox } = geometry;
 			let size;
 			// if the geometry is a box, use it's parameters not the bounding box
-			if (geometry instanceof BoxGeometry) {
+			if (isBoxGeometry(geometry)) {
 				const { width, height, depth } = geometry.parameters;
 				size = new Vector3(width, height, depth);
 			} else size = boundingBox!.getSize(new Vector3());
