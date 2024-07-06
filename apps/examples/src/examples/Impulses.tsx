@@ -1,4 +1,4 @@
-import { BodyState, Physics, RigidBody } from "@react-three/jolt";
+import { BodyState, Physics, RigidBody, Vector3Tuple } from "@react-three/jolt";
 import { useDemo } from "../App";
 import { useRef, useMemo, useReducer, useEffect } from "react";
 import * as THREE from "three";
@@ -121,7 +121,7 @@ export function Impulses() {
 function Sphere({ accent = false, color = "white", ...props }) {
 	const bodyRef = useRef();
 	const meshRef = useRef<THREE.Mesh>(null);
-	const pos = useMemo(() => [r(10), r(10), r(10)], []);
+	const pos = useMemo<Vector3Tuple>(() => [r(10), r(10), r(10)], []);
 	useFrame((_state: any, inDelta: number) => {
 		if (!bodyRef.current || !meshRef.current) return;
 		const delta = Math.min(0.1, inDelta);

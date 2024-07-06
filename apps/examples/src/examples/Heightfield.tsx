@@ -1,6 +1,7 @@
 import { Physics, RigidBody, Heightfield } from "@react-three/jolt";
 import { useDemo } from "../App";
 import { Environment } from "@react-three/drei";
+import { Vector3Tuple } from "three";
 
 export function HeightfieldDemo() {
 	const { debug, paused, interpolate, physicsKey } = useDemo();
@@ -51,7 +52,7 @@ export function HeightfieldDemo() {
 	const defaultBodySettings = {
 		mRestitution: 0.1
 	};
-	const ballPositions = [
+	const ballPositions: Vector3Tuple[] = [
 		[0, 100, 0],
 
 		[10, 100, 10],

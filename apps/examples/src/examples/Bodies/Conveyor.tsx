@@ -1,8 +1,19 @@
 // creates a bridge static rigidbody
-import { BodyState, RigidBody } from "@react-three/jolt";
+import { BodyState, RigidBody, Vector3Tuple, vec3 } from "@react-three/jolt";
 import { useRef, useEffect } from "react";
+import { ThreeElements } from "@react-three/fiber"
+import { ColorRepresentation } from "three";
 
-export function Conveyor(props: any) {
+type ConveyorProps = ThreeElements['mesh'] & {
+	size?: Vector3Tuple
+	position?: Vector3Tuple
+	target?: Vector3Tuple
+	asSensor?: boolean
+	rotation?: Vector3Tuple
+	color?: ColorRepresentation
+}
+
+export function Conveyor(props: ConveyorProps) {
 	const rigidBodyRef = useRef();
 	const {
 		size = [5, 0.4, 15],
@@ -18,7 +29,7 @@ export function Conveyor(props: any) {
 		if (!rigidBodyRef.current) return;
 		const body = rigidBodyRef.current as BodyState;
 		body.isConveyor = true;
-		body.conveyorVector = target;
+		body.conveyorVector = vec3.three(target);
 	}, [target]);
 
 	return (

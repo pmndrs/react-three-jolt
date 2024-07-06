@@ -1,11 +1,12 @@
 // this body changes between shapes but keeps the same rigidBdy
 
-// use memo so it doesn't cycle on inputs
+import { Vector3 } from "@react-three/fiber"
 import { RigidBody, getShapeSettingsFromGeometry, BodyState } from "@react-three/jolt";
 import { memo, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+
 type ChangerProps = {
-	position?: number[];
+	position?: Vector3;
 };
 
 const Changer: React.FC<ChangerProps> = memo((props) => {

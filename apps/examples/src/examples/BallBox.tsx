@@ -1,4 +1,5 @@
-import { Physics, RigidBody } from "@react-three/jolt";
+import { Physics, RigidBody, Vector3Tuple } from "@react-three/jolt";
+import { Vector3 } from "@react-three/fiber";
 import { useDemo } from "../App";
 import { useMemo, useEffect, useState, Fragment } from "react";
 //import * as THREE from "three";
@@ -33,7 +34,7 @@ export function BallBox() {
 	};
 
 	const positions = useMemo(() => {
-		const allPos = [];
+		const allPos: Vector3Tuple[] = [];
 
 		for (let i = 0; i < 15; i++) {
 			allPos.push([Math.random() * 20 - 10, Math.random() * 10, 0]);
@@ -41,7 +42,7 @@ export function BallBox() {
 		return allPos;
 	}, []);
 
-	const [gravity, setGravity] = useState([0, -9.8, 0]);
+	const [gravity, setGravity] = useState<Vector3>([0, -9.8, 0]);
 	const [showPrompt, setShowPrompt] = useState(false);
 
 	//* Changing gravity with mouse ----------------------------
