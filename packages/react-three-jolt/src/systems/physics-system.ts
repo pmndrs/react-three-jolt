@@ -155,7 +155,7 @@ export class PhysicsSystem {
             ...this.bodySystem.dynamicBodies.values(),
             ...this.bodySystem.kinematicBodies.values()
         ];
-		
+
         mergedBodies.forEach((state: BodyState) => {
             const body = state.body;
 

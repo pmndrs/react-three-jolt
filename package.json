@@ -19,7 +19,8 @@
         "build": "yarn workspaces foreach -A -t run build",
         "change": "yarn changeset",
         "publish": "yarn build && yarn test && changeset publish",
-        "version": "yarn changeset version && yarn install --mode update-lockfile"
+        "version": "yarn changeset version && yarn install --mode update-lockfile",
+        "format": "yarn workspaces foreach -A -t run format"
     },
     "devDependencies": {
         "@changesets/cli": "^2.26.2"

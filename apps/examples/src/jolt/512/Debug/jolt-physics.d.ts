@@ -1,5 +1,4 @@
-import Jolt from "./types";
+import Jolt from './types';
 
 export default Jolt;
-export * from "./types";
-
+export * from './types';

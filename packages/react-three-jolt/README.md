@@ -238,7 +238,9 @@ Be warry of contact events on heightfields. Honestly, best not to even use them 
 It’s unclear if this is true from the perspective of the other shape, but know contact listening heightfields is currently buggy.
 
 ---
+
 ## Group Filtering
+
 Like many physics systems Jolt supports many different types of collision filtering. At the moment more advanced filters like Broadphase and ObjectLayer filtering is pre-set in R3/Jolt _(we plan to expose later)_ however we not only fully support Group Filters, we’ve expanded their functionality using Jolt’s sub-group system.
 
 When you add items to a `Group`, by default they do not collide with each other. `Subgroups` let us expand on this functionality.
@@ -246,6 +248,7 @@ When you add items to a `Group`, by default they do not collide with each other.
 _(I will be referring to the filtering in the Motion Sources/Filtering demo)_
 
 ### Activating Filtering
+
 By Default, filtering is deactivated for all bodies. Filtering is slightly expensive, so if it’s not needed, don’t activate it.
 At the moment _(may 2024)_ Jolt doesn’t expose the `SetCollisionGroup()` function to Javascript.
 So we have to activate filtering when creating the `RigidBody`.
@@ -262,29 +265,29 @@ If you use the `<RigidBody>` JSX Component simply add group or subGroup properti
 
 ```
 
-_*These can be dynamically changed later, but MUST BE INCLUDED at body creation._
+_\*These can be dynamically changed later, but MUST BE INCLUDED at body creation._
 
 If you are creating with the `BodySystem`, just add group or subGroup to the options object.
 They can be changed dynamically after creation but at least group or subGroup **MUST BE PRESENT** at creation.
 
 ```ts
-bodySystem.addBody(cubeMesh, {group: 0});
+bodySystem.addBody(cubeMesh, { group: 0 });
 ```
 
-Once set, bodies in the **SAME GROUP** now have more advanced collision options. 
+Once set, bodies in the **SAME GROUP** now have more advanced collision options.
 
 ### Subgroups
+
 Subgroups are where the filtering functionality shines.
 By default, all items in the main “group” WILL NOT COLLIDE.
 
 #### Sub-Group 0:
-| Doesnt Collide: | 0 | 1 | | |
-|---|---|---|---|---|
-| Collides: | | | 2 | Non-Members |
 
+| Doesnt Collide: | 0   | 1   |     |             |
+| --------------- | --- | --- | --- | ----------- |
+| Collides:       |     |     | 2   | Non-Members |
 
-
-**Subgroup 0** is the default and acts like most other physics systems. Any two Bodies in the same parent `Group` and `Subgroup-0` will not collide with each other. 
+**Subgroup 0** is the default and acts like most other physics systems. Any two Bodies in the same parent `Group` and `Subgroup-0` will not collide with each other.
 
 Bodies in `Subgroup-0` will also ignore bodies in `Subgroup-1`.
 
@@ -292,43 +295,48 @@ _(Green in the example. Note how when coming to a rest the cubes do not stack ni
 
 #### SubGroup-1
 
-| Doesnt Collide: | 0 |  | | |
-|---|---|---|---|---|
-| Collides: | | 1| 2 | Non-Members |
+| Doesnt Collide: | 0   |     |     |             |
+| --------------- | --- | --- | --- | ----------- |
+| Collides:       |     | 1   | 2   | Non-Members |
 
-'Subgroup-1' is an addition made by R3/Jolt and the one we recommend using for any “standard” objects. 
+'Subgroup-1' is an addition made by R3/Jolt and the one we recommend using for any “standard” objects.
 
 Filtering is often done to create trapdoors or filters but you still want the objects to collide with each other. This subgroup allows objects to access filters/traps but still act as regular bodies.
 _(Besides green, all boxes in the example are in subgroup-1)_
 
 #### Subgroup-2
+
 Doesn’t collide: Non Group Bodies
 Collides: All subgroups
-| Doesnt Collide: |  |  | | Non-Members |
+| Doesnt Collide: | | | | Non-Members |
 |---|---|---|---|---|
-| Collides: | 0 |1| 2 |  |
+| Collides: | 0 |1| 2 | |
 
 `Subgroup-2` is best used as a block/filter device. Bodies in this subgroup ONLY collide with items in the same PARENT group. This means ALL OTHER bodies will ignore these bodies and fall right through them. However, items in the same “Group” will collide.
 _(The blue filter in the example is in subgroup-2)_
 
-
-
 ## MotionSources
+
 MotionSources are special types of bodies that modify other bodies when they come into contact with them. These aren’t explicit objects in Jolt but common patterns that we’ve standardized and simplified. These are incredibly flexible and have a ton of options we’ll try to cover.
 
-MotionSources can be one of three types: 
-- **Linear:** Apply a impulse/force towards a set vector.
-- **Angular:** Apply a force/torque
-- **Teleport:** Move a body to  a worldSpace location.
+MotionSources can be one of three types:
+
+-   **Linear:** Apply a impulse/force towards a set vector.
+-   **Angular:** Apply a force/torque
+-   **Teleport:** Move a body to a worldSpace location.
 
 ### Linear:
+
 ```ts
 leftConveyor.current.activateMotionSource(new THREE.Vector3(-2.4, 0, 0));
 ```
+
 The vector is in LOCAL SPACE
 
 #### Conveyor:
+
 By setting the Y value to 0 we can apply a motion to another body as if it were on a conveyor belt.
+
 ```ts
 const leftConveyor = useRef();
 useMount(() => {
@@ -348,19 +356,23 @@ return (
 ```
 
 #### SurfaceVelocity
+
 The core Jolt examples modify the surface velocity of the body that comes into contact with the conveyor belt. This provides a slightly more realistic physics simulation but only works if the bodies remain in contact (like a conveyor belt).
 
- By default we instead apply an impulse to the body, which instead of at the contacting surface, is applied to the center of gravity. 99% of the time you wont notice a difference.
+By default we instead apply an impulse to the body, which instead of at the contacting surface, is applied to the center of gravity. 99% of the time you wont notice a difference.
 
 To use Surface Velocity:
+
 ```ts
 rearConveyor.current.motionAsSurfaceVelocity = true;
 ```
 
 ### Bounce-pad:
+
 Because we are applying an impulse we can actually point it anywhere we want with however much force we want. This is a perfect example of a bounce/jump pad.
 
-Remember, by default the vector is in **LOCAL** space, so if you rotate the pad, the direction will also be rotated. 
+Remember, by default the vector is in **LOCAL** space, so if you rotate the pad, the direction will also be rotated.
+
 ```ts
 useMount(() => {
     angledBouncer.current!.activateMotionSource(new THREE.Vector3(0, 300, 0));
@@ -381,6 +393,7 @@ return (
 ```
 
 You can change the direction of the vector at any point.
+
 ```ts
 const intervals = useSetInterval();
 intervals.setInterval(() => {
@@ -389,7 +402,9 @@ intervals.setInterval(() => {
 ```
 
 #### Forcefield:
-When we set a RigidBody to a sensor (`isSensor`) it still fires contact events but does not cause collisions. This means we can apply our impulse while the body is inside the sensor. 
+
+When we set a RigidBody to a sensor (`isSensor`) it still fires contact events but does not cause collisions. This means we can apply our impulse while the body is inside the sensor.
+
 ```ts
 // setup the forcefield
 forcefield.current!.activateMotionSource(new THREE.Vector3(3.6, 10, -0.7));
@@ -398,37 +413,38 @@ forcefield.current!.useRotation = false;
 ```
 
 #### Disabling Auto-Rotation
-With conveyors and bouncepads you’ll probably want to leave the auto rotation as it makes life easier. However, we’ve found force-fields need a lot more precision control. Disabling rotation will put the vector into WORLD SPACE. Remember you’ll have to fight gravity to go up etc. 
 
+With conveyors and bouncepads you’ll probably want to leave the auto rotation as it makes life easier. However, we’ve found force-fields need a lot more precision control. Disabling rotation will put the vector into WORLD SPACE. Remember you’ll have to fight gravity to go up etc.
 
 ### Angular:
+
 Angular applies a rotation to bodies that come into contact.
+
 ```ts
 // Lazy Susan --------------------------------
-susan.current!.activateMotionSource(
-    new THREE.Vector3(0, 0, 0),
-    new THREE.Vector3(0, 50, 0)
-);
-susan.current!.motionType = "angular";
+susan.current!.activateMotionSource(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 50, 0));
+susan.current!.motionType = 'angular';
 // this makes the susan use surface velocity
 susan.current!.motionAsSurfaceVelocity = true;
 ```
-*Note angular also needs a linear vector
+
+\*Note angular also needs a linear vector
 
 ### SurfaceVelocity:
+
 For angular, you may actually want the surface velocity. It will take the origin of the sourceBody into account and rotate in a more natural way. Almost as if the surface itself was actually rotating _(which would actually be more efficient than using a motionSource)_
 If you DON’T use this, when the body contacts the sourceBody, it will immediately get the torque applied to it. _(see the green cubes in the example)_
 
 ### Teleports:
+
 We utilize the same core logic and systems to trigger a position and/or rotation change that will take place on the next step.
-This utilizes the sourceBodies linearVector (set when you activate the motionSource) 
+This utilizes the sourceBodies linearVector (set when you activate the motionSource)
 
 ```ts
 // Teleporter --------------------------------
 teleporter.current!.activateMotionSource(new THREE.Vector3(-40, 20, -35));
 teleporter.current!.isTeleporter = true;
 ```
-
 
 ---
 

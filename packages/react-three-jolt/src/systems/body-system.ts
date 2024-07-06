@@ -169,7 +169,7 @@ export class BodySystem {
     }
     removeBody(bodyHandle: number, ignoreThree = false) {
         // console.log('Trying to remove body', bodyHandle);
-        
+
         // get the body so we can process it
         const bodyState = this.getBody(bodyHandle);
         if (!bodyState) return;
@@ -548,14 +548,14 @@ export function generateBodySettings(
     object: Object3D | Jolt.Shape,
     options: GenerateBodyOptions = {}
 ): Jolt.BodyCreationSettings {
-	const jolt = Raw.module;
-	const isObject = (object as Object3D).isObject3D;
-	let shape = object as Jolt.Shape;
-	if (isObject) {
-		const shapeSettings = getShapeSettingsFromObject(object as Object3D, options.shapeType);
-		if (!shapeSettings) throw new Error("No shape settings found");
-		shape = shapeSettings.Create().Get();
-	}
+    const jolt = Raw.module;
+    const isObject = (object as Object3D).isObject3D;
+    let shape = object as Jolt.Shape;
+    if (isObject) {
+        const shapeSettings = getShapeSettingsFromObject(object as Object3D, options.shapeType);
+        if (!shapeSettings) throw new Error('No shape settings found');
+        shape = shapeSettings.Create().Get();
+    }
 
     // create position and quaternion from three to jolt
     let position: any = new THREE.Vector3();

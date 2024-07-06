@@ -82,22 +82,22 @@ export const Physics: FC<PhysicsProps> = (props) => {
     const [physicsSystem, setPhysicsSystem] = useState<PhysicsSystem>();
     const [contextApi, setContextApi] = useState<JoltContext>();
 
-    ;(window as any).contextApi = contextApi;
+    (window as any).contextApi = contextApi;
 
     useEffect(() => {
         if (debug) console.log('** Physics Component: ' + pid + ' Mounted **');
         const ps = new PhysicsSystem(pid);
-        
-		// we have to pass this here to catch before body creation
+
+        // we have to pass this here to catch before body creation
         if (defaultBodySettings) {
-			ps.bodySystem.defaultBodySettings = defaultBodySettings;
-		}
+            ps.bodySystem.defaultBodySettings = defaultBodySettings;
+        }
 
         setPhysicsSystem(ps);
 
         return () => {
             ps.destroy(pid);
-        }
+        };
     }, []);
 
     // setup the step

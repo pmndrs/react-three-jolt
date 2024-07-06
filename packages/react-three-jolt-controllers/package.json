@@ -37,7 +37,8 @@
     "scripts": {
         "test": "vitest run --coverage",
         "build": "tsc && rollup --config rollup.config.mjs",
-        "format": "prettier --write ."
+        "lint": "eslint src --ext ts,tsx",
+        "format": "prettier --write src"
     },
     "peerDependencies": {
         "@react-three/fiber": ">=8.9.0",
