@@ -23,7 +23,7 @@ export interface GenerateBodyOptions {
     bodyType?: 'dynamic' | 'static' | 'kinematic' | 'rig';
     bodySettings?: Jolt.BodyCreationSettings;
     motionType?: 'static' | 'kinematic' | 'dynamic';
-    index?: number;
+    instancedMesh?: { instancedMesh: InstancedMesh; index: number };
     shapeType?: AutoShape;
     activation?: 'activate' | 'deactivate';
     jitter?: THREE.Vector3;
@@ -31,7 +31,10 @@ export interface GenerateBodyOptions {
     size?: THREE.Vector3;
     group?: number;
     subGroup?: number;
+    shapeObject?: Object3D | InstancedMesh;
     shape?: Jolt.Shape;
+    position?: THREE.Vector3;
+    rotation?: THREE.Quaternion;
 }
 
 // ================================================
@@ -100,8 +103,8 @@ export class BodySystem {
 
     //* Body Management ================================
     // create a body from an object or shape
-    createBody(objectOrShape: Object3D | Jolt.Shape, options: GenerateBodyOptions = {}): Jolt.Body {
-        let settings = generateBodySettings(objectOrShape, options);
+    createBody(object: Object3D, options: GenerateBodyOptions = {}): Jolt.Body {
+        let settings = generateBodySettings(object, options);
         // if there are properties in the default, merge them with settings
         if (Object.keys(this.defaultBodySettings).length > 0)
             settings = mergeBodyCreationSettings(settings, this.defaultBodySettings);
@@ -124,17 +127,19 @@ export class BodySystem {
     addBody(object: Object3D, options?: GenerateBodyOptions) {
         //if we have a shape we need to pass that to the body creation, not the object
         const body = options?.shape
-            ? this.createBody(options.shape, options)
+            ? this.createBody(object, options)
             : this.createBody(object, options);
         return this.addExistingBody(object, body, options);
     }
     // add an EXISTING Jolt body to the system
-    addExistingBody(
-        object: Object3D | InstancedMesh,
-        body: Jolt.Body,
-        options?: GenerateBodyOptions
-    ): number {
-        const state = new BodyState(object, body, this.joltPhysicsSystem, this, options?.index);
+    addExistingBody(object: Object3D, body: Jolt.Body, options?: GenerateBodyOptions): number {
+        const state = new BodyState(
+            object,
+            body,
+            this.joltPhysicsSystem,
+            this,
+            options?.instancedMesh
+        );
         // generate the handle
         const handle = body.GetID().GetIndexAndSequenceNumber();
         // console.log('adding body', handle, options, state, object, body);
@@ -545,27 +550,35 @@ export function mergeBodyCreationSettings(
 }
 
 export function generateBodySettings(
-    object: Object3D | Jolt.Shape,
+    object: Object3D,
     options: GenerateBodyOptions = {}
 ): Jolt.BodyCreationSettings {
     const jolt = Raw.module;
-    const isObject = (object as Object3D).isObject3D;
-    let shape = object as Jolt.Shape;
-    if (isObject) {
-        const shapeSettings = getShapeSettingsFromObject(object as Object3D, options.shapeType);
+
+    let shape = options?.shape;
+
+    if (!shape) {
+        const shapeSettings = getShapeSettingsFromObject(
+            options.shapeObject ?? object,
+            options.shapeType
+        );
         if (!shapeSettings) throw new Error('No shape settings found');
-        shape = shapeSettings.Create().Get();
+        shape = shapeSettings.Create().Get() as Jolt.Shape;
     }
 
-    // create position and quaternion from three to jolt
-    let position: any = new THREE.Vector3();
-    let quaternion: any = new THREE.Quaternion();
+    // // create position and quaternion from three to jolt
+    let position = new THREE.Vector3();
+    let quaternion = new THREE.Quaternion();
 
-    if (isObject) {
-        const { position: objectPosition, quaternion: objectQuaternion } = object as Object3D;
-        position.copy(objectPosition);
-        quaternion.copy(objectQuaternion);
-    }
+    // if (object) {
+    //     // const { position: objectPosition, quaternion: objectQuaternion } = object as Object3D;
+    //     // position.copy(objectPosition);
+    //     // quaternion.copy(objectQuaternion);
+    //     object.getWorldPosition(position);
+    //     object.getWorldQuaternion(quaternion);
+
+    //     console.log(object);
+    // }
 
     // Jitter fixes a problem where rapidly created bodies jam each other
     // also allows nice effects like fountains when creating bodies
@@ -588,8 +601,8 @@ export function generateBodySettings(
         );
     }
     // reset the items to jolt types
-    position = vec3.threeToJolt(position);
-    quaternion = quat.threeToJolt(quaternion);
+    const joltPosition = vec3.threeToJolt(position);
+    const joltQuaternion = quat.threeToJolt(quaternion);
 
     // type bases on bodyType (Dynamic by default)
     let layer, motionType;
@@ -634,7 +647,7 @@ export function generateBodySettings(
     }
     // create the settings
     const settings = mergeBodyCreationSettings(
-        new jolt.BodyCreationSettings(shape, position, quaternion, motionType, layer),
+        new jolt.BodyCreationSettings(shape, joltPosition, joltQuaternion, motionType, layer),
         options.bodySettings
     );
     // if we passed in a shape the options shapeType wont be set. we need to detect trimesh from the shape
@@ -644,17 +657,20 @@ export function generateBodySettings(
     if (isMesh && motionType === jolt.EMotionType_Dynamic) {
         settings.mOverrideMassProperties =
             Raw.module.EOverrideMassProperties_MassAndInertiaProvided;
+
         // if the object is an object we need to get the size from it
         let size: any = options?.size || new THREE.Vector3(1, 1, 1);
         const mass = options?.mass || 200;
-        if (isObject) {
+
+        if (object) {
             size = new THREE.Box3().setFromObject(object as Object3D).getSize(new Vector3());
         }
         settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(vec3.jolt(size), mass);
     }
+
     // destroy the position and quaternion
-    jolt.destroy(position);
-    jolt.destroy(quaternion);
+    jolt.destroy(joltPosition);
+    jolt.destroy(joltQuaternion);
 
     return settings;
 }

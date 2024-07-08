@@ -11,9 +11,13 @@ import {
 import * as THREE from 'three';
 import { Raw } from '../raw';
 
-import { vec3, quat, anyVec3, isColor } from '../utils';
+import { vec3, quat, anyVec3, anyQuat } from '../utils';
 import type { BodySystem } from './body-system';
 import { getThreeObjectForBody } from './debug';
+
+const _update_matrix = new Matrix4();
+const _update_vector3 = new Vector3();
+const _update_quaternion = new THREE.Quaternion();
 
 // Initital body object copied from r3/rapier's state object
 export class BodyState {
@@ -24,7 +28,10 @@ export class BodyState {
     debugMesh?: Object3D;
     invertedWorldMatrix: Matrix4;
     handle: number;
-    index?: number;
+
+    instancedMesh?: InstancedMesh;
+    instancedMeshIndex?: number;
+
     activeScale = new THREE.Vector3(1, 1, 1);
     isDebugging = false;
 
@@ -80,11 +87,11 @@ export class BodyState {
     //private collisionGroupChanged = false;
 
     constructor(
-        object: Object3D | InstancedMesh,
+        object: Object3D,
         body: Jolt.Body,
         joltPhysicsSystem: Jolt.PhysicsSystem,
         bodySystem: BodySystem,
-        index?: number
+        instancedMesh?: { instancedMesh: InstancedMesh; index: number }
     ) {
         this.object = object;
         this.body = body;
@@ -92,9 +99,24 @@ export class BodyState {
         this.handle = this.BodyID.GetIndexAndSequenceNumber();
 
         // Instance properties
-        this.meshType = (object as THREE.InstancedMesh).isInstancedMesh ? 'instancedMesh' : 'mesh';
-        this.invertedWorldMatrix = object.matrixWorld.clone().invert();
-        if (index !== undefined) this.index = index;
+        this.meshType = instancedMesh ? 'instancedMesh' : 'mesh';
+
+        // this.invertedWorldMatrix = object.matrixWorld.clone().invert();
+
+        this.invertedWorldMatrix = object.parent!.matrixWorld.clone().invert()
+        // if (instancedMesh) {
+        //     // this.invertedWorldMatrix = instancedMesh.matrixWorld.clone().invert();
+        //     // this.invertedWorldMatrix = instancedMesh.instancedMesh.parent!.matrixWorld.clone().invert();
+        //     this.invertedWorldMatrix = object.parent!.matrixWorld.clone().invert();
+        // } else {
+        //     this.invertedWorldMatrix = object.parent!.matrixWorld.clone().invert();
+        //     ;
+        // }
+
+        if (instancedMesh) {
+            this.instancedMesh = instancedMesh?.instancedMesh as InstancedMesh;
+            this.instancedMeshIndex = instancedMesh?.index!;
+        }
 
         // not sure this is a good idea here
         this.object.userData.body = body;
@@ -142,16 +164,13 @@ export class BodyState {
     //* Updates ===============================================
     //this will be called in loop functions
     update(position: anyVec3, rotation: Jolt.Quat | THREE.Quaternion) {
-        // if this is a mesh, use basic updates
-        if (!this.isInstance) {
-            this.object.position.copy(vec3.three(position));
-            this.object.quaternion.copy(quat.three(rotation));
-            return;
-        }
-        // we are an instance. we have to build a matrix
-        const matrix = new Matrix4();
-        matrix.compose(vec3.three(position), quat.three(rotation), vec3.three(this.scale));
-        // update the matrix
+        const matrix = _update_matrix
+            .compose(
+                vec3.three(position, _update_vector3),
+                quat.three(rotation, _update_quaternion),
+                vec3.three(this.scale)
+            )
+
         this.setMatrix(matrix);
     }
     //* Shapes ===============================================
@@ -204,38 +223,35 @@ export class BodyState {
     destroy(ignoreThree?: boolean) {
         this.bodySystem.removeBody(this.handle, ignoreThree);
     }
-    // probably only used for instances
+    
     getMatrix(matrix: Matrix4) {
-        if (this.isInstance) {
+        if (this.instancedMesh) {
             const object = this.object as THREE.InstancedMesh;
-            object.getMatrixAt(this.index!, matrix);
-        } else matrix.copy(this.object.matrixWorld);
+            object.getMatrixAt(this.instancedMeshIndex!, matrix);
+        } else {
+            matrix.copy(this.object.matrixWorld);
+        }
         return matrix;
     }
+
     setMatrix(matrix: Matrix4) {
-        if (this.isInstance) {
-            const object = this.object as THREE.InstancedMesh;
-            object.setMatrixAt(this.index!, matrix);
+        if (this.instancedMesh) {
+            const object = this.instancedMesh as THREE.InstancedMesh;
+            object.setMatrixAt(this.instancedMeshIndex!, matrix);
             object.instanceMatrix.needsUpdate = true;
         } else {
             this.object.matrix.copy(matrix);
             this.object.updateMatrixWorld(true);
         }
-        // TODO: determine if we will really use this or not
-        /*
-        // now that the threeJS object is updated, we need to set the jolt body
-        if (!ignoreJolt) {
-            const position = this.object.position.clone();
-            const rotation = this.object.quaternion.clone();
-            this.position = position;
-            this.rotation = rotation;
-        }
-        */
     }
 
     // Set the body position
     // TODO: NOTE. This is how to correctly cleanup a Jolt Vector
     set position(position) {
+        this.setPosition(position);
+    }
+
+    setPosition(position: anyVec3) {
         const newPosition = vec3.jolt(position);
         this.bodyInterface.SetPosition(this.BodyID, newPosition, Raw.module.EActivation_Activate);
         Raw.module.destroy(newPosition);
@@ -249,8 +265,13 @@ export class BodyState {
     get position(): THREE.Vector3 {
         return this.getPosition() as THREE.Vector3;
     }
+
+    set rotation(rotation: anyQuat) {
+        this.setRotation(rotation);
+    }
+
     // Set the body rotation
-    set rotation(rotation: THREE.Quaternion) {
+    setRotation(rotation: anyQuat) {
         const newQuat = quat.jolt(rotation);
         this.bodyInterface.SetRotation(
             this.BodyID,
@@ -260,6 +281,7 @@ export class BodyState {
         );
         Raw.module.destroy(newQuat);
     }
+
     // get the rotation of the body and wrap it in a three quaternion
     get rotation(): THREE.Quaternion {
         return quat.joltToThree(this.body.GetRotation());
@@ -339,28 +361,6 @@ export class BodyState {
         const newVec = vec3.jolt(angularVelocity);
         this.body.SetAngularVelocity(newVec);
         Raw.module.destroy(newVec);
-    }
-    get color(): THREE.Color {
-        // if we are a mesh, get the material color of the mesh
-        if (!this.isInstance) {
-            //@ts-ignore color does exist
-            return (this.object as THREE.Mesh).material.color;
-        }
-        // if we are an instance, get the color of the instanced mesh
-        const _color = new THREE.Color();
-        (this.object as InstancedMesh).getColorAt(this.index!, _color);
-        return _color;
-    }
-    set color(color: THREE.Color | string | number) {
-        const threeColor = isColor(color) ? color : new THREE.Color(color);
-
-        // if we are a mesh, set the material color of the mesh
-        if (!this.isInstance) {
-            //@ts-ignore
-            (this.object as THREE.Mesh).material.color = color;
-        }
-        // if we are an instance, set the color of the instanced mesh
-        (this.object as InstancedMesh).setColorAt(this.index!, threeColor);
     }
 
     //* Physics Properties ----------------------------------
@@ -465,7 +465,7 @@ export class BodyState {
         rotZ?: boolean;
     }) {
         let newDOF = this.rawDOF;
-        console.log('Setting DOF', dof, 'current DOF', this.dof, 'rawDOF', this.rawDOF);
+        // console.log('Setting DOF', dof, 'current DOF', this.dof, 'rawDOF', this.rawDOF);
         const allowedDOFs = [
             { key: 'x', flag: Raw.module.EAllowedDOFs_TranslationX },
             { key: 'y', flag: Raw.module.EAllowedDOFs_TranslationY },

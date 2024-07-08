@@ -1,5 +1,5 @@
 // ridged body wrapping and mesh components
-import type { Quaternion, Vector3 } from '@react-three/fiber';
+import type { Euler, Quaternion, Vector3 } from '@react-three/fiber';
 import type Jolt from 'jolt-physics';
 import React, {
     Children,
@@ -18,15 +18,15 @@ import { Object3D } from 'three';
 import { useJolt } from '../hooks';
 import { AutoShape, BodyState } from '../systems';
 import { BodyType, GenerateBodyOptions } from '../systems/body-system';
-import { _euler } from '../tmp';
-import { euler, quat, vec3 } from '../utils';
+import { vec3 } from '../utils';
+import { _matrix4, _position, _quaternion, _rotation, _scale } from '../tmp';
 
 export type RigidBodyProps = {
-    children: ReactNode;
-    key?: number;
+    children?: ReactNode;
+    key?: string | number;
 
     position?: Vector3;
-    rotation?: Vector3;
+    rotation?: Euler;
     quaternion?: Quaternion;
 
     onlyInitialize?: boolean;
@@ -61,15 +61,17 @@ export type RigidBodyProps = {
     //TODO: do these work yet?
 
     mass?: number;
+
+    /**
+     * used internally by InstancedRigidBody
+     * @private
+     */
+    instancedMesh?: { instancedMesh: THREE.InstancedMesh; index: number } | undefined;
 };
 
 export type RigidBodyContext = {
     body: BodyState | undefined;
     type: BodyType | undefined;
-    position: THREE.Vector3 | undefined;
-    rotation: THREE.Vector3 | undefined;
-    scale: THREE.Vector3 | undefined;
-    quaternion: THREE.Quaternion | undefined;
     // methods
     setActiveShape: (shape: any) => void;
 };
@@ -113,6 +115,9 @@ export const RigidBody = memo(
             onContactAdded,
             onContactRemoved,
             onContactPersisted,
+
+            instancedMesh,
+
             ...objectProps
         } = props;
 
@@ -124,10 +129,6 @@ export const RigidBody = memo(
 
         // const rigidBodyRef = useForwardedRef(ref);
         useImperativeHandle(ref, () => bodyState, [bodyState]);
-
-        // state refs allow us to track if inputs have changed without triggering a re-render
-        const prevPosition = useRef<THREE.Vector3 | undefined>(undefined);
-        const prevRotation = useRef<THREE.Quaternion | undefined>(undefined);
 
         // load the jolt stuff
         const { bodySystem, debug: physicsDebug } = useJolt();
@@ -156,30 +157,20 @@ export const RigidBody = memo(
             if (hasShapes && !activeShape) return;
             // todo: is this protection needed?
             //handle options from props
+
+            const shapeObject = props.instancedMesh
+                ? props.instancedMesh.instancedMesh
+                : objectRef.current;
+
             const options: GenerateBodyOptions = {
                 group: group,
                 subGroup: subGroup,
                 shape: activeShape,
+                shapeObject,
                 bodyType: type,
-                shapeType: shape
+                shapeType: shape,
+                instancedMesh: props.instancedMesh
             };
-
-            // put the initial position, rotation, scale, and quaternion in the options
-            let initialPosition = new THREE.Vector3();
-            let initialQuaternion = new THREE.Quaternion();
-
-            if (position) {
-                vec3.three(position, initialPosition);
-            }
-
-            if (rotation) {
-                initialQuaternion.setFromEuler(euler.three(rotation, _euler));
-            } else if (quaternion) {
-                quat.three(quaternion, initialQuaternion);
-            }
-
-            objectRef.current.position.copy(initialPosition);
-            objectRef.current.quaternion.copy(initialQuaternion);
 
             const bodyHandle = bodySystem.addBody(objectRef.current, options);
             const body = bodySystem.getBody(bodyHandle);
@@ -196,9 +187,6 @@ export const RigidBody = memo(
                 body.debug = debug;
             }
 
-            body.position = initialPosition.clone();
-            body.rotation = initialQuaternion.clone();
-
             return () => {
                 // cleanup
                 bodySystem.removeBody((rigidBodyRef.current! as BodyState).handle);
@@ -206,7 +194,7 @@ export const RigidBody = memo(
                 rigidBodyRef.current = undefined;
                 setBodyState(undefined);
             };
-        }, [activeShape, bodySystem, rigidBodyRef]);
+        }, [activeShape, bodySystem]);
 
         //*/ Debugging -------------------------------------
 
@@ -214,7 +202,7 @@ export const RigidBody = memo(
             if (!rigidBodyRef.current) return;
 
             rigidBodyRef.current.debug = debug;
-        }, [debug, rigidBodyRef]);
+        }, [debug]);
 
         //* Shape Updates -------------------------------------
 
@@ -232,7 +220,7 @@ export const RigidBody = memo(
             if (scale) {
                 body.scale = vec3.three(scale);
             }
-        }, [activeShape, rigidBodyRef]);
+        }, [activeShape]);
 
         // scale the shape when the input scale changes
         useEffect(() => {
@@ -243,41 +231,21 @@ export const RigidBody = memo(
             if (scale) {
                 body.scale = vec3.three(scale);
             }
-        }, [scale, rigidBodyRef]);
+        }, [scale]);
 
         //* Prop Updates -------------------------------------
         useEffect(() => {
             if (!rigidBodyRef.current || onlyInitialize) return;
 
-            const body = rigidBodyRef.current as BodyState;
+            const bodyState = rigidBodyRef.current as BodyState;
 
-            if (position) {
-                // this adds a little to things,and might be worth not doing onlyInitialize
-                // but if the input hasn't changed we should ignore this
-                const newPositon = vec3.three(position);
+            bodyState.object.updateWorldMatrix(true, false);
 
-                if (!prevPosition.current || !newPositon.equals(prevPosition.current)) {
-                    body.position = newPositon;
-                    prevPosition.current = newPositon;
-                }
-            }
+            _matrix4.copy(bodyState.object.matrixWorld).decompose(_position, _quaternion, _scale);
 
-            if (rotation) {
-                let newQuaternion: THREE.Quaternion;
-
-                if (rotation) {
-                    newQuaternion = new THREE.Quaternion().setFromEuler(euler.three(rotation));
-                } else {
-                    newQuaternion = quat.three(quaternion);
-                }
-
-                // if the input hasn't changed we should ignore this
-                if (!prevRotation.current || !newQuaternion.equals(prevRotation.current)) {
-                    body.rotation = newQuaternion;
-                    prevRotation.current = newQuaternion;
-                }
-            }
-        }, [onlyInitialize, position, rotation, rigidBodyRef]);
+            bodyState.setPosition(_position);
+            bodyState.setRotation(_quaternion);
+        }, [bodyState, onlyInitialize, position, rotation, quaternion]);
 
         // add the contact listeners
         useEffect(() => {
@@ -295,7 +263,7 @@ export const RigidBody = memo(
                     if (onContactPersisted) rb.removeContactListener(onContactPersisted);
                 }
             };
-        }, [rigidBodyRef.current, onContactAdded, onContactRemoved, onContactPersisted]);
+        }, [onContactAdded, onContactRemoved, onContactPersisted]);
 
         //not sure these should be set as useEffects or directly in the body
         useEffect(() => {
@@ -355,17 +323,19 @@ export const RigidBody = memo(
             return {
                 body: rigidBodyRef.current,
                 type,
-                position,
-                rotation,
-                scale,
-                quaternion,
                 setActiveShape
             };
-        }, [rigidBodyRef, type, position, rotation, scale, quaternion]);
+        }, [rigidBodyRef, type]);
 
         return (
             <RigidBodyContext.Provider value={contextValue}>
-                <object3D ref={objectRef} {...objectProps}>
+                <object3D
+                    ref={objectRef}
+                    {...objectProps}
+                    position={position}
+                    quaternion={quaternion}
+                    rotation={rotation}
+                    scale={scale}>
                     {children}
                 </object3D>
             </RigidBodyContext.Provider>

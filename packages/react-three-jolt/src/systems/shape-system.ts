@@ -17,6 +17,7 @@ import {
     isBufferGeometry,
     isCapsuleGeometry,
     isCylinderGeometry,
+    isInstancedMesh,
     isMesh,
     isSphereGeometry,
     quat,
@@ -56,7 +57,7 @@ export const getShapeSettingsFromObject = (
     const shapes: any = [];
 
     object.traverse((child) => {
-        if (isMesh(child)) {
+        if (isMesh(child) || isInstancedMesh(child)) {
             // adding ignore to meshes skips the shape generator
             if (child.geometry) {
                 // TODO: Until we understand the offsets we are going to get both here

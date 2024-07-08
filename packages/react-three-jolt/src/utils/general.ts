@@ -1,4 +1,4 @@
-import type { Quaternion, Vector3 } from '@react-three/fiber';
+import type { Euler, Quaternion, Vector3 } from '@react-three/fiber';
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { Raw } from '../raw';
@@ -14,7 +14,13 @@ export const isEuler = (euler: any): euler is THREE.Euler => (euler as THREE.Eul
 export const isQuaternion = (quaternion: any): quaternion is THREE.Quaternion =>
     (quaternion as THREE.Quaternion).isQuaternion;
 
+export const isObject3D = (object: any): object is THREE.Object3D =>
+    (object as THREE.Object3D).isObject3D;
+
 export const isMesh = (object: any): object is THREE.Mesh => (object as THREE.Mesh).isMesh;
+
+export const isInstancedMesh = (object: any): object is THREE.InstancedMesh =>
+    (object as THREE.InstancedMesh).isInstancedMesh;
 
 export const isBoxGeometry = (geometry: any): geometry is THREE.BoxGeometry =>
     (geometry as THREE.BoxGeometry).type === 'BoxGeometry';
@@ -32,7 +38,7 @@ export const isBufferGeometry = (geometry: any): geometry is THREE.BufferGeometr
     (geometry as THREE.BufferGeometry).type === 'BufferGeometry';
 
 // Get the distance between two jolt vector3s
-export type anyVec3 = Jolt.Vec3 | Jolt.RVec3 | THREE.Vector3 | Vector3 | THREE.Euler;
+export type anyVec3 = Jolt.Vec3 | Jolt.RVec3 | THREE.Vector3 | Vector3 | Euler;
 
 export type anyQuat = Jolt.Quat | THREE.Quaternion | Quaternion;
 
@@ -41,7 +47,7 @@ export const vec3 = {
         if (!v) return [0, 0, 0];
 
         if (Array.isArray(v)) {
-            return v;
+            return [v[0], v[1], v[2]];
         }
 
         if (isVector3(v) || isEuler(v)) {
