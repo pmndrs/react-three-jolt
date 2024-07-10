@@ -4,7 +4,6 @@ import {
   InstancedRigidBodies,
   InstancedRigidBodyProps,
   Physics,
-  RigidBody,
 } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt-addons';
 import { useControls } from 'leva';
@@ -98,13 +97,6 @@ function CubeHeapInner() {
 
   return (
     <>
-      <RigidBody position={[5, 10, 3]}>
-        <mesh>
-          <sphereGeometry args={[1, 32, 32]} />
-          <meshStandardMaterial color="#FF0000" />
-        </mesh>
-      </RigidBody>
-
       <InstancedRigidBodies
         position={[0, 10, 0]}
         key={count}
