@@ -153,13 +153,18 @@ export class BodyState {
     }
     //* Updates ===============================================
     //this will be called in loop functions
-    update(position: anyVec3, rotation: Jolt.Quat | THREE.Quaternion) {
-        const matrix = _update_matrix
-            .compose(
-                vec3.three(position, _update_vector3),
-                quat.three(rotation, _update_quaternion),
-                vec3.three(this.scale)
-            )
+    update(position: anyVec3, quaternion: anyQuat) {
+        if (!this.isInstance) {
+			this.object.position.copy(vec3.three(position, _update_vector3));
+			this.object.quaternion.copy(quat.three(quaternion, _update_quaternion));
+			return;
+		}
+
+        const matrix = _update_matrix.compose(
+            vec3.three(position, _update_vector3),
+            quat.three(quaternion, _update_quaternion),
+            vec3.three(this.scale)
+        );
 
         this.setMatrix(matrix);
     }
@@ -231,7 +236,6 @@ export class BodyState {
             object.instanceMatrix.needsUpdate = true;
         } else {
             this.object.matrix.copy(matrix);
-            this.object.updateMatrixWorld(true);
         }
     }
 
@@ -286,6 +290,10 @@ export class BodyState {
     }
 
     set scale(inScale: THREE.Vector3) {
+        this.setScale(inScale);
+    }
+
+    setScale(inScale: THREE.Vector3) {
         const scale = inScale;
 
         let existingShape = this.body.GetShape() as Jolt.ScaledShape;
@@ -332,6 +340,7 @@ export class BodyState {
             this.object.scale.copy(actualScale);
         }
     }
+
     // get the velocity of the body
     get velocity() {
         return vec3.three(this.body.GetLinearVelocity());
