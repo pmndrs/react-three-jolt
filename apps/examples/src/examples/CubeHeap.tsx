@@ -4,6 +4,7 @@ import {
   InstancedRigidBodies,
   InstancedRigidBodyProps,
   Physics,
+  RigidBodyProps,
 } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt-addons';
 import { useControls } from 'leva';
@@ -11,12 +12,14 @@ import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useDemo } from '../App';
 
+// body settings so shapes bounce
+const defaultBodySettings = {
+  mRestitution: 0.7,
+};
+
 export function CubeHeap() {
   const { debug, paused, interpolate, physicsKey } = useDemo();
-  // body settings so shapes bounce
-  const defaultBodySettings = {
-    mRestitution: 0.7,
-  };
+
   return (
     <Physics
       paused={paused}
@@ -26,7 +29,12 @@ export function CubeHeap() {
       gravity={22}
       defaultBodySettings={defaultBodySettings}
     >
-      <CubeHeapInner />
+      <CubeFountian position={[0, 10, 0]} />
+
+      <Floor position={[0, 0, 0]} size={100}>
+        <meshStandardMaterial />
+      </Floor>
+
       <directionalLight
         castShadow
         position={[10, 10, 10]}
@@ -42,26 +50,22 @@ export function CubeHeap() {
   );
 }
 
-// this is going to be the instancedMesh version
-function CubeHeapInner() {
-  const instancedRef = useRef<BodyState[]>(null);
+const _color = new THREE.Color();
+
+function CubeFountian(props: RigidBodyProps) {
+  const instancedRigidBodyRef = useRef<BodyState[]>(null);
   const instancedMeshRef = useRef<THREE.InstancedMesh>(null!);
 
-  //controls
   const { count } = useControls({
     count: { value: 200, min: 1, max: 2000, step: 1 },
   });
 
-  // run when the count changes
   useEffect(() => {
-    const color = new THREE.Color();
-
-    // loop over the instanceMesh starting at index and set a random color
     for (let i = 0; i < instancedMeshRef.current!.count; i++) {
-      color.setHex(Math.random() * 0xffffff);
-      instancedMeshRef.current!.setColorAt(i, color);
+      _color.setHex(Math.random() * 0xffffff);
+      instancedMeshRef.current!.setColorAt(i, _color);
     }
-  }, [instancedRef, count]);
+  }, [instancedRigidBodyRef, count]);
 
   const instances = useMemo(() => {
     const rigidBodyProps: InstancedRigidBodyProps[] = [];
@@ -78,12 +82,11 @@ function CubeHeapInner() {
     return rigidBodyProps;
   }, [count]);
 
-  // setup the teleporting of shapes
   useEffect(() => {
     const interval = setInterval(() => {
       const index = Math.floor(Math.random() * count);
 
-      const bodyState = instancedRef.current?.[index];
+      const bodyState = instancedRigidBodyRef.current?.[index];
 
       if (bodyState) {
         bodyState.setPosition([Math.random() * 2, 20, Math.random() * 2]);
@@ -93,28 +96,22 @@ function CubeHeapInner() {
     return () => {
       clearInterval(interval);
     };
-  }, [instancedRef, count]);
+  }, [instancedRigidBodyRef, count]);
 
   return (
-    <>
-      <InstancedRigidBodies
-        position={[0, 10, 0]}
-        key={count}
-        ref={instancedRef}
-        instances={instances}
+    <InstancedRigidBodies
+      {...props}
+      key={count}
+      ref={instancedRigidBodyRef}
+      instances={instances}
+    >
+      <instancedMesh
+        args={[undefined, undefined, count]}
+        ref={instancedMeshRef}
       >
-        <instancedMesh
-          args={[undefined, undefined, count]}
-          ref={instancedMeshRef}
-        >
-          <boxGeometry args={[1, 1, 1]} />
-          <meshStandardMaterial color="#F2CC8F" />
-        </instancedMesh>
-      </InstancedRigidBodies>
-
-      <Floor position={[0, 0, 0]} size={100}>
-        <meshStandardMaterial />
-      </Floor>
-    </>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="#F2CC8F" />
+      </instancedMesh>
+    </InstancedRigidBodies>
   );
 }
