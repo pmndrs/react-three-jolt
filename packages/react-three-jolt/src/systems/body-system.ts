@@ -19,7 +19,8 @@ export type BodyType = 'dynamic' | 'static' | 'kinematic' | 'rig';
 export type PendingAction = { action: string; handle: number; value: any };
 
 // We call things "bodySettings" to clarify from shapes or other similar labels
-export interface GenerateBodyOptions {
+export type GenerateBodyOptions = {
+    object?: Object3D;
     bodyType?: 'dynamic' | 'static' | 'kinematic' | 'rig';
     bodySettings?: Jolt.BodyCreationSettings;
     motionType?: 'static' | 'kinematic' | 'dynamic';
@@ -103,11 +104,13 @@ export class BodySystem {
 
     //* Body Management ================================
     // create a body from an object or shape
-    createBody(object: Object3D, options: GenerateBodyOptions = {}): Jolt.Body {
-        let settings = generateBodySettings(object, options);
+    createBody(options: GenerateBodyOptions = {}): Jolt.Body {
+        let settings = generateBodySettings(options);
+
         // if there are properties in the default, merge them with settings
-        if (Object.keys(this.defaultBodySettings).length > 0)
+        if (Object.keys(this.defaultBodySettings).length > 0) {
             settings = mergeBodyCreationSettings(settings, this.defaultBodySettings);
+        }
 
         // todo: remove this once we change collision group at runtime
         if (options.group !== undefined || options.subGroup !== undefined) {
@@ -118,17 +121,15 @@ export class BodySystem {
         }
 
         const body = this.bodyInterface.CreateBody(settings);
-        // remove the settings
+
         this.jolt.destroy(settings);
 
         return body;
     }
     // Create a new body and add it to the system
     addBody(object: Object3D, options?: GenerateBodyOptions) {
-        //if we have a shape we need to pass that to the body creation, not the object
-        const body = options?.shape
-            ? this.createBody(object, options)
-            : this.createBody(object, options);
+        const body = this.createBody({ ...options, object });
+
         return this.addExistingBody(object, body, options);
     }
     // add an EXISTING Jolt body to the system
@@ -550,19 +551,30 @@ export function mergeBodyCreationSettings(
 }
 
 export function generateBodySettings(
-    object: Object3D,
     options: GenerateBodyOptions = {}
 ): Jolt.BodyCreationSettings {
     const jolt = Raw.module;
+    
+    const object = options.object;
 
     let shape = options?.shape;
 
     if (!shape) {
+        const object = options.shapeObject ?? options.object;
+
+        if (!object) {
+            throw new Error('No object found');
+        }
+
         const shapeSettings = getShapeSettingsFromObject(
-            options.shapeObject ?? object,
+            object,
             options.shapeType
         );
-        if (!shapeSettings) throw new Error('No shape settings found');
+
+        if (!shapeSettings) {
+            throw new Error('No shape settings found');
+        }
+
         shape = shapeSettings.Create().Get() as Jolt.Shape;
     }
 

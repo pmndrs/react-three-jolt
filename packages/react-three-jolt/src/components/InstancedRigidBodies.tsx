@@ -88,7 +88,7 @@ export const InstancedRigidBodies: React.FC<InstancedRigidBodiesProps> = memo(
                                 ref={(ref) => {
                                     instanceStates.current[index] = ref!;
                                 }}
-                                instancedMesh={{
+                                _instancedMesh={{
                                     instancedMesh,
                                     index
                                 }}>

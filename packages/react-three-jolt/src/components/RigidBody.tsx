@@ -63,10 +63,9 @@ export type RigidBodyProps = {
     mass?: number;
 
     /**
-     * used internally by InstancedRigidBody
-     * @private
+     * @internal Do not use. Used internally by the InstancedRigidBodies.
      */
-    instancedMesh?: { instancedMesh: THREE.InstancedMesh; index: number } | undefined;
+    _instancedMesh?: { instancedMesh: THREE.InstancedMesh; index: number } | undefined;
 };
 
 export type RigidBodyContext = {
@@ -116,7 +115,7 @@ export const RigidBody = memo(
             onContactRemoved,
             onContactPersisted,
 
-            instancedMesh,
+            _instancedMesh: instancedMesh,
 
             ...objectProps
         } = props;
@@ -158,8 +157,8 @@ export const RigidBody = memo(
             // todo: is this protection needed?
             //handle options from props
 
-            const shapeObject = props.instancedMesh
-                ? props.instancedMesh.instancedMesh
+            const shapeObject = props._instancedMesh
+                ? props._instancedMesh.instancedMesh
                 : objectRef.current;
 
             const options: GenerateBodyOptions = {
@@ -169,7 +168,7 @@ export const RigidBody = memo(
                 shapeObject,
                 bodyType: type,
                 shapeType: shape,
-                instancedMesh: props.instancedMesh
+                instancedMesh: props._instancedMesh
             };
 
             const bodyHandle = bodySystem.addBody(objectRef.current, options);

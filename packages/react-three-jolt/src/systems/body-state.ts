@@ -101,17 +101,7 @@ export class BodyState {
         // Instance properties
         this.meshType = instancedMesh ? 'instancedMesh' : 'mesh';
 
-        // this.invertedWorldMatrix = object.matrixWorld.clone().invert();
-
-        this.invertedWorldMatrix = object.parent!.matrixWorld.clone().invert()
-        // if (instancedMesh) {
-        //     // this.invertedWorldMatrix = instancedMesh.matrixWorld.clone().invert();
-        //     // this.invertedWorldMatrix = instancedMesh.instancedMesh.parent!.matrixWorld.clone().invert();
-        //     this.invertedWorldMatrix = object.parent!.matrixWorld.clone().invert();
-        // } else {
-        //     this.invertedWorldMatrix = object.parent!.matrixWorld.clone().invert();
-        //     ;
-        // }
+        this.invertedWorldMatrix = object.parent?.matrixWorld.clone().invert() ?? new Matrix4();
 
         if (instancedMesh) {
             this.instancedMesh = instancedMesh?.instancedMesh as InstancedMesh;
@@ -223,7 +213,7 @@ export class BodyState {
     destroy(ignoreThree?: boolean) {
         this.bodySystem.removeBody(this.handle, ignoreThree);
     }
-    
+
     getMatrix(matrix: Matrix4) {
         if (this.instancedMesh) {
             const object = this.object as THREE.InstancedMesh;
