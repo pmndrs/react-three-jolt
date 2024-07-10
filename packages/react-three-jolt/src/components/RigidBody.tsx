@@ -8,18 +8,17 @@ import React, {
     forwardRef,
     memo,
     useEffect,
-    useImperativeHandle,
     useMemo,
     useRef,
     useState
 } from 'react';
 import * as THREE from 'three';
 import { Object3D } from 'three';
-import { useJolt } from '../hooks';
+import { useForwardedRef, useJolt } from '../hooks';
 import { AutoShape, BodyState } from '../systems';
 import { BodyType, GenerateBodyOptions } from '../systems/body-system';
+import { _matrix4, _position, _quaternion, _scale } from '../tmp';
 import { vec3 } from '../utils';
-import { _matrix4, _position, _quaternion, _rotation, _scale } from '../tmp';
 
 export type RigidBodyProps = {
     children?: ReactNode;
@@ -121,13 +120,9 @@ export const RigidBody = memo(
         } = props;
 
         const objectRef = useRef<Object3D>(null!);
-        //TODO: Figure out way to put BodyState type on this ref
-        // const bodyStateRef = useRef<BodyState | undefined>(undefined);
-        const rigidBodyRef = useRef<BodyState | undefined>(undefined);
-        const [bodyState, setBodyState] = useState<BodyState | undefined>(undefined);
 
-        // const rigidBodyRef = useForwardedRef(ref);
-        useImperativeHandle(ref, () => bodyState, [bodyState]);
+        const rigidBodyRef = useForwardedRef(ref);
+        const [bodyState, setBodyState] = useState<BodyState | undefined>(undefined);
 
         // load the jolt stuff
         const { bodySystem, debug: physicsDebug } = useJolt();
@@ -234,9 +229,7 @@ export const RigidBody = memo(
 
         //* Prop Updates -------------------------------------
         useEffect(() => {
-            if (!rigidBodyRef.current || onlyInitialize) return;
-
-            const bodyState = rigidBodyRef.current as BodyState;
+            if (!bodyState || onlyInitialize) return;
 
             bodyState.object.updateWorldMatrix(true, false);
 
@@ -248,25 +241,24 @@ export const RigidBody = memo(
 
         // add the contact listeners
         useEffect(() => {
-            const rb = rigidBodyRef.current as BodyState;
-            if (rigidBodyRef.current) {
-                if (onContactAdded) rb.addContactListener(onContactAdded, 'added');
-                if (onContactRemoved) rb.addContactListener(onContactRemoved, 'removed');
-                if (onContactPersisted) rb.addContactListener(onContactPersisted, 'persisted');
-            }
+            if (!bodyState) return;
+
+            if (onContactAdded) bodyState.addContactListener(onContactAdded, 'added');
+            if (onContactRemoved) bodyState.addContactListener(onContactRemoved, 'removed');
+            if (onContactPersisted) bodyState.addContactListener(onContactPersisted, 'persisted');
+
             // remove the listeners
             return () => {
-                if (rigidBodyRef.current) {
-                    if (onContactAdded) rb.removeContactListener(onContactAdded);
-                    if (onContactRemoved) rb.removeContactListener(onContactRemoved);
-                    if (onContactPersisted) rb.removeContactListener(onContactPersisted);
-                }
+                if (onContactAdded) bodyState.removeContactListener(onContactAdded);
+                if (onContactRemoved) bodyState.removeContactListener(onContactRemoved);
+                if (onContactPersisted) bodyState.removeContactListener(onContactPersisted);
             };
-        }, [onContactAdded, onContactRemoved, onContactPersisted]);
+        }, [bodyState, onContactAdded, onContactRemoved, onContactPersisted]);
 
         //not sure these should be set as useEffects or directly in the body
         useEffect(() => {
-            if (!rigidBodyRef.current) return;
+            if (!bodyState) return;
+
             const body = rigidBodyRef.current as BodyState;
             //@ts-ignore
             if (mass) bodySystem.setMass(body.handle, mass);
@@ -286,27 +278,34 @@ export const RigidBody = memo(
             }
             if (isSensor !== undefined) body.body.SetIsSensor(isSensor);
         }, [
+            bodyState,
             mass,
             allowObstruction,
             obstructionTimelimit,
             linearDamping,
             angularDamping,
-            rigidBodyRef,
             isSensor
         ]);
 
         //* Groups -------------------------------------
         useEffect(() => {
-            if (!rigidBodyRef.current) return;
-            const body = rigidBodyRef.current as BodyState;
-            if (group) body.group = group;
-            if (subGroup) body.subGroup = subGroup;
-        }, [group, subGroup, rigidBodyRef]);
+            if (!bodyState) return;
+
+            const body = bodyState;
+            if (group) {
+                body.group = group;
+            }
+
+            if (subGroup) {
+                body.subGroup = subGroup;
+            }
+        }, [group, subGroup, bodyState]);
 
         //* DOF -------------------------------------
         useEffect(() => {
-            if (!rigidBodyRef.current) return;
-            const body = rigidBodyRef.current as BodyState;
+            if (!bodyState) return;
+            const body = bodyState as BodyState;
+
             if (dof) {
                 const { x, y, z, rotX, rotY, rotZ } = dof;
                 body.setEnabledTranslations(x || false, y || false, z || false);
@@ -314,17 +313,15 @@ export const RigidBody = memo(
             }
             if (lockRotations) body.lockRotations();
             if (lockTranslations) body.lockTranslations();
-        }, [dof, lockRotations, lockTranslations, rigidBodyRef]);
+        }, [dof, lockRotations, lockTranslations, bodyState]);
 
-        // the context should update when a new handle is added
-        //@ts-ignore
         const contextValue: RigidBodyContext = useMemo(() => {
             return {
-                body: rigidBodyRef.current,
+                body: bodyState,
                 type,
                 setActiveShape
             };
-        }, [rigidBodyRef, type]);
+        }, [bodyState, type]);
 
         return (
             <RigidBodyContext.Provider value={contextValue}>

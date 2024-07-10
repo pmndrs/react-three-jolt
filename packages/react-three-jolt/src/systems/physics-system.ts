@@ -209,18 +209,7 @@ export class PhysicsSystem {
                 state.position.lerp(_position, interpolationAlpha);
                 state.rotation.slerp(_rotation, interpolationAlpha);
                 state.update(_position, _rotation);
-                /* original
-                    state.object.position.lerp(_position, interpolationAlpha);
-                    state.object.quaternion.slerp(
-                        _rotation,
-                        interpolationAlpha
-                    );
-                    */
             } else {
-                /* original
-                    state.object.position.copy(_position);
-                    state.object.quaternion.copy(_rotation);
-                    */
                 state.update(_position, _rotation);
             }
         });

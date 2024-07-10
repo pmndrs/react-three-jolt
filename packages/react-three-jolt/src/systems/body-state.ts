@@ -556,7 +556,11 @@ export class BodyState {
         this.isMotionSource = true;
         this.motionType = angularVector ? 'angular' : 'linear';
         this.motionLinearVector = linearVector;
-        if (angularVector) this.motionAngularVector = angularVector;
+        
+        if (angularVector) {
+            this.motionAngularVector = angularVector;
+        }
+        
         // if you want to use the normal for a bouncepad call it separately
 
         // add the listeners

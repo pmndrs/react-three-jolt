@@ -5,6 +5,7 @@ import { InstancedMesh, Object3D, Vector3 } from 'three';
 import { Raw } from '../raw';
 
 import { Layer } from '../constants';
+import { _matrix4, _scale } from '../tmp';
 import { quat, vec3 } from '../utils';
 import { BodyState } from './body-state';
 import {
@@ -126,12 +127,14 @@ export class BodySystem {
 
         return body;
     }
+
     // Create a new body and add it to the system
     addBody(object: Object3D, options?: GenerateBodyOptions) {
         const body = this.createBody({ ...options, object });
 
         return this.addExistingBody(object, body, options);
     }
+
     // add an EXISTING Jolt body to the system
     addExistingBody(object: Object3D, body: Jolt.Body, options?: GenerateBodyOptions): number {
         const state = new BodyState(
@@ -578,19 +581,13 @@ export function generateBodySettings(
         shape = shapeSettings.Create().Get() as Jolt.Shape;
     }
 
-    // // create position and quaternion from three to jolt
+    // create position and quaternion from three to jolt
     let position = new THREE.Vector3();
     let quaternion = new THREE.Quaternion();
 
-    // if (object) {
-    //     // const { position: objectPosition, quaternion: objectQuaternion } = object as Object3D;
-    //     // position.copy(objectPosition);
-    //     // quaternion.copy(objectQuaternion);
-    //     object.getWorldPosition(position);
-    //     object.getWorldQuaternion(quaternion);
-
-    //     console.log(object);
-    // }
+    if (object) {
+        _matrix4.copy(object.matrixWorld).decompose(position, quaternion, _scale);
+    }
 
     // Jitter fixes a problem where rapidly created bodies jam each other
     // also allows nice effects like fountains when creating bodies
@@ -603,6 +600,7 @@ export function generateBodySettings(
             Math.random() * options.jitter.z
         );
         position.add(jitter);
+
         // jitter the rotation too
         quaternion.setFromEuler(
             new THREE.Euler(
@@ -612,11 +610,12 @@ export function generateBodySettings(
             )
         );
     }
+
     // reset the items to jolt types
     const joltPosition = vec3.threeToJolt(position);
     const joltQuaternion = quat.threeToJolt(quaternion);
 
-    // type bases on bodyType (Dynamic by default)
+    // type bases on bodyType (Dynamic by default)    
     let layer, motionType;
     switch (options.bodyType) {
         case 'static':

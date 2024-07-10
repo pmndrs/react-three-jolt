@@ -154,7 +154,7 @@ function Inner() {
           group={body.groupId}
           subGroup={body.groupId === 2 ? 0 : 1}
           mass={15}
-          onlyInitialize
+          // onlyInitialize
         >
           <mesh>
             <boxGeometry args={[1, 1, 1]} />

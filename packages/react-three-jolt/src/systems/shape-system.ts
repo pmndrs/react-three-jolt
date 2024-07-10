@@ -81,8 +81,8 @@ export const getShapeSettingsFromObject = (
     });
 
     // BAIL IF EMPTY
-    // if (shapes.length === 0) return undefined;
-    //console.log('shapes', shapes);
+    if (shapes.length === 0) return undefined;
+
     // if theres only one, return it
     if (shapes.length === 1) return shapes[0].shapeSettings;
     const compoundShapeSettings = new Raw.module.StaticCompoundShapeSettings();
@@ -143,7 +143,6 @@ export const getShapeSettingsFromGeometry = (
         shapeType = getShapeTypeFromGeometry(geometry);
     }
 
-    console.log('shapeType', shapeType);
     switch (shapeType) {
         case 'box': {
             geometry.computeBoundingBox();
