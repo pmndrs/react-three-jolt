@@ -17,8 +17,87 @@ import { Object3D } from 'three';
 import { useForwardedRef, useJolt } from '../hooks';
 import { AutoShape, BodyState } from '../systems';
 import { BodyType, GenerateBodyOptions } from '../systems/body-system';
-import { _matrix4, _position, _quaternion, _scale } from '../tmp';
+import { _matrix4, _position, _quaternion, _scale, _vector3 } from '../tmp';
 import { vec3 } from '../utils';
+
+type MutableRigidBodyProps = {
+    [Prop in keyof RigidBodyProps]: (body: BodyState, value: any) => void;
+};
+
+const mutableRigidBodyProps: MutableRigidBodyProps = {
+    scale: (body: BodyState, scale: Vector3) => {
+        body.setScale(vec3.three(scale, _vector3));
+    },
+    mass: (body: BodyState, mass: number) => {
+        body.mass = mass;
+    },
+    friction: (body: BodyState, friction: number) => {
+        body.friction = friction;
+    },
+    linearDamping: (body: BodyState, linearDamping: number) => {
+        body.linearDamping = linearDamping;
+    },
+    angularDamping: (body: BodyState, angularDamping: number) => {
+        body.angularDamping = angularDamping;
+    },
+    allowObstruction: (body: BodyState, allowObstruction: boolean) => {
+        body.allowObstruction = allowObstruction;
+    },
+    obstructionTimelimit: (body: BodyState, obstructionTimelimit: number) => {
+        body.obstructionTimelimit = obstructionTimelimit;
+    },
+    isSensor: (body: BodyState, isSensor: boolean) => {
+        body.body.SetIsSensor(isSensor);
+    },
+    group: (body: BodyState, group: number) => {
+        body.group = group;
+    },
+    subGroup: (body: BodyState, subGroup: number) => {
+        body.subGroup = subGroup;
+    },
+    dof: (
+        body: BodyState,
+        dof: {
+            x?: boolean;
+            y?: boolean;
+            z?: boolean;
+            rotX?: boolean;
+            rotY?: boolean;
+            rotZ?: boolean;
+        }
+    ) => {
+        const { x, y, z, rotX, rotY, rotZ } = dof;
+        body.setEnabledTranslations(x || false, y || false, z || false);
+        body.setEnabledRotations(rotX || false, rotY || false, rotZ || false);
+    },
+    lockRotations: (body: BodyState, lockRotations: boolean) => {
+        if (!lockRotations) return;
+
+        body.lockRotations();
+    },
+    lockTranslations: (body: BodyState, lockTranslations: boolean) => {
+        if (!lockTranslations) return;
+
+        body.lockTranslations();
+    }
+};
+
+const useMutableRigidBodyProp = (
+    body: BodyState | undefined,
+    props: RigidBodyProps,
+    key: keyof RigidBodyProps
+) => {
+    useEffect(() => {
+        if (!body) return;
+        const value = props[key];
+
+        if (value !== undefined) {
+            mutableRigidBodyProps[key]!(body, value);
+        }
+    }, [body, props[key]]);
+};
+
+const immutableRigidBodyProps: Array<keyof RigidBodyProps> = ['shape'];
 
 export type RigidBodyProps = {
     children?: ReactNode;
@@ -96,6 +175,7 @@ export const RigidBody = memo(
             isSensor,
             angularDamping,
             linearDamping,
+            friction,
             group,
             subGroup,
 
@@ -134,10 +214,15 @@ export const RigidBody = memo(
         // this allows us to debug on the physics system or the component specifically
         const debug = propDebug || physicsDebug;
 
+        const immutablePropArray = immutableRigidBodyProps.map((key) => {
+            return props[key];
+        });
+
         //* Load the body -------------------------------------
         // todo: we cant use useMount here because we need the shape dependencies
         useEffect(() => {
             if (!bodySystem || bodyLoaded.current) return;
+
             // detect if any of the children are shapes
             let hasShapes = false;
             if (children) {
@@ -146,6 +231,7 @@ export const RigidBody = memo(
                     if (child.type && child.type.displayName === 'Shape') hasShapes = true;
                 });
             }
+
             //if (hasShapes) console.log("hasShapes", hasShapes, activeShape);
             // if the children are shapes, we will wait for them to mount
             if (hasShapes && !activeShape) return;
@@ -188,7 +274,7 @@ export const RigidBody = memo(
                 rigidBodyRef.current = undefined;
                 setBodyState(undefined);
             };
-        }, [activeShape, bodySystem]);
+        }, [activeShape, bodySystem, ...immutablePropArray]);
 
         //*/ Debugging -------------------------------------
 
@@ -212,22 +298,11 @@ export const RigidBody = memo(
 
             //if we have a scale we should also set the scale on this new shape
             if (scale) {
-                body.scale = vec3.three(scale);
+                body.setScale(vec3.three(scale, _vector3));
             }
         }, [activeShape]);
 
-        // scale the shape when the input scale changes
-        useEffect(() => {
-            if (!rigidBodyRef.current || !bodyLoaded) return;
-
-            const body = rigidBodyRef.current as BodyState;
-
-            if (scale) {
-                body.scale = vec3.three(scale);
-            }
-        }, [scale]);
-
-        //* Prop Updates -------------------------------------
+        // position and rotation updates
         useEffect(() => {
             if (!bodyState || onlyInitialize) return;
 
@@ -239,7 +314,22 @@ export const RigidBody = memo(
             bodyState.setRotation(_quaternion);
         }, [bodyState, onlyInitialize, position, rotation, quaternion]);
 
-        // add the contact listeners
+        // mutable prop updates
+        useMutableRigidBodyProp(bodyState, props, 'scale');
+        useMutableRigidBodyProp(bodyState, props, 'mass');
+        useMutableRigidBodyProp(bodyState, props, 'friction');
+        useMutableRigidBodyProp(bodyState, props, 'linearDamping');
+        useMutableRigidBodyProp(bodyState, props, 'angularDamping');
+        useMutableRigidBodyProp(bodyState, props, 'allowObstruction');
+        useMutableRigidBodyProp(bodyState, props, 'obstructionTimelimit');
+        useMutableRigidBodyProp(bodyState, props, 'isSensor');
+        useMutableRigidBodyProp(bodyState, props, 'group');
+        useMutableRigidBodyProp(bodyState, props, 'subGroup');
+        useMutableRigidBodyProp(bodyState, props, 'dof');
+        useMutableRigidBodyProp(bodyState, props, 'lockRotations');
+        useMutableRigidBodyProp(bodyState, props, 'lockTranslations');
+
+        // contact listeners
         useEffect(() => {
             if (!bodyState) return;
 
@@ -247,73 +337,12 @@ export const RigidBody = memo(
             if (onContactRemoved) bodyState.addContactListener(onContactRemoved, 'removed');
             if (onContactPersisted) bodyState.addContactListener(onContactPersisted, 'persisted');
 
-            // remove the listeners
             return () => {
                 if (onContactAdded) bodyState.removeContactListener(onContactAdded);
                 if (onContactRemoved) bodyState.removeContactListener(onContactRemoved);
                 if (onContactPersisted) bodyState.removeContactListener(onContactPersisted);
             };
         }, [bodyState, onContactAdded, onContactRemoved, onContactPersisted]);
-
-        //not sure these should be set as useEffects or directly in the body
-        useEffect(() => {
-            if (!bodyState) return;
-
-            const body = rigidBodyRef.current as BodyState;
-            //@ts-ignore
-            if (mass) bodySystem.setMass(body.handle, mass);
-            if (linearDamping) body.linearDamping = linearDamping;
-            if (angularDamping) body.angularDamping = angularDamping;
-
-            // check if the body is allowing obstruction
-            const isAllowing = body.allowObstruction;
-            if (allowObstruction !== undefined) {
-                if (isAllowing !== allowObstruction) {
-                    body.allowObstruction = allowObstruction as boolean;
-                }
-                if (obstructionTimelimit) {
-                    body.obstructionType = 'temporal';
-                    body.obstructionTimelimit = obstructionTimelimit;
-                }
-            }
-            if (isSensor !== undefined) body.body.SetIsSensor(isSensor);
-        }, [
-            bodyState,
-            mass,
-            allowObstruction,
-            obstructionTimelimit,
-            linearDamping,
-            angularDamping,
-            isSensor
-        ]);
-
-        //* Groups -------------------------------------
-        useEffect(() => {
-            if (!bodyState) return;
-
-            const body = bodyState;
-            if (group) {
-                body.group = group;
-            }
-
-            if (subGroup) {
-                body.subGroup = subGroup;
-            }
-        }, [group, subGroup, bodyState]);
-
-        //* DOF -------------------------------------
-        useEffect(() => {
-            if (!bodyState) return;
-            const body = bodyState as BodyState;
-
-            if (dof) {
-                const { x, y, z, rotX, rotY, rotZ } = dof;
-                body.setEnabledTranslations(x || false, y || false, z || false);
-                body.setEnabledRotations(rotX || false, rotY || false, rotZ || false);
-            }
-            if (lockRotations) body.lockRotations();
-            if (lockTranslations) body.lockTranslations();
-        }, [dof, lockRotations, lockTranslations, bodyState]);
 
         const contextValue: RigidBodyContext = useMemo(() => {
             return {
