@@ -157,8 +157,6 @@ export const RigidBodyContext = createContext<RigidBodyContext | undefined>(unde
 
 export type RigidBodyRef = BodyState | undefined;
 
-// the ridgedBody is a forwardRef so we can pass props directly
-// inital version from r3/rapier
 export const RigidBody = memo(
     forwardRef<RigidBodyRef, RigidBodyProps>((props, ref) => {
         const {
@@ -201,9 +199,9 @@ export const RigidBody = memo(
 
         const objectRef = useRef<Object3D>(null!);
 
-        const rigidBodyRef = useForwardedRef(ref);
         const [bodyState, setBodyState] = useState<BodyState | undefined>(undefined);
-
+        const bodyStateRef = useForwardedRef(ref);
+        
         // load the jolt stuff
         const { bodySystem, debug: physicsDebug } = useJolt();
 
@@ -228,11 +226,13 @@ export const RigidBody = memo(
             if (children) {
                 Children.toArray(children).forEach((child) => {
                     //@ts-ignore
-                    if (child.type && child.type.displayName === 'Shape') hasShapes = true;
+                    if (child.type && child.type.displayName === 'Shape') {
+                        hasShapes = true;
+                    }
                 });
             }
 
-            //if (hasShapes) console.log("hasShapes", hasShapes, activeShape);
+            if (hasShapes) console.log("hasShapes", hasShapes, activeShape);
             // if the children are shapes, we will wait for them to mount
             if (hasShapes && !activeShape) return;
             // todo: is this protection needed?
@@ -256,8 +256,8 @@ export const RigidBody = memo(
             const body = bodySystem.getBody(bodyHandle);
             if (!body) throw new Error('Body not found');
 
-            rigidBodyRef.current = body;
             setBodyState(body);
+            bodyStateRef.current = body;
 
             bodyLoaded.current = true;
 
@@ -269,38 +269,36 @@ export const RigidBody = memo(
 
             return () => {
                 // cleanup
-                bodySystem.removeBody((rigidBodyRef.current! as BodyState).handle);
+                bodySystem.removeBody(bodyHandle);
 
-                rigidBodyRef.current = undefined;
                 setBodyState(undefined);
+                bodyStateRef.current = undefined;
             };
         }, [activeShape, bodySystem, ...immutablePropArray]);
 
         //*/ Debugging -------------------------------------
 
         useEffect(() => {
-            if (!rigidBodyRef.current) return;
+            if (!bodyState) return;
 
-            rigidBodyRef.current.debug = debug;
-        }, [debug]);
+            bodyState.debug = debug;
+        }, [bodyState, debug]);
 
         //* Shape Updates -------------------------------------
 
         // Shape update
         useEffect(() => {
-            if (!rigidBodyRef.current || !bodyLoaded) return;
-
-            const body = rigidBodyRef.current as BodyState;
+            if (!bodyState || !bodyLoaded) return;
 
             if (activeShape) {
-                body.shape = activeShape;
+                bodyState.shape = activeShape;
             }
 
             //if we have a scale we should also set the scale on this new shape
             if (scale) {
-                body.setScale(vec3.three(scale, _vector3));
+                bodyState.setScale(vec3.three(scale, _vector3));
             }
-        }, [activeShape]);
+        }, [bodyState, activeShape]);
 
         // position and rotation updates
         useEffect(() => {

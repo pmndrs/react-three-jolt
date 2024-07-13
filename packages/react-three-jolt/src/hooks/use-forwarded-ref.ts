@@ -14,6 +14,8 @@ export const useForwardedRef = <T>(
             forwardedRef.current = innerRef.current;
         }
         return forwardedRef as MutableRefObject<T>;
+    } else if (forwardedRef) {
+        forwardedRef(innerRef.current);
     }
 
     return innerRef as MutableRefObject<T>;
