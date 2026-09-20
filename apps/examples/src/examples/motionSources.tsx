@@ -15,6 +15,15 @@ import { useDemo } from '../App';
 // because im lazy
 const dtr = (degree: number) => THREE.MathUtils.degToRad(degree);
 
+// Collision-group filtering (see the Group Filtering section of the README).
+// Collision groups answer "should THESE TWO objects collide"; object layers stay the broad
+// category filter. Every falling box carries the group id of the platform it should fall
+// through, and both sides of that relationship get a sub group id below. Disabling the
+// (filter, box) pair once makes every box pass through the one platform sharing its group and
+// land on all the others - the platforms that share BOX_SUB_GROUP still catch them.
+const FILTER_SUB_GROUP = 0;
+const BOX_SUB_GROUP = 1;
+
 // we have to wrap the demo so we can provide the physics component
 
 export function MotionSources() {
@@ -103,6 +112,11 @@ function Inner() {
         }, 4000);
     });
 
+    // a box only falls through the filter platform that shares its group id
+    useMount(() => {
+        bodySystem.disableCollision(FILTER_SUB_GROUP, BOX_SUB_GROUP);
+    });
+
     // setup movement sources
     useMount(() => {
         if (!rearConveyor.current || !leftConveyor.current) return;
@@ -153,7 +167,7 @@ function Inner() {
                     key={index}
                     position={[0, 10, -15]}
                     group={body.groupId}
-                    subGroup={body.groupId === 2 ? 0 : 1}
+                    subGroup={BOX_SUB_GROUP}
                     mass={15}
                     onlyInitialize
                 >
@@ -235,7 +249,7 @@ function Inner() {
                 rotation={[dtr(-15), 0, dtr(-2)]}
                 type="static"
                 group={0}
-                subGroup={0}
+                subGroup={FILTER_SUB_GROUP}
             >
                 <mesh>
                     <boxGeometry args={[5, 0.5, 8]} />
@@ -247,7 +261,7 @@ function Inner() {
                 rotation={[dtr(5), 0, dtr(15)]}
                 type="static"
                 group={1}
-                subGroup={2}
+                subGroup={FILTER_SUB_GROUP}
             >
                 <mesh>
                     <boxGeometry args={[8, 0.5, 5]} />
@@ -259,7 +273,7 @@ function Inner() {
                 rotation={[dtr(5), 0, dtr(-15)]}
                 type="static"
                 group={2}
-                subGroup={0}
+                subGroup={FILTER_SUB_GROUP}
             >
                 <mesh>
                     <boxGeometry args={[8, 0.5, 5]} />
@@ -271,7 +285,7 @@ function Inner() {
                 rotation={[dtr(-35), 0, 0]}
                 type="static"
                 group={3}
-                subGroup={1}
+                subGroup={BOX_SUB_GROUP}
             >
                 <mesh>
                     <boxGeometry args={[4, 0.5, 4]} />
@@ -297,7 +311,7 @@ function Inner() {
                 position={[-40, 21, -35]}
                 rotation={[0, 0, dtr(15)]}
                 group={3}
-                subGroup={0}
+                subGroup={FILTER_SUB_GROUP}
                 type={'static'}
             >
                 <mesh>
@@ -326,7 +340,7 @@ function Inner() {
                 rotation={[dtr(35), 0, 0]}
                 type="static"
                 group={3}
-                subGroup={1}
+                subGroup={BOX_SUB_GROUP}
             >
                 <mesh>
                     <boxGeometry args={[10, 0.5, 10]} />

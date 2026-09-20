@@ -66,8 +66,23 @@ export class BodySystem {
     // in getShapeTypeFromGeometry. Settable from `<Physics defaultShape="box">`.
     defaultShape?: AutoShape;
 
-    standardGroupFilter = new Raw.module.GroupFilterJS();
-    standardCollisionGroup = new Raw.module.CollisionGroup();
+    //* Collision groups ==============================
+    // Object layers (`Layer` in constants.ts) stay the *broad* filter: "is this a moving thing,
+    // a static thing, a kinematic thing". Collision groups answer the *narrow* question - "should
+    // these two specific objects collide with each other". Jolt only consults the group filter
+    // when two bodies share a group id; within a group, a disabled sub group pair skips the
+    // contact. Bodies with no collision group (the default) always collide.
+    //
+    // Each body owns its own `CollisionGroup` (created in createBody / on first use, destroyed in
+    // removeBody). It used to be ONE shared instance handed to every body, so setting a group on
+    // one body rewrote the settings every later body was created from (issue #95).
+    private collisionGroups = new Map<number, Jolt.CollisionGroup>();
+    private groupFilterTable?: Jolt.GroupFilterTable;
+    // Sub group ids index a packed bit triangle inside GroupFilterTable. Jolt only bounds checks
+    // that index with an assert, which is compiled out of the release wasm, so an id past the end
+    // of the table scribbles over the heap - every id is range checked here instead (issue #95).
+    // Raise this before the first grouped body if you need more; the table is built on demand.
+    subGroupCount = 256;
 
     // wired up by PhysicsSystem so removeBody can tear constraints down first
     constraintSystem?: ConstraintSystem;
@@ -82,36 +97,122 @@ export class BodySystem {
         // Activate the listeners
         this.initializeActivationListeners();
         this.initializeContactListeners();
-        this.initializeGroupFilter();
     }
-    //* Initializers ===================================
-    initializeGroupFilter() {
-        this.standardGroupFilter.CanCollide = (inGroup1, inGroup2) => {
-            // we have to wrap these to access them
-            const group1 = Raw.module.wrapPointer(inGroup1, Raw.module.CollisionGroup);
-            const group2 = Raw.module.wrapPointer(inGroup2, Raw.module.CollisionGroup);
 
-            // because either group may be a subgroup we have to test both
-            const activeSubGroups = [false, false, false];
-            const sameGroup = group1.GetGroupID() === group2.GetGroupID();
+    //* Group Filtering ================================
+    /**
+     * The system wide filter every body's collision group points at. Built on the first grouped
+     * body so ungrouped scenes never pay for it. Every pair is enabled to begin with; call
+     * {@link disableCollision} to turn a specific one off.
+     */
+    get groupFilter(): Jolt.GroupFilterTable {
+        if (!this.groupFilterTable) {
+            const table = new Raw.module.GroupFilterTable(this.subGroupCount);
+            // GroupFilter is ref counted and every CollisionGroup pointing at it holds a
+            // reference. Take one of our own so the table survives the last grouped body being
+            // removed instead of `delete this`-ing itself out from under the next one.
+            table.AddRef();
+            this.groupFilterTable = table;
+        }
+        return this.groupFilterTable;
+    }
 
-            const subGroup1 = group1.GetSubGroupID();
-            const subGroup2 = group2.GetSubGroupID();
-            activeSubGroups[subGroup1] = true;
-            activeSubGroups[subGroup2] = true;
-
-            // group 2 ONLY collides if the groups match, so we need to test it first
-            if (activeSubGroups[2] && sameGroup) return true;
-            // if the groups are different and group 2 isnt active
-            if (!activeSubGroups[2] && !sameGroup) return true;
-            // from now on the main group is always the same
-            // if both are group 1, they collide
-            if (subGroup1 === 1 && subGroup2 === 1) return true;
-
-            //console.log('group filter', group1, group2);
+    private isValidSubGroup(subGroup: number, caller: string): boolean {
+        if (!Number.isInteger(subGroup) || subGroup < 0 || subGroup >= this.subGroupCount) {
+            devWarn(
+                `${caller}: sub group ${subGroup} is out of range (0..${this.subGroupCount - 1}). ` +
+                    'Raise bodySystem.subGroupCount before creating grouped bodies.'
+            );
             return false;
-        };
-        this.standardCollisionGroup.SetGroupFilter(this.standardGroupFilter);
+        }
+        return true;
+    }
+
+    /**
+     * Turn collision between two sub groups on or off. Only applies to bodies that share the same
+     * group id - this is the "these two specific objects shouldn't collide" filter, not the broad
+     * category filter (that's the object layer, see `Layer` in constants.ts).
+     */
+    setGroupCollision(subGroupA: number, subGroupB: number, enabled: boolean) {
+        if (!this.isValidSubGroup(subGroupA, 'setGroupCollision')) return;
+        if (!this.isValidSubGroup(subGroupB, 'setGroupCollision')) return;
+        if (subGroupA === subGroupB) {
+            // Jolt stores only the lower triangle, so the (n, n) slot aliases a real pair's bit.
+            // Give every body in a group its own sub group id rather than relying on this.
+            devWarn('setGroupCollision: a sub group cannot be filtered against itself');
+            return;
+        }
+        if (enabled) this.groupFilter.EnableCollision(subGroupA, subGroupB);
+        else this.groupFilter.DisableCollision(subGroupA, subGroupB);
+    }
+    /** Stop two sub groups of the same group from colliding. */
+    disableCollision(subGroupA: number, subGroupB: number) {
+        this.setGroupCollision(subGroupA, subGroupB, false);
+    }
+    /** Let two sub groups of the same group collide again. */
+    enableCollision(subGroupA: number, subGroupB: number) {
+        this.setGroupCollision(subGroupA, subGroupB, true);
+    }
+    /** Whether two sub groups of the same group currently collide. */
+    isCollisionEnabled(subGroupA: number, subGroupB: number): boolean {
+        if (!this.isValidSubGroup(subGroupA, 'isCollisionEnabled')) return true;
+        if (!this.isValidSubGroup(subGroupB, 'isCollisionEnabled')) return true;
+        if (subGroupA === subGroupB) return true;
+        return this.groupFilter.IsCollisionEnabled(subGroupA, subGroupB);
+    }
+
+    /** The CollisionGroup this system owns for a body, if it has one yet. */
+    getCollisionGroup(bodyHandle: number): Jolt.CollisionGroup | undefined {
+        return this.collisionGroups.get(bodyHandle);
+    }
+
+    // A fresh, caller-owned collision group already wired to the system filter.
+    private makeCollisionGroup(group: number, subGroup: number): Jolt.CollisionGroup {
+        const collisionGroup = new Raw.module.CollisionGroup();
+        collisionGroup.SetGroupFilter(this.groupFilter);
+        collisionGroup.SetGroupID(group);
+        collisionGroup.SetSubGroupID(subGroup);
+        return collisionGroup;
+    }
+
+    // Body handles are reused once a body is destroyed, so never leave a stale group behind.
+    private destroyCollisionGroup(bodyHandle: number) {
+        const existing = this.collisionGroups.get(bodyHandle);
+        if (!existing) return;
+        this.collisionGroups.delete(bodyHandle);
+        Raw.module.destroy(existing);
+    }
+
+    /**
+     * Change a body's collision group and/or sub group at runtime. Jolt's Body keeps its own copy
+     * of the CollisionGroup, so ours is the source of truth and gets pushed across with
+     * `BodyInterface.SetCollisionGroup`. A sleeping body is woken so the new filtering is applied
+     * on the next step rather than whenever something else happens to touch it.
+     */
+    setBodyCollisionGroup(bodyHandle: number, group?: number, subGroup?: number) {
+        const bodyState = this.getBody(bodyHandle);
+        if (!bodyState) return;
+        if (subGroup !== undefined && !this.isValidSubGroup(subGroup, 'setBodyCollisionGroup'))
+            return;
+
+        let collisionGroup = this.collisionGroups.get(bodyHandle);
+        if (!collisionGroup) {
+            collisionGroup = this.makeCollisionGroup(group ?? 0, subGroup ?? 0);
+            this.collisionGroups.set(bodyHandle, collisionGroup);
+        } else {
+            if (group !== undefined) collisionGroup.SetGroupID(group);
+            if (subGroup !== undefined) collisionGroup.SetSubGroupID(subGroup);
+        }
+
+        const bodyID = bodyState.body.GetID();
+        this.bodyInterface.SetCollisionGroup(bodyID, collisionGroup);
+        // static bodies are never active, and activating one asserts inside Jolt
+        if (
+            !bodyState.body.IsStatic() &&
+            this.bodyInterface.IsAdded(bodyID) &&
+            !bodyState.body.IsActive()
+        )
+            this.bodyInterface.ActivateBody(bodyID);
     }
 
     //* Body Management ================================
@@ -125,17 +226,25 @@ export class BodySystem {
         if (Object.keys(this.defaultBodySettings).length > 0)
             settings = mergeBodyCreationSettings(settings, this.defaultBodySettings);
 
-        // todo: remove this once we change collision group at runtime
+        // Every grouped body gets its OWN CollisionGroup. Assigning it to the settings copies it
+        // (as does CreateBody), so the instance we hold on to stays ours to mutate and destroy.
+        let collisionGroup: Jolt.CollisionGroup | undefined;
         if (options.group !== undefined || options.subGroup !== undefined) {
-            settings.mCollisionGroup = this.standardCollisionGroup;
-            if (options.group !== undefined) settings.mCollisionGroup.SetGroupID(options.group);
-            if (options.subGroup !== undefined)
-                settings.mCollisionGroup.SetSubGroupID(options.subGroup);
+            const subGroup = options.subGroup ?? 0;
+            if (this.isValidSubGroup(subGroup, 'createBody'))
+                collisionGroup = this.makeCollisionGroup(options.group ?? 0, subGroup);
+            if (collisionGroup) settings.mCollisionGroup = collisionGroup;
         }
 
         const body = this.bodyInterface.CreateBody(settings);
         // remove the settings
         this.jolt.destroy(settings);
+        if (collisionGroup) {
+            const handle = body.GetID().GetIndexAndSequenceNumber();
+            // handles are recycled; free whatever a dead body left behind under this one
+            this.destroyCollisionGroup(handle);
+            this.collisionGroups.set(handle, collisionGroup);
+        }
         return body;
     }
     // Create a new body and add it to the system
@@ -190,6 +299,10 @@ export class BodySystem {
         // get the body so we can process it
         const bodyState = this.getBody(bodyHandle);
         if (!bodyState) return;
+        // The collision group is ours, not the body's (Jolt copied it), so free it up front -
+        // every early return below would otherwise leak it and hand the recycled handle a stale
+        // one. (issue #95)
+        this.destroyCollisionGroup(bodyHandle);
         // check if the body exists in the simulation
         // first check the simulation is still here (might be removed after physics is removed)
         if (!this.joltPhysicsSystem) return;
@@ -224,6 +337,20 @@ export class BodySystem {
         this.staticBodies.delete(bodyHandle);
         this.kinematicBodies.delete(bodyHandle);
         // console.log('Removed body', bodyHandle);
+    }
+
+    /**
+     * Free everything this system allocated on the Jolt heap that isn't a body. Call it after the
+     * bodies are gone: the group filter is ref counted, so releasing our reference frees it only
+     * once no body is still holding a copy of a group that points at it.
+     */
+    destroy() {
+        this.collisionGroups.forEach((collisionGroup) => Raw.module.destroy(collisionGroup));
+        this.collisionGroups.clear();
+        if (this.groupFilterTable) {
+            this.groupFilterTable.Release();
+            this.groupFilterTable = undefined;
+        }
     }
 
     // There's probably a better pattern, but im making my own function for this

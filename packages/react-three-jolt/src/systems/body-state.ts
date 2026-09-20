@@ -75,8 +75,7 @@ export class BodyState {
     //@ts-ignore
     private joltPhysicsSystem;
     private bodyInterface: Jolt.BodyInterface;
-    private bodySystem;
-    //private collisionGroupChanged = false;
+    private bodySystem: BodySystem;
 
     constructor(
         object: Object3D | InstancedMesh,
@@ -478,26 +477,38 @@ export class BodyState {
     }
 
     //* Group Filtering ----------------------------------
+    // Object layers (`Layer` in constants.ts) remain the broad "what kind of thing is this"
+    // filter. Collision groups are the narrow one: two bodies only consult the group filter when
+    // their group ids match, and `bodySystem.disableCollision(subA, subB)` then turns off that one
+    // sub group pair. Give every body in a group its own sub group id.
+    //
+    // Both are live: the getters read the body itself and the setters push a new CollisionGroup
+    // through BodyInterface.SetCollisionGroup, so they work after creation too (issue #95).
     get group() {
         return this.body.GetCollisionGroup().GetGroupID();
     }
     set group(group: number) {
-        // if we aren't using the core collisionGroup we need to change to it
-        /* we can't use this yet becuase the SetCollisionGroup method isnt exposed
-		if (!this.collisionGroupChanged) {
-			this.body.SetCollisionGroup(this.bodySystem.standardCollisionGroup);
-			this.collisionGroupChanged = true;
-		}
-		*/
-
-        // set the group
-        this.body.GetCollisionGroup().SetGroupID(group);
+        this.bodySystem.setBodyCollisionGroup(this.handle, group);
     }
     get subGroup() {
         return this.body.GetCollisionGroup().GetSubGroupID();
     }
     set subGroup(subGroup: number) {
-        this.body.GetCollisionGroup().SetSubGroupID(subGroup);
+        this.bodySystem.setBodyCollisionGroup(this.handle, undefined, subGroup);
+    }
+    /** Alias of {@link group}. */
+    get collisionGroup() {
+        return this.group;
+    }
+    set collisionGroup(group: number) {
+        this.group = group;
+    }
+    /** Alias of {@link subGroup}. */
+    get collisionSubGroup() {
+        return this.subGroup;
+    }
+    set collisionSubGroup(subGroup: number) {
+        this.subGroup = subGroup;
     }
 
     //* DOF Manipulation ------------------------------------

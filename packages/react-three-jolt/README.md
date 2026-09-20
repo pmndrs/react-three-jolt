@@ -259,79 +259,63 @@ It’s unclear if this is true from the perspective of the other shape, but know
 
 ---
 ## Group Filtering
-Like many physics systems Jolt supports many different types of collision filtering. At the moment more advanced filters like Broadphase and ObjectLayer filtering is pre-set in R3/Jolt _(we plan to expose later)_ however we not only fully support Group Filters, we’ve expanded their functionality using Jolt’s sub-group system.
+Jolt has two independent collision filters and they answer different questions.
 
-When you add items to a `Group`, by default they do not collide with each other. `Subgroups` let us expand on this functionality.
+**Object layers** (`Layer` in `constants.ts`) are the *broad* one: "what kind of thing is this" — moving, non-moving, kinematic, rig. They are pre-set in R3/Jolt _(we plan to expose them later)_ and are what you would reach for to say "bullets never hit other bullets".
 
-_(I will be referring to the filtering in the Motion Sources/Filtering demo)_
+**Collision groups** are the *narrow* one: "should these two specific objects collide with each other". They are the right tool for a ragdoll whose upper arm shouldn't collide with its own torso, or a door that shouldn't collide with its own frame.
 
-### Activating Filtering
-By Default, filtering is deactivated for all bodies. Filtering is slightly expensive, so if it’s not needed, don’t activate it.
-At the moment _(may 2024)_ Jolt doesn’t expose the `SetCollisionGroup()` function to Javascript.
-So we have to activate filtering when creating the `RigidBody`.
+A body's collision group is a pair of numbers, a `group` and a `subGroup`:
 
-If you use the `<RigidBody>` JSX Component simply add group or subGroup properties
+- Two bodies with **different `group` ids always collide** — the filter is skipped entirely.
+- Two bodies with the **same `group` id** consult the system-wide filter table, which decides based on their `subGroup` ids. Every sub group pair collides until you turn one off.
 
-```ts
-<RigidBody group={0} subGroup={0}>
+Give every body inside a group its own `subGroup` id.
+
+### Setting a group
+On the `<RigidBody>` component, with the `group` / `subGroup` props. Both are reactive — change them at any time and the body is updated (and woken) on the next step.
+
+```tsx
+<RigidBody group={1} subGroup={2}>
     <mesh>
         <boxGeometry args={[5, 0.5, 8]} />
         <meshStandardMaterial color="#ff4060" />
     </mesh>
 </RigidBody>
-
 ```
 
-_*These can be dynamically changed later, but MUST BE INCLUDED at body creation._
-
-If you are creating with the `BodySystem`, just add group or subGroup to the options object.
-They can be changed dynamically after creation but at least group or subGroup **MUST BE PRESENT** at creation.
+Or from the `BodySystem`, either at creation or afterwards:
 
 ```ts
-bodySystem.addBody(cubeMesh, {group: 0});
+const handle = bodySystem.addBody(cubeMesh, { group: 1, subGroup: 2 });
+
+const body = bodySystem.getBody(handle)!;
+body.group = 1; // alias: body.collisionGroup
+body.subGroup = 3; // alias: body.collisionSubGroup
 ```
 
-Once set, bodies in the **SAME GROUP** now have more advanced collision options. 
+A body with no group set never pays for filtering, so only set one where you need it.
 
-### Subgroups
-Subgroups are where the filtering functionality shines.
-By default, all items in the main “group” WILL NOT COLLIDE.
+### Turning a pair off
+```ts
+const { bodySystem } = physicsSystem;
 
-#### Sub-Group 0:
-| Doesnt Collide: | 0 | 1 | | |
-|---|---|---|---|---|
-| Collides: | | | 2 | Non-Members |
+bodySystem.disableCollision(2, 3); // sub groups 2 and 3 pass through each other
+bodySystem.enableCollision(2, 3); // ...and back again
+bodySystem.setGroupCollision(2, 3, false); // same thing, as one call
+bodySystem.isCollisionEnabled(2, 3); // -> false
+```
 
+This only affects bodies that share a `group` id. Two bodies in sub groups 2 and 3 but in *different* groups still collide.
 
+### Sub group ids
+Sub group ids index a fixed-size table, `bodySystem.subGroupCount` (default 256). Jolt does not bounds check that index in the release build, so R3/Jolt range checks every id and warns instead of letting it corrupt the heap. If you need more than the default, raise it before creating the first body that uses a group:
 
-**Subgroup 0** is the default and acts like most other physics systems. Any two Bodies in the same parent `Group` and `Subgroup-0` will not collide with each other. 
+```ts
+physicsSystem.bodySystem.subGroupCount = 1024;
+```
 
-Bodies in `Subgroup-0` will also ignore bodies in `Subgroup-1`.
-
-_(Green in the example. Note how when coming to a rest the cubes do not stack nicely, instead merge with each other)_
-
-#### SubGroup-1
-
-| Doesnt Collide: | 0 |  | | |
-|---|---|---|---|---|
-| Collides: | | 1| 2 | Non-Members |
-
-'Subgroup-1' is an addition made by R3/Jolt and the one we recommend using for any “standard” objects. 
-
-Filtering is often done to create trapdoors or filters but you still want the objects to collide with each other. This subgroup allows objects to access filters/traps but still act as regular bodies.
-_(Besides green, all boxes in the example are in subgroup-1)_
-
-#### Subgroup-2
-Doesn’t collide: Non Group Bodies
-Collides: All subgroups
-| Doesnt Collide: |  |  | | Non-Members |
-|---|---|---|---|---|
-| Collides: | 0 |1| 2 |  |
-
-`Subgroup-2` is best used as a block/filter device. Bodies in this subgroup ONLY collide with items in the same PARENT group. This means ALL OTHER bodies will ignore these bodies and fall right through them. However, items in the same “Group” will collide.
-_(The blue filter in the example is in subgroup-2)_
-
-
+A sub group cannot be filtered against itself (`setGroupCollision(2, 2, ...)` is rejected): Jolt only stores the lower triangle of the pair table, so that slot aliases a real pair. Two bodies sharing one sub group id always collide.
 
 ## MotionSources
 MotionSources are special types of bodies that modify other bodies when they come into contact with them. These aren’t explicit objects in Jolt but common patterns that we’ve standardized and simplified. These are incredibly flexible and have a ton of options we’ll try to cover.
