@@ -10,6 +10,7 @@ a caster, `cast()` it, read hits.
 | | what it answers |
 | --- | --- |
 | [`Raycaster`](#raycasting) | what does this ray hit |
+| [`useMouseRaycaster`](#usemouseraycaster) | what is under the pointer |
 | [`Multicaster`](#multicaster) | what do these *many* rays hit, in one call |
 | [`AdvancedRaycaster`](#advancedraycaster) | same, with your own per-body / per-hit filtering |
 | [`Shapecaster`](#shapecasting) | what does this *shape* hit as it sweeps along a direction |
@@ -84,6 +85,53 @@ optional.
 | `shapeIdValue` | sub-shape id within a compound |
 | `index` | position in the hit list |
 
+### `useMouseRaycaster`
+
+The physics answer to `THREE.Raycaster.setFromCamera()`: it builds a world-space ray from the
+pointer and the camera and casts it against Jolt bodies instead of the three.js scene graph.
+
+```tsx
+import { useMouseRaycaster } from '@react-three/jolt';
+import { useFrame } from '@react-three/fiber';
+
+export function Picker() {
+    const { hit, raycaster } = useMouseRaycaster({
+        onHit: (h) => {
+            if (!Array.isArray(h) && h) console.log(h.bodyHandle);
+        }
+    });
+
+    useFrame(() => {
+        const current = hit.current;
+        if (current && !Array.isArray(current)) highlight(current.bodyHandle);
+    });
+
+    raycaster.isDebugging = false;
+    return null;
+}
+```
+
+| option | default | |
+| --- | --- | --- |
+| `mode` | `'frame'` | rebuild the ray every rendered frame, so it stays right when only the camera moves. `'pointermove'` rebuilds it only on real pointer moves |
+| `type` | `'closest'` | collector, as above |
+| `length` | `camera.far` | ray length |
+| `onHit` | — | called with the latest hit (or `undefined` on a miss) every cast |
+| `filter` | — | swap in your own `bpFilter` / `objectFilter` / `bodyFilter` / `shapeFilter` |
+
+It returns `{ raycaster, hit }`, where **`hit` is a mutable ref updated in place** — read
+`hit.current` from `useFrame`, an event handler or `onHit`. It is deliberately not React state: a
+fast-moving pointer would otherwise re-render every frame.
+
+> [!CAUTION]
+> Passing a `filter` **transfers ownership of it** to the raycaster this hook creates: it replaces
+> (and frees) the default filter, and will free yours on the next filter change or on unmount.
+> Don't share one filter instance across several of these. `filter` participates in the hook's
+> dependencies by identity, so memoise it.
+
+Unlike its siblings, this hook destroys its raycaster **when `type` or `filter` change** as well
+as on unmount — see [Lifetime](#lifetime).
+
 ### Multicaster
 
 One raycaster, many origins or many origin/destination pairs — sweeps, foot probes, spread
@@ -117,13 +165,26 @@ clear them first.
 the cast:
 
 ```ts
+import type Jolt from 'jolt-physics';
+
 const caster = useAdvancedRaycaster();
-caster.onBody((body, collector) => { /* inspect each body the ray reaches */ });
-caster.addHit((result) => { /* return true to stop the cast early */ });
+caster.onBody((body: Jolt.Body) => {
+    /* inspect each body the ray reaches */
+});
+caster.addHit((result: Jolt.RayCastResult) => {
+    /* return truthy to shorten the cast to this hit */
+});
+caster.onReset(() => {
+    /* also resets the collector's early-out fraction */
+});
 ```
 
 The callbacks hand you **raw Jolt objects** the collector owns. Read what you need and return —
-do not keep them, and never `destroy()` them.
+do not keep them, and never `destroy()` them. They are declared loosely, so annotate the
+parameters yourself as above.
+
+`cast()` resets the collector *before* casting (resetting after would wipe the hits it just
+collected). In `'all'` mode the success handler is called once per hit.
 
 ## Shapecasting
 
@@ -195,6 +256,27 @@ export function Overlap() {
 Set `position`, `rotation` or `matrix` and the world transform is rebuilt **in place** — no
 allocation per frame, which is what makes it safe to drive from `useFrame` (the camera rig does).
 
+`cast()` returns the single hit when there is exactly one, the `hits` array when there are more,
+and `false` on a miss.
+
+### Shape ownership
+
+`collider.shape` is reference counted, not owned outright:
+
+```ts
+const shape = generateShape({ type: 'box', size: [1, 1, 1] });
+collider.shape = shape; // the collider takes its own reference (AddRef)
+releaseShape(shape); // you can drop yours immediately; the collider still holds one
+```
+
+Assigning a new shape `AddRef`s it and `Release`s the previous one; `destroy()` releases the
+current one rather than hard-destroying it. So a caller that also holds — and later frees — a
+reference to the same shape never ends up with a dangling pointer. Assigning the shape it already
+has is a no-op.
+
+`Shapecaster.shape` does **not** do this: it writes the shape straight into the cast, so keep your
+own reference alive for as long as the shapecaster uses it.
+
 ### `CollisionResult`
 
 | member | |
@@ -222,16 +304,44 @@ raycaster.stopDebugging();
 
 Raycasters, shapecasters and the multicaster's inner raycaster all share this API.
 
+### Markers
+
+A `Raycaster`'s markers are a small ring plus a normal-indicator line, **oriented along the hit
+surface normal** (`Quaternion.setFromUnitVectors((0, 1, 0), hit.impactNormal)`) rather than
+axis-aligned to the world. A degenerate normal falls back to world up.
+
+The debug objects are **pooled per raycaster**: one shared material per drawing type, geometry
+reused through `setFromPoints`, and one marker group per hit index, so repeated `drawMarker()` /
+`cast()` calls update an existing group's transform instead of allocating. Markers past the
+current hit count are hidden rather than destroyed. `destroy()` and `clearDebugging()` dispose the
+pools.
+
+> [!WARNING]
+> `Shapecaster` still has the **old, unpooled** debug drawing: it allocates a geometry, a material
+> and an `Object3D` on every call, its markers are world-axis-aligned crosses, and
+> `clearDebugging()` disposes nothing. Turn shapecast debugging on for a look, not for a session.
+
 ## Lifetime
 
 Every caster allocates Jolt filters, a collector and settings objects on the WASM heap. They are
 freed only by `destroy()`.
 
-- `useRaycaster()` and `useMulticaster()` destroy theirs on unmount.
-- `useAdvancedRaycaster()` currently does **not** — call `destroy()` yourself.
+| hook | frees its caster |
+| --- | --- |
+| `useMouseRaycaster()` | on unmount **and** whenever `type` / `filter` change |
+| `useRaycaster()` | unmount only — a change to `origin` / `direction` / `type` builds a new one and leaks the old |
+| `useMulticaster()` | unmount only, and it frees the inner `Raycaster` rather than calling `Multicaster.destroy()` |
+| `useAdvancedRaycaster()` | **never** — call `destroy()` yourself |
+
+`useRaycaster`'s `origin` and `direction` are compared by identity, so passing an inline array or
+`Vector3` re-creates the caster on every render. Hoist them, or use `raycaster.set(...)`.
+
 - Anything from `physicsSystem.getShapecaster()` / `getShapeCollider()` / `getRaycaster()` is
   yours: pair it with `useUnmount(() => caster.destroy())`.
-- `destroy()` is idempotent on `ShapeCollider`; don't rely on that for the others.
+- `destroy()` is idempotent on `ShapeCollider` — it also nulls out every field it freed, so a
+  stray call afterwards fails loudly instead of touching freed memory. Don't rely on that for the
+  others.
+- There is no `useShapecaster` / `useShapeCollider` hook yet.
 
 ### Objects Jolt hands you
 
