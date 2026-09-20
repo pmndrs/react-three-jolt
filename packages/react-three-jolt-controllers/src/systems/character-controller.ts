@@ -26,6 +26,14 @@ interface CharacterFilters {
     shapeFilter: Jolt.ShapeFilter;
 }
 
+/** Payload passed to {@link CharacterControllerSystem.onHeadHit} - see issue #88. */
+export interface HeadHitInfo {
+    /** World space contact normal (points away from the obstacle, towards the character). */
+    normal: THREE.Vector3;
+    /** The character's up-axis speed at the moment of the hit, before it is canceled. */
+    previousVerticalSpeed: number;
+}
+
 export class CharacterControllerSystem {
     protected joltInterface: Jolt.JoltInterface;
     protected physicsSystem: PhysicsSystem;
@@ -70,6 +78,24 @@ export class CharacterControllerSystem {
     characterSpeedCrouched = 3.0;
     characterSpeedExhausted = 2.0;
     jumpSpeed = 15.0;
+
+    /**
+     * Half-angle (radians) of the cone around straight-down (opposite `up`) within which a
+     * contact is treated as a head/ceiling hit rather than walkable ground (normal ~= up) or a
+     * wall (normal roughly perpendicular to up). A contact whose normal satisfies
+     * `contactNormal · up < -cos(headAngle)` cancels the character's upward velocity instead of
+     * letting it keep pushing into the obstacle until gravity alone brings it back down
+     * (issue #88). Defaults to 30 degrees.
+     */
+    headAngle = MathUtils.degToRad(30);
+
+    /**
+     * Called once per new contact that falls within the {@link headAngle} cone while the
+     * character is moving upward - i.e. it just bumped its head on a ceiling/overhang. Fires
+     * exactly once per contact (not every step the contact persists) and is not called for
+     * walkable ground or wall contacts. See issue #88.
+     */
+    onHeadHit?: (info: HeadHitInfo) => void;
 
     enableCharacterInertia = true;
     // if the body turns on move input
@@ -116,6 +142,17 @@ export class CharacterControllerSystem {
     /** true once `destroy()` has run; every jolt object below is freed and nulled out by then */
     private destroyed = false;
     private anchorHandle: number | undefined;
+
+    /**
+     * Set by the contact listener (`OnContactSolve`) when a head/ceiling contact is seen,
+     * consumed at the start of the next `prePhysicsUpdate` - see issue #88 and the notes on
+     * `OnContactSolve` in {@link initCharacterContactListener}.
+     */
+    private pendingHeadHitCancel = false;
+    /** True once a head/ceiling contact has fired `onHeadHit`, until a step passes with none. */
+    private isTouchingHeadObstacle = false;
+    /** Set from `OnContactSolve` during the step's `ExtendedUpdate`, read after it returns. */
+    private headContactActiveThisStep = false;
 
     /**
      * The *exact* function registered with the physics system. `removeStepListener` matches by
@@ -524,7 +561,14 @@ export class CharacterControllerSystem {
             _contactNormal: Jolt.Vec3,
             _settings: any
         ) => {
-            // not using this at the moment
+            // Not used for the head-hit detection below: verified empirically (real WASM module,
+            // not just reading the headers) that `OnContactAdded`'s `contactNormal` argument does
+            // not have a consistent sign convention - the exact same stationary floor reported it
+            // pointing up on some contacts and down on others, while `OnContactSolve`'s normal for
+            // the same contacts was consistently "away from the surface, towards the character"
+            // (up for the floor, down for a ceiling). Issue #88's detection lives in
+            // `OnContactSolve` instead, which both this and its steady low-level test coverage
+            // rely on being trustworthy.
         };
         this.characterContactListener.OnContactSolve = (
             character: any,
@@ -554,6 +598,51 @@ export class CharacterControllerSystem {
                 newCharacterVelocity.SetX(0);
                 newCharacterVelocity.SetY(0);
                 newCharacterVelocity.SetZ(0);
+            }
+
+            // Issue #88: a contact whose normal falls within the `headAngle` cone of straight
+            // down is the underside of a ceiling/overhang, not walkable ground or a wall. Only
+            // treat it as a head hit while the character is actually moving *up* into it though:
+            // on a hard landing the manifold normal Jolt reports here can - rarely, verified
+            // empirically at high impact speed - briefly point the "wrong" way for a single solve
+            // call even for a plain floor, and requiring upward velocity is both the literal
+            // "jumped and hit your head" condition from the issue and immune to that glitch,
+            // since a character landing on the floor is by definition moving down.
+            //
+            // `newCharacterVelocity` looks like the place to cancel the character's upward speed
+            // (it is exactly how the anti-slide branch above works), but verified empirically it
+            // is not: it only shapes Jolt's *internal* sweep for this single `ExtendedUpdate`
+            // call and is never written back to `GetLinearVelocity()`, so mutating it here has no
+            // effect on the velocity `applyMovement()` reads next frame - the character kept
+            // rising at the un-canceled speed every step after this one. Flag the hit instead and
+            // let `prePhysicsUpdate` cancel the *persisted* velocity via `SetLinearVelocity` at
+            // the start of the next step, which is the fallback this fix's issue anticipated.
+            //
+            // `OnContactSolve` (unlike `OnContactAdded`) runs every step a contact stays active,
+            // which is what `pendingHeadHitCancel` needs (it keeps re-arming for as long as the
+            // character pushes into the ceiling) but is one too many for `onHeadHit` (documented,
+            // and tested, to fire exactly once per contact). `headContactActiveThisStep` /
+            // `isTouchingHeadObstacle` edge-trigger that: `isTouchingHeadObstacle` latches true on
+            // the first step a head contact is seen and only resets (in `prePhysicsUpdate`, after
+            // `ExtendedUpdate` returns) once a full step goes by without one.
+            if (this.isHeadContact(contactNormal)) {
+                const up = this.character.GetUp();
+                const velocity = this.character.GetLinearVelocity();
+                const verticalSpeed =
+                    velocity.GetX() * up.GetX() +
+                    velocity.GetY() * up.GetY() +
+                    velocity.GetZ() * up.GetZ();
+                if (verticalSpeed > 0) {
+                    this.pendingHeadHitCancel = true;
+                    this.headContactActiveThisStep = true;
+                    if (!this.isTouchingHeadObstacle) {
+                        this.isTouchingHeadObstacle = true;
+                        this.onHeadHit?.({
+                            normal: vec3.three(contactNormal),
+                            previousVerticalSpeed: verticalSpeed
+                        });
+                    }
+                }
             }
         };
 
@@ -707,11 +796,38 @@ export class CharacterControllerSystem {
         // `destroy()` removes this from the step listeners, but a listener captured mid-step (or
         // a caller driving the update by hand) must not dereference the freed CharacterVirtual.
         if (this.destroyed) return;
+
+        // Issue #88: cancel the upward component of the *persisted* velocity a head/ceiling
+        // contact flagged last step, before this step recomputes movement from it. This has to
+        // happen here rather than in the contact callback itself - see the notes on
+        // `OnContactSolve` in `initCharacterContactListener()` for why mutating the callback's
+        // `newCharacterVelocity` does not work.
+        if (this.pendingHeadHitCancel) {
+            this.pendingHeadHitCancel = false;
+            const up = this.character.GetUp();
+            const velocity = this.character.GetLinearVelocity();
+            const verticalSpeed =
+                velocity.GetX() * up.GetX() +
+                velocity.GetY() * up.GetY() +
+                velocity.GetZ() * up.GetZ();
+            if (verticalSpeed > 0) {
+                this._tmpVec3.Set(
+                    velocity.GetX() - verticalSpeed * up.GetX(),
+                    velocity.GetY() - verticalSpeed * up.GetY(),
+                    velocity.GetZ() - verticalSpeed * up.GetZ()
+                );
+                this.character.SetLinearVelocity(this._tmpVec3);
+            }
+        }
+
         // locks the character in a up position
         // TODO: consider angular velocity to slightly rotate (wolfram GDC2014)
         this.applyRotation();
         this.applyMovement(deltaTime);
 
+        // Issue #88: reset before `ExtendedUpdate` runs the contact listener, which sets this
+        // back to true (from `OnContactSolve`) for every step a head/ceiling contact is active.
+        this.headContactActiveThisStep = false;
         this.character.ExtendedUpdate(
             deltaTime,
             this.character.GetUp(),
@@ -723,6 +839,9 @@ export class CharacterControllerSystem {
             this.filters.shapeFilter,
             this.joltInterface.GetTempAllocator()
         );
+        // A full step with no head contact re-arms `onHeadHit` for the next one - see the notes
+        // on `OnContactSolve` in `initCharacterContactListener()`.
+        if (!this.headContactActiveThisStep) this.isTouchingHeadObstacle = false;
         // move the three object
         this.threeObject.position.lerp(vec3.three(this.character.GetPosition()), this.lerpFactor);
         this.threeObject.quaternion.slerp(
@@ -991,5 +1110,27 @@ export class CharacterControllerSystem {
         // `threeToJolt` allocates; this is called per contact so use the shared scratch vector
         // (`IsSlopeTooSteep` only reads it).
         return this.character.IsSlopeTooSteep(joltScratch.vec3(normal));
+    }
+
+    /**
+     * True when a contact normal falls within {@link headAngle} of straight-down relative to the
+     * character's up axis - i.e. the underside of a ceiling or overhang, as opposed to walkable
+     * ground (normal ~= up) or a wall (normal roughly perpendicular to up). See issue #88.
+     *
+     * Contact normals handed to `CharacterContactListenerJS` callbacks point away from whatever
+     * the character touched, so resting on a floor reports a normal near `up`, hitting a wall
+     * reports one roughly perpendicular to `up`, and hitting the underside of a ceiling reports
+     * one pointing roughly opposite `up`.
+     *
+     * `GetUp()` returns by value (a per-function static temporary under the WebIDL binder) - read
+     * its components only, never destroy it.
+     */
+    private isHeadContact(contactNormal: Jolt.Vec3): boolean {
+        const up = this.character.GetUp();
+        const dot =
+            contactNormal.GetX() * up.GetX() +
+            contactNormal.GetY() * up.GetY() +
+            contactNormal.GetZ() * up.GetZ();
+        return dot < -Math.cos(this.headAngle);
     }
 }
