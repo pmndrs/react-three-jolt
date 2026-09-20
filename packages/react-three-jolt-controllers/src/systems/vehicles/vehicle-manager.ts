@@ -125,12 +125,12 @@ export type VehicleActionListener = (action: string, vehicle: VehicleManager) =>
 export class VehicleManager {
     physicsSystem: PhysicsSystem;
     settings: ResolvedVehicleSettings;
-    //@ts-ignore assigned by createBody
-    carBody: Jolt.Body;
-    //@ts-ignore assigned by createConstraint
-    constraint: Jolt.VehicleConstraint;
-    //@ts-ignore assigned by createConstraint
-    controller: Jolt.VehicleController;
+    /** Assigned by `createBody()`, which the constructor calls. */
+    carBody!: Jolt.Body;
+    /** Assigned by `createConstraint()`, which the constructor calls. */
+    constraint!: Jolt.VehicleConstraint;
+    /** Assigned by `createConstraint()`, which the constructor calls. */
+    controller!: Jolt.VehicleController;
 
     // Listeners for the vehicle constraint callbacks and for actions, all on the one Emitter
     // primitive (issue #50) so removal never depends on function identity.
@@ -718,7 +718,6 @@ export class VehicleManager {
             body2,
             _subShapeID2
         ) => {
-            //@ts-ignore this is a TS bug in wrapPointer
             const body = Raw.module.wrapPointer(body2, Raw.module.Body) as Jolt.Body;
             return Math.sqrt(tireFriction * body.GetFriction()); // This is the default calculation
         };

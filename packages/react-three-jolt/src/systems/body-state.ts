@@ -127,9 +127,9 @@ export class BodyState {
         return this.events.mask | this.internalMask;
     }
 
-    // References so we can modify the body directly
-    //@ts-ignore
-    private joltPhysicsSystem;
+    // References so we can modify the body directly.
+    // (`joltPhysicsSystem` used to be held here too, untyped behind a `@ts-ignore`, and was
+    // never read - only `bodyInterface`, derived from it in the constructor, ever is.)
     private bodyInterface: Jolt.BodyInterface;
     private bodySystem: BodySystem;
     //private collisionGroupChanged = false;
@@ -159,7 +159,6 @@ export class BodyState {
         this.object.userData.bodyHandle = this.handle;
 
         // set the references for direct manipulation
-        this.joltPhysicsSystem = joltPhysicsSystem;
         this.bodySystem = bodySystem;
         this.bodyInterface = joltPhysicsSystem.GetBodyInterface();
     }
@@ -881,7 +880,8 @@ export class BodyState {
         rotZ?: boolean;
     }) {
         let newDOF = this.rawDOF;
-        const allowedDOFs = [
+        // `key` typed off `dof` itself so the lookups below index it without a suppression
+        const allowedDOFs: { key: keyof typeof dof; flag: number }[] = [
             { key: 'x', flag: Raw.module.EAllowedDOFs_TranslationX },
             { key: 'y', flag: Raw.module.EAllowedDOFs_TranslationY },
             { key: 'z', flag: Raw.module.EAllowedDOFs_TranslationZ },
@@ -892,7 +892,6 @@ export class BodyState {
 
         allowedDOFs.forEach((optionalDof) => {
             //console.log("checking", dof[optionalDof.key], dof[optionalDof.key] == undefined);
-            //@ts-ignore
             if (dof[optionalDof.key]) {
                 newDOF |= optionalDof.flag;
                 // leaving these logs because its annoying to retype
@@ -904,9 +903,7 @@ export class BodyState {
 					createBinaryString(newDOF)
 				);
 				*/
-            }
-            //@ts-ignore
-            else if (dof[optionalDof.key] !== undefined) {
+            } else if (dof[optionalDof.key] !== undefined) {
                 newDOF &= ~optionalDof.flag;
                 /*console.log(
 					"unsetting",

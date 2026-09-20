@@ -29,6 +29,21 @@ import { CameraBoom, type CameraBoomOptions } from './camera-boom';
 export type CameraFollowMode = 'free' | 'movement' | 'lookAt';
 
 /**
+ * What `createCamera()` accepts.
+ *
+ * `position` and `space` are handled explicitly; every other key is written straight onto the
+ * new `THREE.PerspectiveCamera` under the same name (`fov`, `near`, `far`, `zoom`, ...), which
+ * is why the index signature is here rather than a closed list.
+ */
+export interface CameraOptions {
+    /** Where the camera starts, in whichever rig space it is added to. */
+    position?: anyVec3;
+    /** Which rig space to parent it to: `'anchor'`, `'base'` or `'collar'` (default `'base'`). */
+    space?: string;
+    [key: string]: unknown;
+}
+
+/**
  * Everything a {@link CameraRigManager} (and the {@link CameraBoom} it owns) can be configured
  * with. Passing these to the constructor - which is what `useCameraRig(options)` does - is the
  * fix for issue #86: the rig used to be built with its defaults, attached to the physics loop,
@@ -287,8 +302,8 @@ export class CameraRigManager {
     }
 
     //* Anchor attachment ===================================
-    attach(body: BodyState, offset?: THREE.Vector3) {
-        //safety bail
+    attach(body: BodyState | undefined, offset?: THREE.Vector3) {
+        //safety bail (a character's rig anchor is undefined until it has been created)
         if (!body) return;
         if (offset) this.anchorOffset = offset;
         this.attachment = body;
@@ -312,7 +327,7 @@ export class CameraRigManager {
 
     //* Cameras ========================================
     // create a camera
-    createCamera(name: string, options?: any) {
+    createCamera(name: string, options?: CameraOptions) {
         //TODO: not sure aspect ratio needs to be here
         const camera = new THREE.PerspectiveCamera(
             75,
@@ -320,15 +335,18 @@ export class CameraRigManager {
             0.1,
             1000
         );
-        //@ts-ignore loop over options and set them
-        if (options)
+        if (options) {
+            // anything other than `position`/`space` is written straight onto the camera by
+            // name; three.js' PerspectiveCamera has no index signature, so the one cast here is
+            // what types the dynamic write (it used to be a suppression inside the loop).
+            const target = camera as unknown as Record<string, unknown>;
             for (const key in options) {
                 //position is being weird
-                if (key == 'position') {
-                    camera.position.copy(vec3.three(options[key]));
-                    //@ts-ignore
-                } else camera[key] = options[key];
+                if (key === 'position') {
+                    camera.position.copy(vec3.three(options.position as anyVec3));
+                } else target[key] = options[key as keyof CameraOptions];
             }
+        }
         // add to list
         this.addCamera(name, camera, options?.space);
         // if there is no active camera set this to it

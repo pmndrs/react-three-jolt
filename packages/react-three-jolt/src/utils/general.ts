@@ -143,10 +143,13 @@ export const vec3 = {
         const dz = b.GetZ() - a.GetZ();
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     },
-    // @ts-ignore detect if vec3 is jolt
-    isJolt: (vec: anyVec3): vec is joltVec3 => !isNil(vec) && vec.GetX !== undefined,
-    //@ts-ignore detect if vec3 is three
-    isThree: (vec: anyVec3): vec is THREE.Vector3 => !isNil(vec) && vec.x !== undefined,
+    // Duck typing across the union: only the Jolt flavours have GetX, only three.js' has `.x`.
+    // The casts just say "ask this union member for a property it may not declare"; the runtime
+    // test is unchanged.
+    isJolt: (vec: anyVec3): vec is joltVec3 =>
+        !isNil(vec) && (vec as Partial<joltVec3>).GetX !== undefined,
+    isThree: (vec: anyVec3): vec is THREE.Vector3 =>
+        !isNil(vec) && (vec as Partial<THREE.Vector3>).x !== undefined,
     //copy the value of a second vec3 onto the first
     joltCopy: (a: joltVec3, b: anyVec3) => {
         const [x, y, z] = readVec3(b);
@@ -159,15 +162,22 @@ export const vec3 = {
     // whatever type A is correctly copy the value of B onto it
     copy(a: anyVec3, b: anyVec3) {
         if (vec3.isJolt(a)) vec3.joltCopy(a, b);
-        //@ts-ignore
-        else vec3.threeCopy(a, b);
+        // Everything that is not a Jolt vector goes through threeCopy, which only needs `.set`.
+        // A tuple has no `.set`, so a tuple target was silently a no-op before and still is -
+        // the cast documents the narrowing the old `@ts-ignore` was hiding.
+        else vec3.threeCopy(a as THREE.Vector3, b);
     }
 };
 
 export const quat = {
-    /** Allocates. The caller owns the returned `Jolt.Quat`. */
-    //@ts-ignore stupid tuple type
-    tupleToJolt: (tuple: Vector4Tuple): Jolt.Quat => new Raw.module.Quat(...tuple),
+    /**
+     * Allocates. The caller owns the returned `Jolt.Quat`.
+     *
+     * Indexed rather than spread because `Vector4Tuple` widens to `number[]`, which has no
+     * arity for the 4-argument `Quat` constructor. Missing components default to identity.
+     */
+    tupleToJolt: (tuple: Vector4Tuple): Jolt.Quat =>
+        new Raw.module.Quat(tuple[0] ?? 0, tuple[1] ?? 0, tuple[2] ?? 0, tuple[3] ?? 1),
     /** Allocates. The caller owns the returned `Jolt.Quat`. */
     threeToJolt: (quaternion: THREE.Quaternion): Jolt.Quat =>
         new Raw.module.Quat(quaternion.x, quaternion.y, quaternion.z, quaternion.w),
@@ -186,12 +196,11 @@ export const quat = {
             quaternion.GetW()
         ),
 
+    // Same duck typing as vec3.isJolt/isThree above.
     isThree: (quaternion: anyQuat): quaternion is THREE.Quaternion =>
-        //@ts-ignore
-        !isNil(quaternion) && quaternion.x !== undefined,
+        !isNil(quaternion) && (quaternion as Partial<THREE.Quaternion>).x !== undefined,
     isJolt: (quaternion: anyQuat): quaternion is Jolt.Quat =>
-        //@ts-ignore
-        !isNil(quaternion) && quaternion.GetX !== undefined,
+        !isNil(quaternion) && (quaternion as Partial<Jolt.Quat>).GetX !== undefined,
     /**
      * Convert anything quaternion shaped into a `Jolt.Quat`.
      *

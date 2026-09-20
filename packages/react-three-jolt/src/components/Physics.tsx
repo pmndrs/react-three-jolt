@@ -275,7 +275,6 @@ export const Physics: FC<PhysicsProps> = (props) => {
           : `${gravity.x},${gravity.y},${gravity.z}`;
     useEffect(() => {
         if (!physicsSystem) return;
-        //@ts-ignore number[] vs the tuple/vector union
         physicsSystem.setGravity(gravity);
         // biome-ignore lint/correctness/useExhaustiveDependencies: gravityKey stands in for the value of gravity
     }, [gravityKey, physicsSystem]);

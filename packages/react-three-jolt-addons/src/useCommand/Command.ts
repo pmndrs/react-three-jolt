@@ -8,6 +8,14 @@ export type CommandVector = { x: number; y: number };
 export type CommandValue = string | number | boolean | CommandVector;
 
 /**
+ * Narrow a reported value to the two axis kind, i.e. the one a `VectorCommand` (or any command
+ * bound with `{ asVector: true }`) produces. Reading `.x`/`.y` off a `CommandValue` otherwise
+ * needs a cast, and getting it wrong yields `undefined` rather than an error.
+ */
+export const isCommandVector = (value: CommandValue): value is CommandVector =>
+    typeof value === 'object' && value !== null && 'x' in value && 'y' in value;
+
+/**
  * The payload the gamepad poller hands us. It is a plain object, not a DOM event, and it keeps
  * the shape `gamepad.js` used to emit (`{ index, axis | button, value, pressed }`) so anything
  * written against the old events still reads.

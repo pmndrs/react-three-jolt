@@ -159,21 +159,56 @@ export abstract class QueryBase {
 // the cast()/castFrom()/castTo()/castBetween() family, and the debug-drawing resource pool.
 // `THit` is the concrete hit type (RaycastHit/ShapecastHit) and `TCollector` the union of native
 // collector classes a subclass' setCollector() can produce.
-//
-// successHandler/failHandler stay `any` below (matching the original untyped signature) rather
-// than a `(hit?: THit | THit[]) => void` alias: TS checks a plain function-type parameter's
-// parameter list contravariantly, so callers passing a narrower callback - e.g.
-// `(hit: RaycastHit) => void`, which every example in apps/examples does - would stop compiling
-// even though the same callback works fine at runtime (cast() never actually calls it with
-// `undefined` or an array unless the hit shape says so).
 
-// The bare minimum every native collector class (including the *CollectorJS variants) declares -
-// see AdvancedRaycaster for why HadHit()/mHit/mHits can't be part of this shared constraint.
-type ResettableCollector = { Reset(): void };
+/**
+ * The read side of one of Jolt's `Array*` result vectors (`ArrayRayCastResult`,
+ * `ArrayShapeCastResult`, `ArrayCollideShapeResult`, ...). Only `size()`/`at()` are needed to
+ * drain a collector, so this is deliberately narrower than the native classes.
+ */
+export interface JoltHitArray<THit> {
+    size(): number;
+    at(index: number): THit;
+}
+
+/**
+ * The hit-reading surface shared by Jolt's collision collectors (issue #144).
+ *
+ * Every `*ClosestHitCollisionCollector` / `*AnyHitCollisionCollector` declares `HadHit()` plus a
+ * single `mHit`; every `*AllHitCollisionCollector` declares `HadHit()` plus an `mHits` vector;
+ * and the `*CollectorJS` variants (see `AdvancedRaycaster`) declare **neither**, because the
+ * JS implementation collects hits itself. Everything is therefore optional here, which is what
+ * lets one interface cover all three families structurally instead of the four `@ts-ignore`s
+ * `cast()` used to need - and it forces the `HadHit?.()` guard below, which is the honest
+ * runtime check for a JS collector.
+ */
+export interface HitCollector<THit = unknown> {
+    Reset(): void;
+    HadHit?(): boolean;
+    mHit?: THit;
+    mHits?: JoltHitArray<THit>;
+}
+
+/**
+ * `cast()`'s success callback: called with the single hit for a 'closest'/'any' query, or with
+ * the whole array for an 'all' query.
+ *
+ * Declared method-style (the `bivarianceHack` idiom) on purpose. Under `strictFunctionTypes` a
+ * plain `(hit: THit | THit[]) => void` property would check its parameter contravariantly, so
+ * the narrower `(hit: RaycastHit) => void` that every demo in `apps/examples` passes would stop
+ * compiling even though it is exactly right for a 'closest' cast. Method-style parameters are
+ * checked bivariantly, which permits that - the same bargain `addEventListener` and the React
+ * typings make.
+ */
+export type CastSuccessHandler<THit> = {
+    bivarianceHack(hit: THit | THit[]): void;
+}['bivarianceHack'];
+
+/** `cast()`'s miss callback: called with no arguments when a cast collected nothing. */
+export type CastFailHandler = () => void;
 
 export abstract class CastQueryBase<
     THit extends HitBase,
-    TCollector extends ResettableCollector
+    TCollector extends HitCollector
 > extends QueryBase {
     //important
     type = 'closest';
@@ -248,7 +283,10 @@ export abstract class CastQueryBase<
     }
 
     // do the cast, runs optional handlers and returns the hits
-    cast(successHandler?: any, failHandler?: any): THit | THit[] | undefined {
+    cast(
+        successHandler?: CastSuccessHandler<THit>,
+        failHandler?: CastFailHandler
+    ): THit | THit[] | undefined {
         // clear the collector. Every collector type must be reset before reuse, including
         // "closest": CastRayClosestHitCollisionCollector keeps HadHit()/mHit and its early-out
         // fraction from the previous cast, so skipping the reset here made a closest-hit
@@ -259,22 +297,20 @@ export abstract class CastQueryBase<
         this.hits = [];
         //run the cast
         this.rawCast();
-        //handle results
-        // @ts-ignore jolt collector TS issue - the collector union includes the *CollectorJS
-        // variants (see AdvancedRaycaster), which don't declare HadHit()/mHit/mHits.
-        if (this.collector.HadHit()) {
-            if (this.type === 'all') {
+        // Handle results. `HadHit` is optional on HitCollector because the *CollectorJS variants
+        // (see AdvancedRaycaster, which overrides cast() anyway) genuinely don't have it at
+        // runtime either - so the optional call is the real guard, not a type-level dodge.
+        const mHits = this.collector.mHits;
+        if (this.collector.HadHit?.()) {
+            if (this.type === 'all' && mHits) {
                 // multi-hit case
-                // @ts-ignore jolt TS issue
-                for (let i = 0; i < this.collector.mHits.size(); i++) {
-                    // @ts-ignore jolt TS issue for collector
-                    const hit = this.buildHit(this.collector.mHits.at(i), i);
+                for (let i = 0; i < mHits.size(); i++) {
+                    const hit = this.buildHit(mHits.at(i), i);
                     this.hits.push(hit);
                 }
                 if (successHandler) successHandler(this.hits);
             } else {
                 // single hit case
-                // @ts-ignore jolt TS issue
                 const hit = this.buildHit(this.collector.mHit, 0);
                 if (successHandler) successHandler(hit);
                 this.hits.push(hit);
@@ -296,15 +332,19 @@ export abstract class CastQueryBase<
         return undefined;
     }
     // ease of life handler to change the origin when casting
-    castFrom(origin: anyVec3, successHandler?: any, failHandler?: any): THit | THit[] | undefined {
+    castFrom(
+        origin: anyVec3,
+        successHandler?: CastSuccessHandler<THit>,
+        failHandler?: CastFailHandler
+    ): THit | THit[] | undefined {
         this.origin = origin;
         return this.cast(successHandler, failHandler);
     }
     // ease of life to cast from the origin to a point
     castTo(
         destination: anyVec3,
-        successHandler?: any,
-        failHandler?: any
+        successHandler?: CastSuccessHandler<THit>,
+        failHandler?: CastFailHandler
     ): THit | THit[] | undefined {
         this.direction = vec3.three(destination).clone().sub(this.origin);
         return this.cast(successHandler, failHandler);
@@ -313,8 +353,8 @@ export abstract class CastQueryBase<
     castBetween(
         origin: THREE.Vector3,
         destination: THREE.Vector3,
-        successHandler?: any,
-        failHandler?: any
+        successHandler?: CastSuccessHandler<THit>,
+        failHandler?: CastFailHandler
     ): THit | THit[] | undefined {
         this.origin = origin;
         this.direction = vec3.three(destination).sub(this.origin);

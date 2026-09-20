@@ -14,7 +14,8 @@ import {
     Raw,
     releaseShape,
     type Unsubscribe,
-    vec3
+    vec3,
+    wrapPointer
 } from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
@@ -139,11 +140,13 @@ export class CharacterControllerSystem {
         new THREE.MeshPhongMaterial({ color: 0xffff00 })
     );
     protected updateSettings = new Raw.module.ExtendedUpdateSettings();
-    protected characterContactListener: any;
+    protected characterContactListener?: Jolt.CharacterContactListenerJS;
 
     //rig anchor
-    anchor: any;
-    anchorID: any;
+    /** The kinematic body the camera rig follows; created by `createAnchor()`. */
+    anchor?: BodyState;
+    /** {@link anchor}'s body handle. */
+    anchorID?: Jolt.BodyID;
 
     // DO NOT MESS WITH THESE
     filters: CharacterFilters = {
@@ -321,10 +324,11 @@ export class CharacterControllerSystem {
         );
         // adjust the main body filter to not conflict with sensors
         this.filters.bodyFilter.ShouldCollide = () => true;
-        //@ts-ignore wrap still incorrect here.
-        this.filters.bodyFilter.ShouldCollideLocked = (inBody: Jolt.Body) =>
-            //@ts-ignore wrap still incorrect here.
-            !Raw.module.wrapPointer(inBody, Raw.module.Body).IsSensor();
+        // embind hands a JSImplementation raw pointers, so `inBodyPtr` is a heap address and
+        // has to be wrapped before it is a Body. The wrapper is a view Jolt owns - never freed,
+        // never retained past this call.
+        this.filters.bodyFilter.ShouldCollideLocked = (inBodyPtr) =>
+            !wrapPointer(inBodyPtr, Raw.module.Body).IsSensor();
 
         // Init the character contact listener
         this.initCharacterContactListener();
@@ -454,9 +458,9 @@ export class CharacterControllerSystem {
         const setAttempt = this.character.SetShape(
             shape,
             1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
-            //@ts-ignore
-            this.filters.movingBPFilter,
-            this.filters.movingLayerFilter,
+            // both filters are built in the constructor and only cleared by destroy()
+            this.filters.movingBPFilter!,
+            this.filters.movingLayerFilter!,
             this.filters.bodyFilter,
             this.filters.shapeFilter,
             this.joltInterface.GetTempAllocator()
@@ -645,16 +649,17 @@ export class CharacterControllerSystem {
 
     initCharacterContactListener() {
         this.characterContactListener = new Raw.module.CharacterContactListenerJS();
+        // Every parameter of every CharacterContactListenerJS callback is a raw WASM pointer -
+        // that is what jolt-physics 1.1.0's typings say and what emscripten actually passes.
+        // Wrapping produces a view Jolt owns: never free one, never keep one past the callback.
         this.characterContactListener.OnAdjustBodyVelocity = (
-            _character: Jolt.CharacterVirtual,
-            body2: Jolt.Body,
-            linearVelocity: Jolt.Vec3,
-            _angularVelocity: Jolt.Vec3
+            _characterPtr,
+            body2Ptr,
+            linearVelocityPtr,
+            _angularVelocityPtr
         ) => {
-            //@ts-ignore wrapPointer TS error
-            body2 = Raw.module.wrapPointer(body2, Raw.module.Body);
-            //@ts-ignore
-            linearVelocity = Raw.module.wrapPointer(linearVelocity, Raw.module.Vec3);
+            const body2 = wrapPointer(body2Ptr, Raw.module.Body);
+            const linearVelocity = wrapPointer(linearVelocityPtr, Raw.module.Vec3);
             // get the body we are colliding with
 
             const body2State = this.bodySystem.getBody(body2.GetID().GetIndexAndSequenceNumber());
@@ -678,15 +683,13 @@ export class CharacterControllerSystem {
             }
         };
         this.characterContactListener.OnContactValidate = (
-            character: Jolt.CharacterVirtual,
-            bodyID2: Jolt.BodyID,
-            _subShapeID2: Jolt.SubShapeID
+            _characterPtr,
+            _bodyID2Ptr,
+            _subShapeID2Ptr
         ) => {
-            //@ts-ignore wrapPointer TS error
-            bodyID2 = Raw.module.wrapPointer(bodyID2, Raw.module.Body);
-            //@ts-ignore wrapPointer TS error
-            character = Raw.module.wrapPointer(character, Raw.module.Body);
             // this seems to be a space to trigger sensors
+            // (the two pointers used to be wrapped here and then thrown away unused; wrapping
+            // them again is one line whenever this actually filters something)
             return true;
         };
         // #79/#80/#187: forward the contacts Jolt actually reports. Every one of these is a
@@ -701,23 +704,19 @@ export class CharacterControllerSystem {
             _settings: number
         ) => this.queueContact(0, bodyID2, subShapeID2, contactPosition, contactNormal);
         this.characterContactListener.OnContactSolve = (
-            character: any,
-            _bodyID2: Jolt.BodyID,
-            _subShapeID2: Jolt.SubShapeID,
-            _contactPosition: Jolt.Vec3,
-            contactNormal: Jolt.Vec3,
-            contactVelocity: Jolt.Vec3,
-            _contactMaterial: Jolt.PhysicsMaterial,
-            _characterVelocity: Jolt.Vec3,
-            newCharacterVelocity: Jolt.Vec3
+            _characterPtr,
+            _bodyID2Ptr,
+            _subShapeID2Ptr,
+            _contactPositionPtr,
+            contactNormalPtr,
+            contactVelocityPtr,
+            _contactMaterialPtr,
+            _characterVelocityPtr,
+            newCharacterVelocityPtr
         ) => {
-            character = Raw.module.wrapPointer(character, Raw.module.Body);
-            //@ts-ignore wrapPointer TS error
-            contactVelocity = Raw.module.wrapPointer(contactVelocity, Raw.module.Vec3);
-            //@ts-ignore
-            newCharacterVelocity = Raw.module.wrapPointer(newCharacterVelocity, Raw.module.Vec3);
-            //@ts-ignore
-            contactNormal = Raw.module.wrapPointer(contactNormal, Raw.module.Vec3);
+            const contactVelocity = wrapPointer(contactVelocityPtr, Raw.module.Vec3);
+            const newCharacterVelocity = wrapPointer(newCharacterVelocityPtr, Raw.module.Vec3);
+            const contactNormal = wrapPointer(contactNormalPtr, Raw.module.Vec3);
 
             if (
                 !this.allowSliding &&
@@ -865,7 +864,8 @@ export class CharacterControllerSystem {
             Raw.module.Quat.prototype.sIdentity(),
             this.physicsSystem.physicsSystem
         );
-        this.character.SetListener(this.characterContactListener);
+        if (this.characterContactListener)
+            this.character.SetListener(this.characterContactListener);
 
         this.threeObject.userData.body = this.character;
 
@@ -985,9 +985,9 @@ export class CharacterControllerSystem {
             deltaTime,
             this.character.GetUp(),
             this.updateSettings,
-            //@ts-ignore
-            this.filters.movingBPFilter,
-            this.filters.movingLayerFilter,
+            // both filters are built in the constructor and only cleared by destroy()
+            this.filters.movingBPFilter!,
+            this.filters.movingLayerFilter!,
             this.filters.bodyFilter,
             this.filters.shapeFilter,
             this.joltInterface.GetTempAllocator()
@@ -1000,7 +1000,7 @@ export class CharacterControllerSystem {
         );
         //console.log('character position', vec3.three(this.character.GetPosition()	);
         // update the anchor
-        this.anchor.setPositionAndRotation(this.threeObject.position, this.threeObject.quaternion);
+        this.anchor?.setPositionAndRotation(this.threeObject.position, this.threeObject.quaternion);
 
         // Everything user facing happens here, once the character update has returned: the
         // contacts Jolt queued from inside it, then the state edges derived from the result.
@@ -1253,9 +1253,9 @@ export class CharacterControllerSystem {
             const tryShape = this.character.SetShape(
                 newShape,
                 1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
-                //@ts-ignore
-                this.filters.movingBPFilter,
-                this.filters.movingLayerFilter,
+                // both filters are built in the constructor and only cleared by destroy()
+                this.filters.movingBPFilter!,
+                this.filters.movingLayerFilter!,
                 this.filters.bodyFilter,
                 this.filters.shapeFilter,
                 this.joltInterface.GetTempAllocator()

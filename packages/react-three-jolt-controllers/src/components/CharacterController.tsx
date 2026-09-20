@@ -1,12 +1,20 @@
 import { useThree } from '@react-three/fiber';
 import { useEventCallback, useForwardedRef, useJolt } from '@react-three/jolt';
-import { useCommand } from '@react-three/jolt-addons';
+import { type CommandVector, isCommandVector, useCommand } from '@react-three/jolt-addons';
 import React, { forwardRef, memo, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { CharacterEventMap } from '../systems/character-controller';
 import { CharacterControllerSystem } from '../systems/character-controller';
-// create a blank context
-export const CharacterControllerContext = React.createContext(undefined!);
+/** What `<CharacterController>` puts on its context; `undefined` until the system exists. */
+export interface CharacterControllerContextValue {
+    characterSystem: CharacterControllerSystem | undefined;
+}
+
+// `createContext(undefined!)` inferred `never` here, which is why the Provider below needed a
+// suppression on the one value it could ever be handed.
+export const CharacterControllerContext = React.createContext<CharacterControllerContextValue>({
+    characterSystem: undefined
+});
 
 /**
  * Subscribe `handler` to one of a controller's events for as long as both exist (issues #79,
@@ -93,10 +101,9 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             onAction,
             moveThreshold,
             slideThreshold,
-            //@ts-ignore
             ...objectProps
         } = props;
-        //@ts-ignore pass the body via the ref
+        // pass the body via the ref
         const characterRef = useForwardedRef(forwardedRef);
 
         const objectRef = useRef<THREE.Object3D>(null);
@@ -114,9 +121,11 @@ export const CharacterController: React.FC<CControllerProps> = memo(
         // set values and initializers for characterSystem
         useEffect(() => {
             const newCCS = new CharacterControllerSystem(physicsSystem);
-            //@ts-ignore
-            newCCS.add(objectRef.current);
+            if (objectRef.current) newCCS.add(objectRef.current);
             newCCS.addToScene(scene);
+            // expose the controller through the forwarded ref (this is what the ref was always
+            // for; nothing ever assigned it, so `ref` silently stayed null)
+            characterRef.current = newCCS;
             //newCCS.setCapsule(radius, height);
 
             setCharacterSystem(newCCS);
@@ -125,8 +134,10 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             // state as well keeps the commands below from driving a destroyed controller.
             return () => {
                 newCCS.destroy();
+                characterRef.current = null;
                 setCharacterSystem(undefined);
             };
+            // biome-ignore lint/correctness/useExhaustiveDependencies: characterRef is a stable ref
         }, [physicsSystem, scene]);
 
         // set debugging
@@ -197,13 +208,12 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             (info) => {
                 // get the camera direction
                 camera.getWorldQuaternion(cameraRotation);
-                const direction = new THREE.Vector3(
-                    //@ts-ignore
-                    info.value.x,
-                    0,
-                    //@ts-ignore
-                    info.value.y
-                )
+                // `move` is bound with `{ asVector: true }`, so its value is the two axis
+                // kind; narrow rather than cast, since reading `.x` off a scalar would quietly
+                // build a NaN direction.
+                if (!isCommandVector(info.value)) return;
+                const move: CommandVector = info.value;
+                const direction = new THREE.Vector3(move.x, 0, move.y)
                     .applyQuaternion(getHorizontalRotation())
                     .normalize();
 
@@ -225,7 +235,7 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             }
         );
 
-        const contextValue = {
+        const contextValue: CharacterControllerContextValue = {
             characterSystem
         };
 
@@ -235,9 +245,10 @@ export const CharacterController: React.FC<CControllerProps> = memo(
         }, [radius, height]);
 
         return (
-            //@ts-ignore
             <CharacterControllerContext.Provider value={contextValue}>
-                <object3D ref={objectRef}>{children}</object3D>
+                <object3D ref={objectRef} {...objectProps}>
+                    {children}
+                </object3D>
             </CharacterControllerContext.Provider>
         );
     })

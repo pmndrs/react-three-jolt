@@ -15,7 +15,7 @@ import {
     type SurfaceMaterial,
     SurfaceMaterialTable
 } from '../heightField/materials';
-import { Raw } from '../raw';
+import { castObject, Raw } from '../raw';
 import { devWarn, quat, vec3, withJolt } from '../utils';
 import { BodyState } from './body-state';
 import type { ConstraintSystem } from './constraint-system';
@@ -1234,10 +1234,15 @@ export function mergeBodyCreationSettings(
     options?: Jolt.BodyCreationSettings
 ) {
     if (!options) return settings;
+    // embind: BodyCreationSettings' properties are emscripten accessors, so a key-by-key copy
+    // is the only way to merge two of them - and no index signature exists to type that with.
+    // The pair of casts is the whole unsafety, made once and explicitly, instead of the blanket
+    // suppression this used to carry.
+    const target = settings as unknown as Record<string, unknown>;
+    const source = options as unknown as Record<string, unknown>;
     // loop over the object keys and set the settings
-    for (const key in options) {
-        // @ts-expect-error
-        settings[key] = options[key];
+    for (const key in source) {
+        target[key] = source[key];
     }
     return settings;
 }
@@ -1438,55 +1443,56 @@ export function getThreeObjectForBody(body: Jolt.Body, color = '#E07A5F') {
 
     let threeObject;
 
-    let extent;
+    // Each branch downcasts into its own local instead of writing the subclass back over
+    // `shape` (which stays typed as the base `Jolt.Shape`, which is what made every accessor
+    // below need a suppression). `castObject` re-wraps the same pointer, so these are views -
+    // nothing to free, and `shape` itself still refers to the same object afterwards.
+    let extent: THREE.Vector3;
     switch (shape.GetSubType()) {
-        case Raw.module.EShapeSubType_Box:
-            shape = Raw.module.castObject(shape, Raw.module.BoxShape);
-            //@ts-expect-error
-            extent = vec3.three(shape.GetHalfExtent()).multiplyScalar(2);
+        case Raw.module.EShapeSubType_Box: {
+            const box = castObject(shape, Raw.module.BoxShape);
+            extent = vec3.three(box.GetHalfExtent()).multiplyScalar(2);
             threeObject = new THREE.Mesh(
                 new THREE.BoxGeometry(extent.x, extent.y, extent.z, 1, 1, 1),
                 material
             );
             break;
-        case Raw.module.EShapeSubType_Sphere:
-            shape = Raw.module.castObject(shape, Raw.module.SphereShape);
+        }
+        case Raw.module.EShapeSubType_Sphere: {
+            const sphere = castObject(shape, Raw.module.SphereShape);
             threeObject = new THREE.Mesh(
-                //@ts-expect-error
-                new THREE.SphereGeometry(shape.GetRadius(), 32, 32),
+                new THREE.SphereGeometry(sphere.GetRadius(), 32, 32),
                 material
             );
             break;
-        case Raw.module.EShapeSubType_Capsule:
-            shape = Raw.module.castObject(shape, Raw.module.CapsuleShape);
+        }
+        case Raw.module.EShapeSubType_Capsule: {
+            const capsule = castObject(shape, Raw.module.CapsuleShape);
             threeObject = new THREE.Mesh(
                 new THREE.CapsuleGeometry(
-                    //@ts-expect-error
-                    shape.GetRadius(),
-                    //@ts-expect-error
-                    2 * shape.GetHalfHeightOfCylinder(),
+                    capsule.GetRadius(),
+                    2 * capsule.GetHalfHeightOfCylinder(),
                     20,
                     10
                 ),
                 material
             );
             break;
-        case Raw.module.EShapeSubType_Cylinder:
-            shape = Raw.module.castObject(shape, Raw.module.CylinderShape);
+        }
+        case Raw.module.EShapeSubType_Cylinder: {
+            const cylinder = castObject(shape, Raw.module.CylinderShape);
             threeObject = new THREE.Mesh(
                 new THREE.CylinderGeometry(
-                    //@ts-expect-error
-                    shape.GetRadius(),
-                    //@ts-expect-error
-                    shape.GetRadius(),
-                    //@ts-expect-error
-                    2 * shape.GetHalfHeight(),
+                    cylinder.GetRadius(),
+                    cylinder.GetRadius(),
+                    2 * cylinder.GetHalfHeight(),
                     20,
                     1
                 ),
                 material
             );
             break;
+        }
         default:
             threeObject = new THREE.Mesh(createMeshForShape(shape), material);
             break;

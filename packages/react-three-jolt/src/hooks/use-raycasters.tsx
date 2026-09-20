@@ -23,9 +23,7 @@ export const useRaycaster = (
     const raycaster: Raycaster = useMemo(() => {
         previous.current?.destroy();
         const caster: Raycaster = physicsSystem.getRaycaster();
-        //@ts-ignore
         if (origin) caster.origin = origin;
-        //@ts-ignore
         if (direction) caster.direction = direction;
         if (type) caster.setCollector(type);
         previous.current = caster;

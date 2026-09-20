@@ -4,6 +4,7 @@ import React, {
     Children,
     createContext,
     forwardRef,
+    isValidElement,
     memo,
     ReactNode,
     useCallback,
@@ -110,12 +111,15 @@ interface RigidBodyProps {
 export interface RigidBodyContext {
     body: BodyState | undefined;
     type: BodyType | undefined;
-    position: THREE.Vector3 | undefined;
-    rotation: THREE.Vector3 | undefined;
-    scale: THREE.Vector3 | undefined;
-    quaternion: THREE.Quaternion | undefined;
+    // These four are the RigidBody's own props passed straight through, so they are the props'
+    // `number[]` shape - not THREE.Vector3/Quaternion, which is what this interface used to
+    // claim behind a `@ts-ignore` on the value it was assigned (issue #11).
+    position: number[] | undefined;
+    rotation: number[] | undefined;
+    scale: number[] | undefined;
+    quaternion: number[] | undefined;
     // methods
-    setActiveShape: (shape: any) => void;
+    setActiveShape: (shape: Jolt.Shape | undefined) => void;
     /**
      * Tell the body its shape changed underneath it (#108: a `<Shape dynamic>` edits its
      * `MutableCompoundShape` in place rather than handing over a new shape, so `setActiveShape`
@@ -209,8 +213,12 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             let hasShapes = false;
             if (children)
                 Children.toArray(children).forEach((child) => {
-                    //@ts-ignore
-                    if (child.type && child.type.displayName === 'Shape') hasShapes = true;
+                    // Children.toArray hands back ReactChild, which is a string/number for text
+                    // nodes - only an element has `.type`, and only a component (not a host
+                    // string like 'mesh') carries `displayName`.
+                    if (!isValidElement(child)) return;
+                    const componentType = child.type as { displayName?: string };
+                    if (componentType?.displayName === 'Shape') hasShapes = true;
                 });
             //if (hasShapes) console.log("hasShapes", hasShapes, activeShape);
             // if the children are shapes, we will wait for them to mount
@@ -229,7 +237,6 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                 if (position) objectRef.current.position.copy(vec3.three(position));
                 if (rotation) objectRef.current.rotation.setFromVector3(vec3.three(rotation));
 
-                //@ts-ignore
                 const bodyHandle = bodySystem.addBody(objectRef.current, options);
                 const body = bodySystem.getBody(bodyHandle);
                 if (!body) throw new Error('Body not found');
@@ -400,7 +407,6 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         );
 
         // the context should update when a new handle is added
-        //@ts-ignore
         const contextValue: RigidBodyContext = useMemo(() => {
             return {
                 // the state, not the ref: this is what makes the context update once the body

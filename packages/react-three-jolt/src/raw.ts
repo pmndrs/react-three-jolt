@@ -109,6 +109,46 @@ export const free = (value: unknown) => {
     JoltModule.module.destroy(value);
 };
 
+//* Typed embind helpers ===================================================================
+// jolt-physics' emscripten glue hands raw pointers (plain `number`s) to every JS callback it
+// invokes - contact listeners, character contact listeners, the *CollectorJS collectors, vehicle
+// step listeners - and `wrapPointer`/`castObject` are how you turn one back into a usable
+// wrapper object. Issue #144: those two used to be typed as taking the *wrapped* type rather
+// than a pointer, so ~60 call sites carried a `@ts-ignore`. The jolt-physics 1.1.0 typings fixed
+// the signature; the three wrappers below exist so a call site reads as intent ("this number is
+// a Body") instead of module plumbing, and so there is one documented place stating the lifetime
+// rules that come with each of them.
+
+/** The shape of an emscripten-bound Jolt class, as `wrapPointer`/`castObject` want it. */
+// biome-ignore lint/suspicious/noExplicitAny: a constructor type constraint has to accept any args
+export type JoltClass<T> = new (...args: any[]) => T;
+
+/**
+ * View the Jolt object at `ptr` as an instance of `cls`.
+ *
+ * `ptr` is a raw WASM heap address - the form every jolt-physics JS callback receives its
+ * arguments in. The returned wrapper is a **view**, not an allocation: it does not own the
+ * memory, so never `free()` it, and never retain it past the callback that handed you the
+ * pointer (Jolt reuses both the address and the wrapper).
+ */
+export const wrapPointer = <T>(ptr: number, cls: JoltClass<T>): T =>
+    JoltModule.module.wrapPointer(ptr, cls);
+
+/**
+ * Re-view an existing Jolt wrapper as one of its subclasses (`Shape` -> `CompoundShape`, a
+ * `VehicleController` -> `WheeledVehicleController`, ...).
+ *
+ * This is an unchecked downcast: emscripten does not verify that `obj` really is a `cls`, it
+ * just re-wraps the same pointer, so check the runtime discriminator (`GetSubType()`,
+ * `GetType()`, ...) first. Like {@link wrapPointer} the result aliases `obj`'s memory, so
+ * freeing both is a double free.
+ */
+export const castObject = <T>(obj: unknown, cls: JoltClass<T>): T =>
+    JoltModule.module.castObject(obj, cls);
+
+/** The raw WASM heap address behind a Jolt wrapper object. Stable, so it works as a map key. */
+export const getPointer = (obj: unknown): number => JoltModule.module.getPointer(obj);
+
 // The factory currently backing `JoltModule.module` (undefined when it was loaded via the
 // bundled default). Tracked so a repeat call with the *same* factory - `suspend-react`
 // re-running, StrictMode's double-invoke, a hot reload - is recognised as a no-op instead of a
