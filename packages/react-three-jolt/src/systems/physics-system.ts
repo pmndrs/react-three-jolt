@@ -179,7 +179,11 @@ export class PhysicsSystem {
             Raw.joltInterfaces.delete(pid);
             // console.log('*** PhysicsSystem:' + pid + ' destroyed ***');
         }
-        // every body, constraint and shape went with the interface
+        // every body, constraint and shape went with the interface, but the BodySystem also owns
+        // plain heap allocations of its own (per-body CollisionGroups, the ref counted
+        // GroupFilterTable - issue #95) that the interface knows nothing about. Idempotent, so a
+        // second destroy() of this system is still a no-op.
+        this.bodySystem.destroy();
         this.destroyed = true;
     }
     // TODO: Loops and steps seems messy

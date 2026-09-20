@@ -238,6 +238,40 @@ test('the group filter table is ref counted, not leaked', () => {
     system.destroy('collision-groups-teardown');
 });
 
+// `BodySystem.destroy()` is only useful if something actually calls it. Nothing outside the tests
+// did: `PhysicsSystem.destroy()` freed the JoltInterface (which takes the bodies, constraints and
+// shapes with it) and stopped there, leaving the GroupFilterTable and the per-body CollisionGroups
+// on the heap for the lifetime of the page - one table per <Physics> remount.
+test('PhysicsSystem.destroy() releases the body system group filter table', () => {
+    const system = new PhysicsSystem('physics-system-group-filter-teardown');
+
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    mesh.position.set(0, 5, 0);
+    system.bodySystem.addBody(mesh, { group: 1, subGroup: 1 });
+
+    const table = system.bodySystem.groupFilter;
+    // hold a reference of our own so the table is still safe to read after teardown drops the
+    // rest - without it the last Release() would free the object we are about to inspect
+    table.AddRef();
+    assert.equal(table.GetRefCount(), 4, 'expected ours + the system + its CollisionGroup + body');
+
+    system.destroy('physics-system-group-filter-teardown');
+
+    // destroying the JoltInterface alone takes the body's copy down to 3; only
+    // `bodySystem.destroy()` drops the system's own reference and its CollisionGroup's
+    assert.equal(
+        table.GetRefCount(),
+        1,
+        'PhysicsSystem.destroy() did not release the group filter table'
+    );
+    // destroy() is reentered whenever React tears a <Physics> down twice; the second pass must not
+    // release the table (or double free the CollisionGroups) again
+    system.destroy('physics-system-group-filter-teardown');
+    assert.equal(table.GetRefCount(), 1, 'a second destroy() released the table again');
+
+    table.Release();
+});
+
 // --- react component ---------------------------------------------------------------------
 
 function probe(box: { ps?: PhysicsSystem }) {
