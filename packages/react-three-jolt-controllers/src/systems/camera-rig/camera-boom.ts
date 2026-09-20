@@ -74,6 +74,8 @@ export class CameraBoom {
     cameraSpace = new THREE.Object3D();
     lookVector = new THREE.Vector2(0, 0);
 
+    private destroyed = false;
+
     constructor(base: THREE.Object3D, physicsSystem: PhysicsSystem, _options?: any) {
         this.physicsSystem = physicsSystem;
         this.raycaster = physicsSystem.getRaycaster();
@@ -98,6 +100,33 @@ export class CameraBoom {
         const cube = new THREE.Mesh(geometry, material);
         this.cameraSpace.add(cube);
         */
+    }
+
+    /**
+     * Free the three query objects the boom owns (issue #139). The raycaster, shapecaster and
+     * collider each hold roughly a dozen wasm allocations - filters, collectors, settings - and
+     * nothing used to free them, so every rig leaked ~25 jolt objects.
+     *
+     * Idempotent: `Raw.module.destroy()` does not throw on an already freed pointer, it silently
+     * frees it a second time, so the guard is what makes a double teardown safe.
+     */
+    destroy() {
+        if (this.destroyed) return;
+        this.destroyed = true;
+
+        this.raycaster?.destroy();
+        this.shapecaster?.destroy();
+        this.collider?.destroy();
+        this.raycaster = undefined as unknown as Raycaster;
+        this.shapecaster = undefined as unknown as Shapecaster;
+        this.collider = undefined as unknown as ShapeCollider;
+
+        // detach the camera (and anything else parented to the boom) from the rig
+        if (this.activeCamera) this.cameraSpace.remove(this.activeCamera);
+        this.activeCamera = undefined;
+        this.pivot.removeFromParent();
+        this.pivot.clear();
+        this.cameraSpace.clear();
     }
 
     //* Properties ========================================
@@ -217,7 +246,7 @@ export class CameraBoom {
         // handle additive mode (gamepad and joystick controls)
         // TODO  do additive mode
         // do the obstruction test
-        if (!this.activeCamera) return;
+        if (this.destroyed || !this.activeCamera) return;
         if (!this.allowCameraClipping) {
             // these are tested individually because they both can activate shapecasting
             if (!this.isShapecasting) this.doCollisionTest();
