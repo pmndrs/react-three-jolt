@@ -3,14 +3,37 @@
 //import type Jolt from 'jolt-physics';
 
 // mostly for the types
-import { PhysicsSystem, vec3 } from '@react-three/jolt';
+import { type anyVec3, PhysicsSystem, vec3 } from '@react-three/jolt';
 import * as THREE from 'three';
 //import { ConstraintSystem } from '@react-three/jolt';
 
 //import { vec3, quat, convertNegativeRadians } from '@react-three/jolt';
 import { BodyState } from '@react-three/jolt';
 
-import { CameraBoom } from './camera-boom';
+import { CameraBoom, type CameraBoomOptions } from './camera-boom';
+
+/**
+ * Everything a {@link CameraRigManager} (and the {@link CameraBoom} it owns) can be configured
+ * with. Passing these to the constructor - which is what `useCameraRig(options)` does - is the
+ * fix for issue #86: the rig used to be built with its defaults, attached to the physics loop,
+ * and only then mutated into shape by whoever created it, so the first frame or two ran against
+ * a half-configured boom.
+ */
+export interface CameraRigOptions extends CameraBoomOptions {
+    /** Body the rig follows. Same thing `attach()` does, but before the first step. */
+    followTarget?: BodyState;
+    /** Offset of the anchor from the followed body. @default (0,2,0) */
+    anchorOffset?: anyVec3;
+    /** @default 'distance' */
+    positionUpdateType?: 'distance' | 'fixed';
+    /**
+     * Where the rig's `main` camera starts, in rig space. The boom takes its length, pitch and
+     * yaw from it, so the rig opens already framed (issue #86). @default (0,0,0)
+     */
+    cameraPosition?: anyVec3;
+    /** Show the rig's debug meshes. @default true */
+    debug?: boolean;
+}
 
 //activate camera controls
 export class CameraRigManager {
@@ -74,15 +97,13 @@ export class CameraRigManager {
         return this.isDebugging;
     }
 
-    constructor(scene: THREE.Scene, physicsSystem: PhysicsSystem) {
+    constructor(scene: THREE.Scene, physicsSystem: PhysicsSystem, options: CameraRigOptions = {}) {
         this.scene = scene;
         this.physicsSystem = physicsSystem;
         //this.constraintSystem = physicsSystem.constraintSystem;
 
         this.controls = new CameraBoom(this.base, physicsSystem);
 
-        // attach to the physics system loop
-        this.attachToLoop();
         // create the rigs
         this.scene.add(this.anchor);
         this.scene.add(this.base);
@@ -93,9 +114,45 @@ export class CameraRigManager {
         //this.insertDebugShape('collar', '#F7A278');
         //  this.insertDebugShape('base', '#B0413E');
 
-        this.createCamera('main', { space: 'base', position: new THREE.Vector3(4, 4, 4) });
-        // put the camera into the control boom
-        this.controls.camera = this.getCamera('main') as THREE.PerspectiveCamera;
+        // Everything - the rig's own options, the boom's, and the main camera - is in place
+        // before the loop can step us even once (issue #86).
+        this.applyOptions(options, true);
+        // attach to the physics system loop
+        this.attachToLoop();
+    }
+
+    //* Options ========================================
+    /**
+     * Change options on a live rig. The rig is *not* rebuilt: `useCameraRig` memoises the
+     * manager and funnels prop changes through here so the camera keeps its pose.
+     */
+    setOptions(options: CameraRigOptions = {}) {
+        if (this.destroyed) return;
+        this.applyOptions(options, false);
+    }
+
+    private applyOptions(options: CameraRigOptions, initializing: boolean) {
+        if (options.anchorOffset !== undefined)
+            this.anchorOffset.copy(vec3.three(options.anchorOffset));
+        if (options.positionUpdateType !== undefined)
+            this.positionUpdateType = options.positionUpdateType;
+        if (options.debug !== undefined) this.debug = options.debug;
+        if (options.followTarget !== undefined) this.attach(options.followTarget);
+
+        if (initializing) {
+            // an externally supplied camera becomes `main`; otherwise build one at the requested
+            // rig-space position and let the boom derive its length/pitch/yaw from it
+            let camera = options.camera;
+            if (camera) this.addCamera('main', camera, 'base');
+            else
+                camera = this.createCamera('main', {
+                    space: 'base',
+                    position: vec3.three(options.cameraPosition ?? ORIGIN)
+                });
+            this.controls.initialize({ ...options, camera });
+        } else {
+            this.controls.setOptions(options);
+        }
     }
     /**
      * Tear the rig down: stop being stepped, free the boom's jolt queries and remove every body
@@ -283,10 +340,10 @@ export class CameraRigManager {
     }
 
     // handler for when the frame updates
-    private handleUpdate(_deltaTime: number, _subFrame: number) {
+    private handleUpdate(deltaTime: number, _subFrame: number) {
         if (this.destroyed) return;
         this.updateSpaces();
-        if (this.activeCamera && this.controls) this.controls.handleFrameUpdate();
+        if (this.activeCamera && this.controls) this.controls.handleFrameUpdate(deltaTime);
     }
 
     updateSpaces() {
@@ -339,6 +396,10 @@ export class CameraRigManager {
         return point!;
     }
 }
+
+//* Helpers ================================================
+// shared, never mutated: the default rig-space position for the `main` camera
+const ORIGIN = new THREE.Vector3(0, 0, 0);
 
 //* Three cleanup helpers ==================================
 // three geometries and materials hold GPU resources that are only released by dispose()

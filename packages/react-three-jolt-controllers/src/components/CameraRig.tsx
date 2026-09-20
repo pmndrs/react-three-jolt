@@ -3,6 +3,7 @@ import { useCommand, useLookCommand } from '@react-three/jolt-addons';
 //import * as THREE from 'three';
 import React, { forwardRef, useContext, useEffect, useImperativeHandle } from 'react';
 import { useCameraRig } from '../hooks';
+import type { CameraRigOptions } from '../systems/camera-rig/camera-rig-system';
 //import { useJolt } from "@react-three/jolt";
 
 //lets try importing the character context
@@ -10,14 +11,19 @@ import { CharacterControllerContext } from './CharacterController';
 
 //import { useThree } from "@react-three/fiber";
 //import { CharacterControllerSystem } from 'src/systems';
-interface CameraRigProps {
+/**
+ * Props for `<CameraRig>`. Everything but `anchor` is a {@link CameraRigOptions} key and is
+ * handed to the rig before its first physics step (issue #86); changing one afterwards updates
+ * the live rig rather than rebuilding it.
+ */
+interface CameraRigProps extends CameraRigOptions {
     anchor?: BodyState;
 }
 
 export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, ref) {
-    const { anchor } = props;
+    const { anchor, ...options } = props;
 
-    const cameraRig = useCameraRig();
+    const cameraRig = useCameraRig(options);
     //const { physicsSystem } = useJolt();
     //const { scene } = useThree();
 

@@ -1,21 +1,67 @@
 // main items of the camera rigs
-//import { Raw } from '@react-three/jolt';
-//import type Jolt from 'jolt-physics';
 
 // mostly for the types
-import type {
-    PhysicsSystem,
-    Raycaster,
-    RaycastHit,
-    ShapeCollider,
-    Shapecaster,
-    ShapecastHit
+import {
+    type anyVec3,
+    createShapeFromSettings,
+    type PhysicsSystem,
+    Raw,
+    type Raycaster,
+    type RaycastHit,
+    releaseShape,
+    type ShapeCollider,
+    type Shapecaster,
+    type ShapecastHit,
+    vec3
 } from '@react-three/jolt';
 import * as THREE from 'three';
-//import { ConstraintSystem } from '@react-three/jolt';
 
-//import { vec3, quat, convertNegativeRadians } from '@react-three/jolt';
-//import { BodyState } from '@react-three/jolt';
+/**
+ * Options for a {@link CameraBoom}. Every one of these used to be set by mutating the boom after
+ * it had been constructed (and, through `useCameraRig`, a frame or two after it had already been
+ * stepped), which is what issue #86 is about: pass them to the constructor, to
+ * {@link CameraBoom.initialize} or to {@link CameraRigManager}'s options instead and the boom is
+ * fully configured before the first `handlePreStep`.
+ */
+export interface CameraBoomOptions {
+    /** Boom length: how far the camera sits from the pivot, in metres. @default 5 */
+    distance?: number;
+    /** Closest the boom may be zoomed in, in metres. @default 0.1 */
+    minDistance?: number;
+    /** Furthest the boom may be zoomed out, in metres. @default 100 */
+    maxDistance?: number;
+    /** Starting boom pitch in radians. Negative looks down at the target. @default 0 */
+    pitch?: number;
+    /** Lowest pitch a look command may reach, in radians. @default -1.5 */
+    minPitch?: number;
+    /** Highest pitch a look command may reach, in radians. @default 0.5 */
+    maxPitch?: number;
+    /** Starting boom yaw in radians, measured about the world up axis. @default 0 */
+    yaw?: number;
+    /** Radius of the sphere used for the camera's collision test, in metres. @default 0.3 */
+    collisionRadius?: number;
+    /** Lerp factor used while the boom moves to a new length, 0..1. @default 0.5 */
+    smoothing?: number;
+    /** Multiplier on look (pointer/stick) input. @default 1 */
+    lookSpeed?: number;
+    /** Multiplier on zoom (wheel) input. @default 1 */
+    zoomSpeed?: number;
+    /** Skip the collision, obstruction and shapecast tests entirely. @default false */
+    allowCameraClipping?: boolean;
+    /** Gap kept between the camera and whatever obstructs it, in metres. @default 0.01 */
+    obstructionBuffer?: number;
+    /** Point the boom frames, relative to the pivot. @default (0,0,0) */
+    target?: anyVec3;
+    /** `demand` recomputes the camera pose on every command, `additive` once per frame. @default 'demand' */
+    updateMode?: 'demand' | 'additive';
+    /**
+     * Camera to attach to the boom. When it sits somewhere other than the origin the boom takes
+     * its length, pitch and yaw from that position, so `<CameraRig cameraPosition={[4,4,4]} />`
+     * starts framed instead of snapping on the first frame (issue #86). An explicit `distance`,
+     * `pitch` or `yaw` still wins.
+     */
+    camera?: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+}
 
 export class CameraBoom {
     physicsSystem: PhysicsSystem;
@@ -32,6 +78,10 @@ export class CameraBoom {
     slerpFactor = 0.5;
     minDistance = 0.1;
     maxDistance = 100;
+    /** lowest pitch `handleLookUpdate` will let the camera space reach, radians */
+    minPitch = -1.5;
+    /** highest pitch `handleLookUpdate` will let the camera space reach, radians */
+    maxPitch = 0.5;
     maxShapecastingTime = 5000;
     allowCameraClipping = false;
     limitShapecasting = false;
@@ -74,9 +124,12 @@ export class CameraBoom {
     cameraSpace = new THREE.Object3D();
     lookVector = new THREE.Vector2(0, 0);
 
+    /** radius currently realised in `collider.shape`, so setOptions can skip a no-op rebuild */
+    private colliderRadius?: number;
+
     private destroyed = false;
 
-    constructor(base: THREE.Object3D, physicsSystem: PhysicsSystem, _options?: any) {
+    constructor(base: THREE.Object3D, physicsSystem: PhysicsSystem, options?: CameraBoomOptions) {
         this.physicsSystem = physicsSystem;
         this.raycaster = physicsSystem.getRaycaster();
         this.shapecaster = physicsSystem.getShapecaster();
@@ -88,18 +141,8 @@ export class CameraBoom {
         // create the pivot and camera space
         base.add(this.pivot);
         this.pivot.add(this.cameraSpace);
-        // move the camera to the initial zPosition
-        // TODO Replace with initialize
-        this.cameraSpace.position.z = this.currentDistance;
-
-        //TODO move to debug
-        // to debug add a shape to the pivot
-        /*
-        const geometry = new THREE.BoxGeometry(1, 1, 1);
-        const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-        const cube = new THREE.Mesh(geometry, material);
-        this.cameraSpace.add(cube);
-        */
+        // everything a caller passed is in place before the boom is ever stepped (issue #86)
+        this.initialize(options);
     }
 
     /**
@@ -151,8 +194,6 @@ export class CameraBoom {
         // save the original position
         const basePosition = camera.position.clone();
         camera.userData.originalPosition = basePosition;
-        //TODO initialize moves the rig into position based on the camera
-        // this.initialize(basePosition);
 
         //reset the camera to a 0 position
         camera.position.set(0, 0, 0);
@@ -164,29 +205,121 @@ export class CameraBoom {
         return this.activeCamera;
     }
 
-    //* Methods ========================================
-    // deactivate the controls and loops
-    //take a position and set the rotation and camera space value based on it
-    initialize(targetPosition: THREE.Vector3) {
-        // the position is in worldspace
-        // get the worldspace position of the pivot
-        const _tempVec3 = new THREE.Vector3();
-        this.pivot.getWorldPosition(_tempVec3);
-        const targetWorldPosition = targetPosition.clone();
-        targetWorldPosition.applyMatrix4(this.pivot.matrixWorld);
-        const direction = targetWorldPosition.sub(_tempVec3);
-        const rotation = Math.atan2(direction.y, direction.x);
-        this.pivot.rotation.y = rotation;
-
-        // set the camera space position
-
-        this.cameraSpace.position.y = targetPosition.y;
-        this.cameraSpace.position.z = targetPosition.z;
-        this.currentDistance = this.cameraSpace.position.length();
-        //rotate the camera space to look at the origin
-        //this.cameraSpace.lookAt(_tempVec3);
+    /** current boom yaw about the world up axis, radians */
+    get yaw() {
+        return this.pivot.rotation.y;
+    }
+    set yaw(value: number) {
+        this.pivot.rotation.y = value;
+    }
+    /** current boom pitch, radians. Negative looks down at the target. */
+    get pitch() {
+        return this.cameraSpace.rotation.x;
+    }
+    set pitch(value: number) {
+        this.cameraSpace.rotation.x = THREE.MathUtils.clamp(value, this.minPitch, this.maxPitch);
+        this.handleZoomUpdate();
     }
 
+    //* Options ========================================
+    /**
+     * Configure the boom and snap it to the resulting pose. This is the "before the first frame"
+     * entry point of issue #86: the length, pitch limits, collision radius, follow target and
+     * smoothing all land here rather than being mutated onto a boom that is already being
+     * stepped.
+     */
+    initialize(options: CameraBoomOptions = {}) {
+        this.applyOptions(options, true);
+    }
+
+    /**
+     * Change options on a live boom. Unlike {@link initialize} a new `distance` is eased into
+     * rather than snapped to, and the pose is only touched for the options that were passed.
+     */
+    setOptions(options: CameraBoomOptions = {}) {
+        this.applyOptions(options, false);
+    }
+
+    private applyOptions(options: CameraBoomOptions, initializing: boolean) {
+        if (this.destroyed) return;
+
+        // #86: derive the boom pose from where the camera was put, so a camera handed to the rig
+        // at (4,4,4) ends up looking at the target from (4,4,4) instead of being teleported to
+        // the boom's default (0,0,distance) on the first frame.
+        let distance = options.distance;
+        let pitch = options.pitch;
+        let yaw = options.yaw;
+        const camera = options.camera;
+        if (initializing && camera && camera.position.lengthSq() > 1e-8) {
+            const position = camera.position;
+            const length = position.length();
+            if (distance === undefined) distance = length;
+            // cameraSpace.position.y is `distance * sin(-pitch)`, so invert that
+            if (pitch === undefined)
+                pitch = -Math.asin(THREE.MathUtils.clamp(position.y / length, -1, 1));
+            if (yaw === undefined && (position.x !== 0 || position.z !== 0))
+                yaw = Math.atan2(position.x, position.z);
+        }
+
+        // plain scalars -------------------------------------------------
+        if (options.minDistance !== undefined) this.minDistance = options.minDistance;
+        if (options.maxDistance !== undefined) this.maxDistance = options.maxDistance;
+        if (options.minPitch !== undefined) this.minPitch = options.minPitch;
+        if (options.maxPitch !== undefined) this.maxPitch = options.maxPitch;
+        if (options.smoothing !== undefined) this.slerpFactor = options.smoothing;
+        if (options.lookSpeed !== undefined) this.lookSpeed = options.lookSpeed;
+        if (options.zoomSpeed !== undefined) this.zoomSpeed = options.zoomSpeed;
+        if (options.allowCameraClipping !== undefined)
+            this.allowCameraClipping = options.allowCameraClipping;
+        if (options.obstructionBuffer !== undefined)
+            this.obstructionBuffer = options.obstructionBuffer;
+        if (options.updateMode !== undefined) this.updateMode = options.updateMode;
+        if (options.target !== undefined) this.target.copy(vec3.three(options.target));
+
+        // collision radius ----------------------------------------------
+        if (options.collisionRadius !== undefined) this.setCollisionRadius(options.collisionRadius);
+
+        // pose ----------------------------------------------------------
+        if (yaw !== undefined) this.pivot.rotation.y = yaw;
+        if (pitch !== undefined)
+            this.cameraSpace.rotation.x = THREE.MathUtils.clamp(
+                pitch,
+                this.minPitch,
+                this.maxPitch
+            );
+        if (distance !== undefined) {
+            const clamped = THREE.MathUtils.clamp(distance, this.minDistance, this.maxDistance);
+            this.initialDistance = clamped;
+            this.targetDistance = clamped;
+            if (initializing) {
+                // nothing has been stepped yet, so there is nothing to ease from
+                this.currentDistance = clamped;
+                this.clearDistance = clamped;
+                this.isMoving = false;
+            } else {
+                // let handleDistanceUpdate lerp us there over the next few frames
+                this.clearDistance = clamped;
+                this.isMoving = true;
+            }
+        }
+        if (initializing || distance !== undefined || pitch !== undefined) this.handleZoomUpdate();
+
+        if (camera) this.camera = camera;
+    }
+
+    /** Swap the sphere the camera collision test uses for one of `radius` metres. */
+    setCollisionRadius(radius: number) {
+        if (this.destroyed || !this.collider) return;
+        if (this.colliderRadius === radius) return;
+        // createShapeFromSettings hands back a shape we own a reference on and destroys the
+        // settings; the collider AddRef()s it in its own setter, so we drop ours right after.
+        const shape = createShapeFromSettings(new Raw.module.SphereShapeSettings(radius));
+        this.collider.shape = shape;
+        releaseShape(shape);
+        this.colliderRadius = radius;
+    }
+
+    //* Methods ========================================
     // look comand takes x/y vector in -1 to 1 range
     move(lookVector: THREE.Vector2Like) {
         this.lookVector.set(lookVector.x, lookVector.y);
@@ -227,7 +360,8 @@ export class CameraBoom {
         const vy =
             this.cameraSpace.rotation.x + this.lookVector.y * this.camFactor * this.lookSpeed;
 
-        if (vy >= -1.5 && vy <= 0.5) {
+        // the pitch limits used to be the literals -1.5 and 0.5; they are options now (#86)
+        if (vy >= this.minPitch && vy <= this.maxPitch) {
             this.cameraSpace.rotation.x = vy;
             this.cameraSpace.position.y = this.currentDistance * Math.sin(-vy);
             this.cameraSpace.position.z = this.currentDistance * Math.cos(-vy);
@@ -242,7 +376,7 @@ export class CameraBoom {
     }
 
     // handle the frame update call from a rig
-    handleFrameUpdate() {
+    handleFrameUpdate(_deltaTime = 1 / 60) {
         // handle additive mode (gamepad and joystick controls)
         // TODO  do additive mode
         // do the obstruction test
