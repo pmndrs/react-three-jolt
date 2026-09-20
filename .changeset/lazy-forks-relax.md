@@ -41,6 +41,13 @@ Fix package manifests: peer dependencies, `sideEffects`, and `exports` maps (#15
   dependency of core and addons) previously being bundled into `dist/index.mjs`/`.cjs`
   instead of left external.
 - `files` now includes `CHANGELOG.md` alongside `dist`, `README.md`, and `LICENSE`.
+- Auditing every `dist` bundle against the new external list turned up two more
+  genuinely undeclared runtime imports that were being silently inlined instead of
+  externalized: `suspend-react` (used by `Physics.tsx`, added as a regular
+  `dependency` of `@react-three/jolt`) and `@react-three/jolt-addons` (its
+  `useCommand`/`useLookCommand` are used by `CameraRig`, `VehicleFourWheel`, and
+  `CharacterController`, added as a regular `dependency` of
+  `@react-three/jolt-controllers`).
 
 **Also:** added `"type": "commonjs"` and `"engines": { "node": ">=22" }` to each
 package's own manifest (`publint` suggestions — these matter once a package is
