@@ -2,7 +2,8 @@ import { useTexture } from '@react-three/drei';
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { applyHeightmapToPlane } from '../heightField/Generators';
-import { useJolt, useUnmount } from '../hooks';
+import { useJolt } from '../hooks';
+import type { Vector3Tuple } from '../types';
 
 export type HeightfieldProps = {
     url?: string;
@@ -11,8 +12,15 @@ export type HeightfieldProps = {
     height?: number;
     size?: number;
     displacementScale?: number;
-    position?: any;
+    position?: Vector3Tuple;
 };
+
+// drei's `useTexture` must always be called with a string (rules of hooks forbid skipping it
+// conditionally), so when there's no `url` yet we point it at a tiny inert placeholder instead
+// of the real heightmap. It's never assigned to the material -- see the effect below.
+const EMPTY_TEXTURE_URL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+
+type HeightfieldMesh = THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial>;
 
 export function Heightfield({
     url,
@@ -23,51 +31,65 @@ export function Heightfield({
     displacementScale = 256 * 0.1,
     ...props
 }: HeightfieldProps) {
-    const planeRef = useRef<THREE.Mesh>(null);
+    const planeRef = useRef<HeightfieldMesh>(null);
+    // number | null (not falsy checks) -- a real body handle can be 0.
     const activeBody: React.MutableRefObject<number | null> = useRef(null);
 
     const { bodySystem } = useJolt();
-    // try and load the url as a texture
-    //@ts-ignore
-    const urlTexture = useTexture(url);
+    // if an image url is passed, use drei's (suspenseful) loader for the display texture
+    const urlTexture = useTexture(url ?? EMPTY_TEXTURE_URL);
 
-    // if an image is passed use the drei image loader
+    // the plane ships facing up; it only ever needs to be rotated once
     useEffect(() => {
-        if (!planeRef.current) return;
-        // because this could be updated in a frame loop we do this here
-        // if texture use that, otherwise use the url texture
-        if (!texture && urlTexture) {
-            //@ts-ignore
-            planeRef.current!.material.map = urlTexture;
-        }
-        planeRef.current.geometry.rotateX(-Math.PI / 2);
+        planeRef.current?.geometry.rotateX(-Math.PI / 2);
+    }, []);
 
-        // TODO: why did I do this async?
-        async function getImageData() {
-            if (url) {
-                await applyHeightmapToPlane(planeRef.current as THREE.Mesh, url, displacementScale);
-                // succeeded, if there's an existing body, remove it but keep the three object
-                if (activeBody.current) bodySystem.removeBody(activeBody.current, true);
+    // apply the loaded texture to the material, unless an explicit named `texture` is used instead
+    useEffect(() => {
+        if (texture || !url || !planeRef.current) return;
+        planeRef.current.material.map = urlTexture;
+    }, [texture, url, urlTexture]);
 
-                // generate the jolt heightfield with the newly made three heightfield
-                activeBody.current = bodySystem.addHeightfield(planeRef.current as THREE.Mesh);
+    // Load the heightmap and (re)build the jolt body whenever the source changes.
+    //
+    // Fixes #152: this used to be a bare `async` effect with no cancellation, so if `url`
+    // changed (or the component unmounted) before a previous load resolved, whichever load
+    // finished *last* won -- not necessarily the most recent one -- and its body was never
+    // cleaned up. `cancelled` (closed over by this effect run only) and the AbortController
+    // make a superseded/unmounted load a no-op: it neither creates a body nor touches the
+    // mesh. The body this effect run owns is removed in its own cleanup, which React runs
+    // before the next run's effect body, so at most one heightfield body exists at a time.
+    useEffect(() => {
+        const mesh = planeRef.current;
+        if (!mesh || !url) return;
+
+        let cancelled = false;
+        const controller = new AbortController();
+
+        applyHeightmapToPlane(mesh, url, displacementScale, controller.signal)
+            .then(() => {
+                if (cancelled) return;
+                activeBody.current = bodySystem.addHeightfield(mesh);
+            })
+            .catch((error: unknown) => {
+                if (cancelled || controller.signal.aborted) return;
+                console.warn('Heightfield: failed to load height map', url, error);
+            });
+
+        return () => {
+            cancelled = true;
+            controller.abort();
+            if (activeBody.current !== null) {
+                bodySystem.removeBody(activeBody.current, true);
+                activeBody.current = null;
             }
-        }
-        getImageData();
-    }, [url, urlTexture, texture, displacementScale, bodySystem]);
-
-    useUnmount(() => {
-        if (activeBody.current) {
-            bodySystem.removeBody(activeBody.current);
-        }
-    });
+        };
+    }, [url, displacementScale, bodySystem]);
 
     return (
-        <>
-            <mesh ref={planeRef} {...props}>
-                <planeGeometry args={[width, height, size - 1, size - 1]} />
-                <meshStandardMaterial transparent={true} color="#8F2D56" side={THREE.DoubleSide} />
-            </mesh>
-        </>
+        <mesh ref={planeRef} {...props}>
+            <planeGeometry args={[width, height, size - 1, size - 1]} />
+            <meshStandardMaterial transparent={true} color="#8F2D56" side={THREE.DoubleSide} />
+        </mesh>
     );
 }
