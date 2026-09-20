@@ -173,12 +173,29 @@ Many of the properties and options can be set at the component level.
 -   debug
     Debug can be set on a per-object basis and wont trigger the entire system to go into debug. However, changing this prop wont disable debug at the global level.
 
--   _Events_
-    onContactAdded, onContactRemoved, onContactPersisted
-    _future_
 -   isSensor
--   onSleep
--   onWake
+
+#### Events
+
+`onCollisionEnter`, `onCollisionPersist`, `onCollisionExit`, `onSensorEnter`, `onSensorExit`
+(aliases `onIntersectionEnter` / `onIntersectionExit`), `onSleep`, `onWake` and
+`onContactValidate`. The same names exist on `<Physics>` for world-wide events, on
+`bodyState.on(type, fn)` for imperative subscriptions, and as the `useBeforePhysicsStep` /
+`useAfterPhysicsStep` hooks for the step itself.
+
+```tsx
+<RigidBody onCollisionEnter={(e) => console.log(e.other.object?.name, e.normal)} />
+```
+
+Handlers get one payload object: `{ target, other, flipped, contactCount }` plus `normal`,
+`penetration` and `points` for enter and persist. **Payloads are pooled** — read what you need
+inside the handler, or clone it, and don't retain it.
+
+`onContactAdded` / `onContactRemoved` / `onContactPersisted` still work as deprecated aliases
+for enter / exit / persist.
+
+See [docs/events.md](./docs/events.md) for the ordering guarantees, the cost model, and the
+Jolt behaviours worth knowing about (a body going to sleep closes its contacts).
 
 #### BodyState
 
