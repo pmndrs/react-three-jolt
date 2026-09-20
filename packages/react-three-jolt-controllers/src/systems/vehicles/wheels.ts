@@ -1,201 +1,104 @@
-import { joltPropName, quat, Raw, vec3, withJolt } from '@react-three/jolt';
+import { joltPropName, Raw, withJolt } from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
+import type {
+    ResolvedVehicleSettings,
+    SuspensionSpringSettings,
+    Vector,
+    WheelSettings
+} from './vehicle-settings';
 
-//* Types ====================================
-export type VehicleFourWheelSettings = {
-    type?: string;
-    bodyPosition: Vector;
-    castType: string;
-    wheelRadius?: number;
-    wheelWidth?: number;
-    vehicleLength?: number;
-    vehicleWidth?: number;
-    vehicleHeight?: number;
-    fourWheelDrive?: boolean;
-    frontBackLimitedSlipRatio?: number;
-    leftRightLimitedSlipRatio?: number;
-    antiRollbar?: boolean;
-    vehicleMass?: number;
-    maxEngineTorque?: number;
-    clutchStrength?: number;
-    previousForward?: number;
+// the settings types used to live here; they are re-exported by the package index from
+// ./vehicle-settings so `import { WheelSettings } from '@react-three/jolt-controllers'` keeps
+// working.
 
-    // DS additional Settings
-    splitEngineTorqueFront?: number;
-    splitEngineTorqueRear?: number;
-    //rollbar stiffness
-    frontRollBarStiffness?: number;
-    rearRollBarStiffness?: number;
-    wheels: WheelSettingsFourWheelOveride;
-};
-export type Vector = [number, number, number];
-// see https://jrouwe.github.io/JoltPhysics/class_wheel_settings_w_v.html
-export interface WheelSettings {
-    inertia?: number;
-    angularDamping?: number;
-    width?: number;
-    radius?: number;
-    //attachment point to the body in local space [0,0,0]
-    position?: Vector;
-    // where force is applied, best to be center of wheel [0,0,0]
-    suspensionForcePoint?: Vector;
-    // should point down [0, -1, 0]
-    suspensionDirection?: Vector;
-    //think like a bike suspension pointing towards the bike [0,1,0]
-    steeringAxis?: Vector;
-    // can be used to give camber
-    wheelUp?: Vector;
-    //can be used to give toe
-    wheelForward?: Vector;
-    suspensionMinLength?: number; //0.3
-    suspensionMaxLength?: number; //0.5
-    //gives the springs more bounce
-    suspensionPreloadLength?: number; //0.0
-    //DONT USE THIS
-    enableSuspensionForcePoint?: boolean;
-    //springs
-    SuspensionSpring?: { frequency: number; damping: number };
-}
-export interface WheelSettingsFourWheel extends WheelSettings {
-    // Four WHeel settings
-    maxSteerAngle?: number; //1.22 radians(70 degrees
-    //Longitudinal Friction amd Lateral Friction are in curves
-    // not messing with them for now
-    maxBrakeTorque?: number; // 1500
-    maxHandBrakeTorque?: number; // 4000
-}
-interface WheelSettingsFourWheelOveride extends WheelSettingsFourWheel {
-    fl: WheelSettingsFourWheel;
-    fr: WheelSettingsFourWheel;
-    bl: WheelSettingsFourWheel;
-    br: WheelSettingsFourWheel;
+/** keys of our settings objects that are not jolt properties and must never be assigned to one */
+const NON_JOLT_KEYS = new Set([
+    'object',
+    'position',
+    'wheelOffsetHorizontal',
+    'wheelOffsetVertical',
+    'suspensionSpring',
+    'fl',
+    'fr',
+    'bl',
+    'br',
+    'front',
+    'back'
+]);
+
+/** settings whose jolt counterpart is a `Vec3` and therefore needs a (copied) temporary */
+const VECTOR_KEYS = new Set([
+    'suspensionForcePoint',
+    'suspensionDirection',
+    'steeringAxis',
+    'wheelUp',
+    'wheelForward'
+]);
+
+function applySuspensionSpring(wheel: Jolt.WheelSettings, spring: SuspensionSpringSettings) {
+    if (spring.frequency !== undefined) wheel.mSuspensionSpring.mFrequency = spring.frequency;
+    if (spring.damping !== undefined) wheel.mSuspensionSpring.mDamping = spring.damping;
 }
 
-//* End Types ====================================
-export class WheelState {
-    index: number;
-    constraint;
-    threeObject = new THREE.Object3D();
-    //@ts-ignore ts bug, created in createDebugWheel
-    debugObject: THREE.Mesh;
-    // because jolt isnt ready we'll put these here
-    wheelRight = new Raw.module.Vec3(0, 1, 0);
-    wheelUp = new Raw.module.Vec3(1, 0, 0);
-    //true for now
-    //TODO change this to default to false
-    private isDebugging = true;
-    set debug(value) {
-        this.isDebugging = value;
-        if (value) this.debugObject.visible = true;
-        else this.debugObject.visible = false;
-    }
-    get debug() {
-        return this.isDebugging;
-    }
-    // Im not sure we need this but I'll leave it for now
-    wheelSettings;
-    joltWheel;
-    private destroyed = false;
-    constructor(constraint: any, wheelIndex: number) {
-        this.constraint = constraint;
-        this.index = wheelIndex;
-        this.joltWheel = constraint.GetWheel(wheelIndex);
-        this.wheelSettings = this.joltWheel.GetSettings();
-        this.createDebugWheel();
-    }
-    /**
-     * Free the two axis vectors and the debug geometry (issue #140). The material is shared
-     * between every wheel in the process, so it is deliberately not disposed here.
-     */
-    destroy() {
-        if (this.destroyed) return;
-        this.destroyed = true;
-        Raw.module.destroy(this.wheelRight);
-        Raw.module.destroy(this.wheelUp);
-        this.wheelRight = undefined as unknown as Jolt.Vec3;
-        this.wheelUp = undefined as unknown as Jolt.Vec3;
-        this.debugObject?.geometry.dispose();
-        this.threeObject.clear();
-        this.threeObject.removeFromParent();
-        // the constraint owns the wheel; both are freed by VehicleManager.destroy()
-        this.constraint = undefined;
-        this.joltWheel = undefined;
-        this.wheelSettings = undefined;
-    }
-    createDebugWheel() {
-        const geometry = new THREE.CylinderGeometry(
-            this.wheelSettings.mRadius,
-            this.wheelSettings.mRadius,
-            this.wheelSettings.mWidth,
-            20,
-            1
-        );
-        const mesh = new THREE.Mesh(geometry, getWheelMaterial());
-        this.debugObject = mesh;
-        this.threeObject.add(mesh);
-        return mesh;
-    }
-    add(object: THREE.Object3D) {
-        this.threeObject.add(object);
-    }
-    // set the wheel position and rotation
-    updateLocalTransform() {
-        if (this.destroyed || !this.threeObject) return;
-        // `GetWheelLocalTransform` (and `GetTranslation`/`GetRotation`/`GetQuaternion` below)
-        // return by value, which the emscripten binder implements as a pointer to one static
-        // temporary per function: not allocations, and never to be destroyed. Reading straight
-        // into the three objects avoids the per frame THREE.Vector3/Quaternion garbage the old
-        // `copy(vec3.three(...))` produced for every wheel of every vehicle.
-        const transform = this.constraint.GetWheelLocalTransform(
-            this.index,
-            this.wheelRight,
-            this.wheelUp
-        );
+/**
+ * Build the jolt `WheelSettings` for one corner of a vehicle.
+ *
+ * The returned object is pushed into `VehicleConstraintSettings.mWheels`, which is a `Ref<>`
+ * array: the settings own it from there on and it must not be destroyed by the caller.
+ */
+export function createWheelSettings(
+    baseSettings: ResolvedVehicleSettings,
+    corner?: string,
+    // tracked vehicles ('tv') are not supported yet; the argument is kept for the call sites
+    _type: 'wv' | 'tv' = 'wv'
+): Jolt.WheelSettingsWV {
+    const wheel = new Raw.module.WheelSettingsWV();
 
-        vec3.three(transform.GetTranslation(), undefined, undefined, this.threeObject.position);
-        quat.joltToThree(transform.GetRotation().GetQuaternion(), this.threeObject.quaternion);
-    }
-}
-// create a wheel from input settinsg
-export function createWheelSettings(baseSettings: any, corner?: any, type = 'wv') {
-    let wheel: any;
-    switch (type) {
-        case 'tv':
-            break;
-        default:
-            wheel = new Raw.module.WheelSettingsWV();
-            break;
-    }
-    // we need the width from setitings
     const halfVehicleWidth = baseSettings.vehicleWidth / 2;
-    //strip out optional settings
-    const { fl, fr, bl, br, ...defaultWheelSettings } = baseSettings.wheels;
-    const isFront = corner === 'fl' || corner === 'fr';
-    const isLeft = corner === 'fl' || corner === 'bl';
-    // remerge based on corner
-    const wheelSettings = {
-        ...defaultWheelSettings,
-        ...baseSettings.wheels[corner]
+    const allWheels = (baseSettings.wheels ?? {}) as unknown as Record<string, unknown>;
+    // strip the per corner overrides out of the shared settings and merge the requested corner in
+    const { fl, fr, bl, br, front, back, ...defaultWheelSettings } = allWheels;
+    const cornerSettings = corner ? (allWheels[corner] as WheelSettings | undefined) : undefined;
+    const wheelSettings: WheelSettings = {
+        ...(defaultWheelSettings as WheelSettings),
+        ...cornerSettings
     };
-    // set the position based on corner. `mPosition` is a Vec3 by value, so the assignment copies
-    // and the temporary is ours to free - this used to leak one Vec3 per wheel.
-    withJolt(
-        [
-            isLeft ? halfVehicleWidth : -halfVehicleWidth,
-            -wheelSettings.wheelOffsetVertical,
-            isFront ? wheelSettings.wheelOffsetHorizontal : -wheelSettings.wheelOffsetHorizontal
-        ],
-        (position) => {
-            wheel.mPosition = position;
-        }
-    );
-    // loop over the settings and set them on the wheel with the jolt prop name
-    // some settings don't exist. hopefully jolt ignores them
-    Object.keys(wheelSettings).forEach((key) => {
-        //@ts-ignore
-        wheel[joltPropName(key)] = wheelSettings[key];
+    const isFront = corner === 'fl' || corner === 'fr' || corner === 'front';
+    const isLeft = corner === 'fl' || corner === 'bl';
+
+    // `mPosition` is a Vec3 by value, so the assignment copies and the temporary is ours to free
+    // (this used to leak one Vec3 per wheel). An explicit `position` wins over the offsets.
+    const offsetHorizontal = wheelSettings.wheelOffsetHorizontal ?? 0;
+    const offsetVertical = wheelSettings.wheelOffsetVertical ?? 0;
+    const position: Vector = wheelSettings.position ?? [
+        isLeft ? halfVehicleWidth : -halfVehicleWidth,
+        -offsetVertical,
+        isFront ? offsetHorizontal : -offsetHorizontal
+    ];
+    withJolt(position, (value) => {
+        wheel.mPosition = value;
     });
+
+    if (wheelSettings.suspensionSpring) {
+        applySuspensionSpring(wheel, wheelSettings.suspensionSpring);
+    }
+
+    // everything else maps straight onto the jolt property of the same name
+    for (const [key, value] of Object.entries(wheelSettings)) {
+        if (value === undefined || NON_JOLT_KEYS.has(key)) continue;
+        const joltKey = joltPropName(key);
+        if (VECTOR_KEYS.has(key)) {
+            // by-value Vec3 properties: the assignment copies, the temporary is ours
+            withJolt(value as Vector, (vector) => {
+                //@ts-expect-error indexing the emscripten wrapper by a computed property name
+                wheel[joltKey] = vector;
+            });
+            continue;
+        }
+        //@ts-expect-error indexing the emscripten wrapper by a computed property name
+        wheel[joltKey] = value;
+    }
     return wheel;
 }
 
@@ -204,11 +107,13 @@ export function createWheelSettings(baseSettings: any, corner?: any, type = 'wv'
 // TextureLoader, texture and material for every wheel of every vehicle (issue #140). Because it
 // is shared, `WheelState.destroy()` disposes only its own geometry.
 let sharedWheelMaterial: THREE.MeshPhongMaterial | undefined;
+
 /** the shared wheel material, if it has been built - callers use this to skip disposing it */
 export function getSharedWheelMaterial() {
     return sharedWheelMaterial;
 }
-function getWheelMaterial() {
+
+export function getWheelMaterial() {
     if (sharedWheelMaterial) return sharedWheelMaterial;
     // Create material for wheel
     const texLoader = new THREE.TextureLoader();
@@ -223,4 +128,22 @@ function getWheelMaterial() {
     wheelMaterial.map = texture;
     sharedWheelMaterial = wheelMaterial;
     return wheelMaterial;
+}
+
+/**
+ * Dispose a three object tree the library generated itself (issues #26/#27: objects the *user*
+ * handed us are only ever detached, never disposed). The wheel material is shared between every
+ * wheel in the process, so it is deliberately skipped.
+ */
+export function disposeGeneratedObject(object: THREE.Object3D) {
+    object.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.geometry?.dispose();
+        const material = mesh.material;
+        if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
+        else if (material && material !== getSharedWheelMaterial()) material.dispose();
+    });
+    object.removeFromParent();
+    object.clear();
 }

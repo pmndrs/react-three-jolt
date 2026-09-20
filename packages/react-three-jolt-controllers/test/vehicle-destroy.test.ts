@@ -9,6 +9,7 @@ import { initJolt, PhysicsSystem, Raw } from '@react-three/jolt';
 import * as THREE from 'three';
 import { assert, beforeAll, test } from 'vitest';
 import { installAllocTracker } from '../../react-three-jolt/test/jolt-alloc';
+import type { VehicleManager } from '../src/systems/vehicles';
 import { VehicleSystem } from '../src/systems/vehicles';
 
 // Every class the vehicle files construct with `new Raw.module.*` that is ours to free.
@@ -54,6 +55,45 @@ beforeAll(async () => {
     warmup.addVehicle('bike', { type: 'twoWheel', ...at(40) });
     warmup.destroy();
 });
+
+//* three objects the *user* owns: the manager must sync them and never dispose them (#26/#27)
+type UserParts = {
+    chassis: THREE.Mesh;
+    wheels: THREE.Mesh[];
+    disposed: string[];
+};
+
+function userParts(): UserParts {
+    const disposed: string[] = [];
+    const make = (name: string) => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial());
+        mesh.name = name;
+        mesh.geometry.dispose = () => disposed.push(`${name}:geometry`);
+        (mesh.material as THREE.Material).dispose = () => disposed.push(`${name}:material`);
+        return mesh;
+    };
+    return {
+        chassis: make('chassis'),
+        wheels: [0, 1, 2, 3].map((index) => make(`wheel-${index}`)),
+        disposed
+    };
+}
+
+/** the world position jolt says a wheel is at, straight off the constraint */
+function wheelWorldPosition(vehicle: VehicleManager, index: number) {
+    const right = new Raw.module.Vec3(0, 1, 0);
+    const up = new Raw.module.Vec3(1, 0, 0);
+    try {
+        // GetWheelWorldTransform returns a static temporary by value - never destroy it
+        const translation = vehicle.constraint
+            .GetWheelWorldTransform(index, right, up)
+            .GetTranslation();
+        return new THREE.Vector3(translation.GetX(), translation.GetY(), translation.GetZ());
+    } finally {
+        Raw.module.destroy(right);
+        Raw.module.destroy(up);
+    }
+}
 
 // Vehicles are parked well apart on purpose: two chassis touching each other goes through
 // `BodySystem`'s contact listener, which throws on a body that was not registered with it - and
@@ -153,6 +193,124 @@ test('a vehicle still drives, and removeVehicle only takes the one it names', ()
     // the remaining vehicle keeps stepping
     for (let i = 0; i < 10; i++) ps.onUpdate(1 / 60);
     assert.isFinite(bike.position.y);
+
+    system.destroy();
+});
+
+//* Issues #26 and #27: injected chassis and wheel objects ====================================
+
+test('an injected chassis and wheels are synced, and nothing generated is left behind', () => {
+    const alloc = installAllocTracker(Raw, { types: TRACKED_TYPES });
+    try {
+        // warm-up round under the tracked module (installing it rebuilds joltScratch)
+        const warmParts = userParts();
+        const warmup = new VehicleSystem(ps);
+        warmup.addVehicle('warmup', {
+            ...at(-20),
+            bodyObject: warmParts.chassis,
+            wheelObjects: warmParts.wheels
+        });
+        ps.onUpdate(1 / 60);
+        warmup.destroy();
+        const before = alloc.live();
+
+        const parts = userParts();
+        const system = new VehicleSystem(ps);
+        const vehicle = system.addVehicle('v', {
+            ...at(20),
+            bodyObject: parts.chassis,
+            wheelObjects: parts.wheels
+        });
+
+        // nothing was generated only to be thrown away
+        assert.isUndefined(vehicle.debugObject, 'a chassis box was generated anyway');
+        assert.equal(vehicle.bodyObject, parts.chassis);
+        assert.equal(parts.chassis.parent, vehicle.threeObject);
+        vehicle.wheels.forEach((wheel, name) => {
+            assert.isUndefined(wheel.debugObject, `wheel ${name} generated a cylinder anyway`);
+        });
+        parts.wheels.forEach((wheel, index) => {
+            assert.equal(vehicle.getWheelObject(index), wheel);
+        });
+
+        vehicle.move(new THREE.Vector2(0, 1));
+        for (let i = 0; i < 30; i++) ps.onUpdate(1 / 60);
+
+        // the wheel objects follow the constraint
+        vehicle.threeObject.updateMatrixWorld(true);
+        parts.wheels.forEach((wheel, index) => {
+            const expected = wheelWorldPosition(vehicle, index);
+            const actual = wheel.getWorldPosition(new THREE.Vector3());
+            assert.isBelow(
+                actual.distanceTo(expected),
+                1e-3,
+                `wheel ${index} is at ${actual.toArray()} but jolt says ${expected.toArray()}`
+            );
+        });
+        assert.isBelow(
+            parts.chassis.getWorldPosition(new THREE.Vector3()).distanceTo(vehicle.position),
+            1e-6,
+            'the chassis object does not follow the body'
+        );
+
+        system.destroy();
+
+        assert.equal(
+            alloc.live(),
+            before,
+            `the vehicle leaked ${alloc.live() - before} objects: ` +
+                JSON.stringify(alloc.liveByType())
+        );
+        assert.equal(alloc.foreignDestroys(), 0, 'the vehicle freed something it does not own');
+        assert.deepEqual(parts.disposed, [], 'the manager disposed objects it did not create');
+        assert.isNull(parts.chassis.parent, 'the chassis was not handed back');
+        parts.wheels.forEach((wheel, index) => {
+            assert.isNull(wheel.parent, `wheel ${index} was not handed back`);
+        });
+    } finally {
+        alloc.uninstall();
+    }
+});
+
+test('objects can be injected (and taken back) after the vehicle was built', () => {
+    const system = new VehicleSystem(ps);
+    const vehicle = system.addVehicle('car', at(0));
+    const parts = userParts();
+
+    // the vehicle generated its own meshes ...
+    const generatedChassis = vehicle.debugObject;
+    const generatedWheel = vehicle.getWheel('fl')?.debugObject;
+    assert.isDefined(generatedChassis);
+    assert.isDefined(generatedWheel);
+    const generatedDisposed: string[] = [];
+    generatedChassis!.geometry.dispose = () => generatedDisposed.push('chassis');
+    generatedWheel!.geometry.dispose = () => generatedDisposed.push('wheel');
+
+    // ... and swaps them for the user's, disposing only what it made itself
+    vehicle.setBodyObject(parts.chassis);
+    vehicle.setWheelObject('fl', parts.wheels[0]);
+    assert.deepEqual(generatedDisposed.sort(), ['chassis', 'wheel']);
+    assert.isUndefined(vehicle.debugObject);
+    assert.equal(vehicle.bodyObject, parts.chassis);
+    assert.equal(vehicle.getWheelObject('fl'), parts.wheels[0]);
+
+    for (let i = 0; i < 5; i++) ps.onUpdate(1 / 60);
+    vehicle.threeObject.updateMatrixWorld(true);
+    assert.isBelow(
+        parts.wheels[0]
+            .getWorldPosition(new THREE.Vector3())
+            .distanceTo(wheelWorldPosition(vehicle, 0)),
+        1e-3
+    );
+
+    // passing null hands the object back and puts the generated mesh in its place
+    vehicle.setBodyObject(null);
+    vehicle.setWheelObject(0, null);
+    assert.isNull(parts.chassis.parent);
+    assert.isNull(parts.wheels[0].parent);
+    assert.isDefined(vehicle.debugObject);
+    assert.isDefined(vehicle.getWheel(0)?.debugObject);
+    assert.deepEqual(parts.disposed, []);
 
     system.destroy();
 });

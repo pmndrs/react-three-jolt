@@ -2,7 +2,7 @@ import {
     createShapeFromSettings,
     joltScratch,
     Layer,
-    PhysicsSystem,
+    type PhysicsSystem,
     quat,
     Raw,
     releaseShape,
@@ -11,40 +11,63 @@ import {
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import {
-    createWheelSettings,
-    getSharedWheelMaterial,
-    VehicleFourWheelSettings,
-    WheelState
-} from './wheels';
+    type ResolvedFourWheelVehicleSettings,
+    type ResolvedVehicleSettings,
+    resolveVehicleSettings,
+    type VehicleSettings
+} from './vehicle-settings';
+import { WheelState } from './wheel-state';
+import { createWheelSettings, disposeGeneratedObject } from './wheels';
 
 const FL_WHEEL = 0;
 const FR_WHEEL = 1;
 const BL_WHEEL = 2;
 const BR_WHEEL = 3;
 
+/** a listener registered through `onPreStep` / `onPostCollide` / `onPostStep` */
+export type VehicleStepListener = (
+    vehicle: Jolt.VehicleConstraint,
+    deltaTime: number,
+    physicsSystem: Jolt.PhysicsSystem
+) => void;
+export type VehicleActionListener = (action: string, vehicle: VehicleManager) => void;
+type ListenerBucket = 'preStepListeners' | 'postCollideListeners' | 'postStepListeners';
+
+/**
+ * The base of every vehicle. It owns a chassis body, a `VehicleConstraint` (with its controller,
+ * wheels and collision tester), the step listener jolt drives it with, and the three.js objects
+ * that are synced to all of it.
+ *
+ * Three.js ownership (issues #26 and #27): `threeObject` follows the chassis body and each
+ * `WheelState.threeObject` follows its wheel. Objects the manager *generated* are disposed on
+ * teardown; objects a caller injected through `setBodyObject()` / `setWheelObject()` are only
+ * detached again.
+ */
 export class VehicleManager {
     physicsSystem: PhysicsSystem;
-    settings: VehicleFourWheelSettings; //@ts-ignore
-    carBody: Jolt.Body; //@ts-ignore
-    constraint: Jolt.VehicleConstraint; //@ts-ignore
-    controller: Jolt.WheeledVehicleController;
+    settings: ResolvedVehicleSettings;
+    //@ts-ignore assigned by createBody
+    carBody: Jolt.Body;
+    //@ts-ignore assigned by createConstraint
+    constraint: Jolt.VehicleConstraint;
+    //@ts-ignore assigned by createConstraint
+    controller: Jolt.VehicleController;
 
     // listeners for collision events
-    //@ts-ignore these get added to dynamicly. ts is wrong
-    private preStepListeners = [];
-    //@ts-ignore
-    private postCollideListeners = [];
-    //@ts-ignore
-    private postStepListeners = [];
+    private preStepListeners: VehicleStepListener[] = [];
+    private postCollideListeners: VehicleStepListener[] = [];
+    private postStepListeners: VehicleStepListener[] = [];
 
     //listneer for actions
-    private actionListeners = [];
+    private actionListeners: VehicleActionListener[] = [];
 
     //this holds the threejs objects
     threeObject = new THREE.Object3D();
-    //@ts-ignore this is created by a function but TS says it isn't
-    debugObject: THREE.Mesh;
+    /** the generated chassis mesh, when no `bodyObject` was injected */
+    debugObject?: THREE.Mesh;
     wheels: Map<string, WheelState> = new Map();
+    /** the names of the wheels in constraint index order */
+    readonly wheelOrder: string[] = [];
 
     //input handling
     moveDirection = new THREE.Vector3();
@@ -72,6 +95,8 @@ export class VehicleManager {
      */
     protected callbacks?: Jolt.VehicleConstraintCallbacksEm;
     protected turboTimer?: ReturnType<typeof setTimeout>;
+    /** issue #26: the chassis object the *user* gave us. Synced, never disposed. */
+    private userBodyObject?: THREE.Object3D;
 
     //* Per frame scratch (three side) - avoids garbage in postPhysicsUpdate
     protected readonly _position = new THREE.Vector3();
@@ -80,10 +105,13 @@ export class VehicleManager {
     get position() {
         return this.threeObject.position;
     }
+    /** whatever is being synced as the chassis: the user's object if there is one */
+    get bodyObject(): THREE.Object3D | undefined {
+        return this.userBodyObject ?? this.debugObject;
+    }
     set debug(value) {
         this.isDebugging = value;
-        if (value) this.debugObject.visible = true;
-        else this.debugObject.visible = false;
+        if (this.debugObject) this.debugObject.visible = value;
         this.wheels.forEach((wheel) => {
             wheel.debug = value;
         });
@@ -92,8 +120,10 @@ export class VehicleManager {
         return this.isDebugging;
     }
 
-    constructor(physicsSystem: PhysicsSystem, settings: any) {
-        this.settings = settings;
+    constructor(physicsSystem: PhysicsSystem, settings: VehicleSettings | ResolvedVehicleSettings) {
+        // every entry point resolves its settings, so a manager constructed directly gets the
+        // same defaults `VehicleSystem`/`useVehicle` would have given it
+        this.settings = resolveVehicleSettings(settings as VehicleSettings);
         this.physicsSystem = physicsSystem;
         this.createBody();
         this.createConstraint();
@@ -102,9 +132,10 @@ export class VehicleManager {
 
     /**
      * Free everything the vehicle owns (issue #140): the constraint and its step listener, the
-     * callbacks Jolt calls into, the car body, the wheel states and every three resource. Neither
-     * `VehicleManager` nor `VehicleSystem` had a `destroy()` at all, so a vehicle leaked its whole
-     * constraint graph and kept being stepped for the lifetime of the page. Idempotent.
+     * callbacks Jolt calls into, the car body, the wheel states and every three resource it
+     * generated itself. Neither `VehicleManager` nor `VehicleSystem` had a `destroy()` at all, so
+     * a vehicle leaked its whole constraint graph and kept being stepped for the lifetime of the
+     * page. Idempotent.
      */
     destroy() {
         if (this.destroyed) return;
@@ -141,20 +172,15 @@ export class VehicleManager {
         this.constraintStepListener = undefined;
         this.callbacks = undefined;
         this.constraint = undefined as unknown as Jolt.VehicleConstraint;
-        this.controller = undefined as unknown as Jolt.WheeledVehicleController;
+        this.controller = undefined as unknown as Jolt.VehicleController;
         this.carBody = undefined as unknown as Jolt.Body;
         this.wheels.clear();
 
-        // three side
-        this.threeObject.traverse((object) => {
-            const mesh = object as THREE.Mesh;
-            if (!mesh.isMesh) return;
-            mesh.geometry?.dispose();
-            const material = mesh.material;
-            if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
-            // the wheel material is shared between every wheel in the process (wheels.ts)
-            else if (material !== getSharedWheelMaterial()) material?.dispose();
-        });
+        // three side: hand the user's chassis back untouched, dispose only what we generated
+        this.userBodyObject?.removeFromParent();
+        this.userBodyObject = undefined;
+        if (this.debugObject) disposeGeneratedObject(this.debugObject);
+        this.debugObject = undefined;
         this.threeObject.clear();
         this.threeObject.removeFromParent();
     }
@@ -176,6 +202,7 @@ export class VehicleManager {
         if (bodyInterface.IsAdded(bodyID)) bodyInterface.RemoveBody(bodyID);
         bodyInterface.DestroyBody(bodyID);
     }
+
     createBody() {
         // the shape settings copy both vectors, and the outer OffsetCenterOfMass settings own the
         // inner BoxShapeSettings through a RefConst (destroying the outer frees the inner, so the
@@ -183,11 +210,11 @@ export class VehicleManager {
         // hands back a shape we hold one reference on - `Create().Get()` used to hand back a
         // shape owned by a *static* ShapeResult whose reference the next Create() dropped.
         const halfExtents = vec3.jolt([
-            this.settings.vehicleWidth! / 2,
-            this.settings.vehicleHeight! / 2,
-            this.settings.vehicleLength! / 2
+            this.settings.vehicleWidth / 2,
+            this.settings.vehicleHeight / 2,
+            this.settings.vehicleLength / 2
         ]);
-        const centerOfMassOffset = vec3.jolt([0, -this.settings.vehicleHeight! / 2, 0]);
+        const centerOfMassOffset = vec3.jolt([0, -this.settings.vehicleHeight / 2, 0]);
         const carShapeSettings = new Raw.module.OffsetCenterOfMassShapeSettings(
             centerOfMassOffset,
             new Raw.module.BoxShapeSettings(halfExtents)
@@ -211,7 +238,7 @@ export class VehicleManager {
         Raw.module.destroy(upAxis);
         carBodySettings.mOverrideMassProperties =
             Raw.module.EOverrideMassProperties_CalculateInertia;
-        carBodySettings.mMassPropertiesOverride.mMass = this.settings.vehicleMass!;
+        carBodySettings.mMassPropertiesOverride.mMass = this.settings.vehicleMass;
         this.carBody = this.physicsSystem.bodyInterface.CreateBody(carBodySettings);
         // the settings and the body hold their own references on the shape now
         Raw.module.destroy(carBodySettings);
@@ -223,7 +250,46 @@ export class VehicleManager {
             this.carBody.GetID(),
             Raw.module.EActivation_Activate
         );
-        // create the debug body
+        // the three side: the caller's chassis if they gave us one, otherwise a generated box
+        this.applyBodyObject();
+
+        return this.carBody;
+    }
+
+    /** use the injected chassis object, or generate the default one (issue #26) */
+    protected applyBodyObject() {
+        if (this.settings.bodyObject) this.setBodyObject(this.settings.bodyObject);
+        else this.createDebugBody();
+    }
+
+    /**
+     * Issue #26: sync a caller supplied `Object3D` (a GLTF scene, say) as the chassis instead of
+     * the generated box. The object is parented to `threeObject`, which follows the chassis body,
+     * so it needs no transform of its own. Passing `null` puts the generated box back.
+     *
+     * The manager never disposes an object handed to it this way - `destroy()` only detaches it.
+     */
+    setBodyObject(object: THREE.Object3D | null) {
+        if (this.destroyed) return;
+        if (this.userBodyObject && this.userBodyObject !== object) {
+            this.userBodyObject.removeFromParent();
+            this.userBodyObject = undefined;
+        }
+        if (object) {
+            // the generated chassis is ours, so it goes for good
+            if (this.debugObject) {
+                disposeGeneratedObject(this.debugObject);
+                this.debugObject = undefined;
+            }
+            this.userBodyObject = object;
+            if (object.parent !== this.threeObject) this.threeObject.add(object);
+        } else if (!this.debugObject) {
+            this.createDebugBody();
+        }
+    }
+
+    /** the generated stand-in chassis: a box the size of the collider, plus a cab */
+    protected createDebugBody(): THREE.Mesh {
         // TODO Consider renaming to "mesh" body will always be the physics system
         const debugBody = new THREE.Mesh(
             new THREE.BoxGeometry(
@@ -233,17 +299,59 @@ export class VehicleManager {
             ),
             new THREE.MeshBasicMaterial({ color: 0xff0000 })
         );
-        //debugBody.position.set(...this.settings.bodyPosition);
+        debugBody.visible = this.isDebugging;
         this.threeObject.add(debugBody);
         // add cab
         const cab = new THREE.Mesh(
             new THREE.BoxGeometry(this.settings.vehicleWidth, 0.75, 2),
             new THREE.MeshBasicMaterial({ color: 0xff0000 })
         );
-        cab.position.set(0, this.settings.vehicleHeight!, -1);
+        cab.position.set(0, this.settings.vehicleHeight, -1);
         debugBody.add(cab);
+        this.debugObject = debugBody;
+        return debugBody;
+    }
 
-        return this.carBody;
+    //* Wheels ============================================
+    /** the wheel registered under `name` ('fl' | 'fr' | 'bl' | 'br', or 'front' | 'back') */
+    getWheel(wheel: number | string): WheelState | undefined {
+        if (typeof wheel === 'number') return this.wheels.get(this.wheelOrder[wheel]);
+        return this.wheels.get(wheel);
+    }
+    /**
+     * Issue #27: sync a caller supplied object for one wheel, by name or by constraint index.
+     * The object is parented to the wheel's container, so it follows the wheel's position *and*
+     * rotation (steering included). Passing `null` puts the generated cylinder back.
+     */
+    setWheelObject(wheel: number | string, object: THREE.Object3D | null) {
+        this.getWheel(wheel)?.setObject(object);
+    }
+    /** `setWheelObject` for every wheel at once, in constraint order. `undefined` skips a wheel. */
+    setWheelObjects(objects: (THREE.Object3D | null | undefined)[]) {
+        objects.forEach((object, index) => {
+            if (object !== undefined) this.setWheelObject(index, object);
+        });
+    }
+    /** the object injected for a wheel, or the generated cylinder */
+    getWheelObject(wheel: number | string): THREE.Object3D | undefined {
+        return this.getWheel(wheel)?.object;
+    }
+    /** the object a wheel should be created with, from `wheels.<corner>.object` or `wheelObjects` */
+    protected wheelObjectFor(corner: string, index: number): THREE.Object3D | null | undefined {
+        const wheels = this.settings.wheels as unknown as Record<
+            string,
+            { object?: THREE.Object3D } | undefined
+        >;
+        return wheels?.[corner]?.object ?? this.settings.wheelObjects?.[index];
+    }
+    /** register a wheel state and parent its container under the vehicle */
+    protected addWheelState(name: string, index: number) {
+        const state = new WheelState(this.constraint, index, this.wheelObjectFor(name, index));
+        state.debug = this.isDebugging;
+        this.wheels.set(name, state);
+        this.wheelOrder[index] = name;
+        this.threeObject.add(state.threeObject);
+        return state;
     }
 
     createConstraint() {
@@ -253,22 +361,19 @@ export class VehicleManager {
         //  - `mDifferentials` / `mAntiRollBars` are arrays *by value*: push_back copies, so the
         //    objects built here are ours and are freed right after.
         //  - `vehicle` itself is ours and is destroyed once the constraint has been built.
+        const settings = this.settings as ResolvedFourWheelVehicleSettings;
         const vehicle = new Raw.module.VehicleConstraintSettings();
-        vehicle.mMaxPitchRollAngle = THREE.MathUtils.degToRad(60);
+        vehicle.mMaxPitchRollAngle = settings.maxPitchRollAngle;
         vehicle.mWheels.clear();
         const wheelsToCreate = ['fl', 'fr', 'bl', 'br'];
-        //we are going to hold the wheels for after the constraint is created
-        const wheelHolder: any = [];
         wheelsToCreate.forEach((corner) => {
-            const wheel = createWheelSettings(this.settings, corner);
-            vehicle.mWheels.push_back(wheel);
-            wheelHolder.push(wheel);
+            vehicle.mWheels.push_back(createWheelSettings(settings, corner));
         });
 
         //controller
         const controllerSettings = new Raw.module.WheeledVehicleControllerSettings();
-        controllerSettings.mEngine.mMaxTorque = this.settings.maxEngineTorque!;
-        controllerSettings.mTransmission.mClutchStrength = this.settings.clutchStrength!;
+        controllerSettings.mEngine.mMaxTorque = settings.maxEngineTorque;
+        controllerSettings.mTransmission.mClutchStrength = settings.clutchStrength;
         vehicle.mController = controllerSettings;
 
         // Front Diff
@@ -276,36 +381,36 @@ export class VehicleManager {
         const frontWheelDrive = new Raw.module.VehicleDifferentialSettings();
         frontWheelDrive.mLeftWheel = FL_WHEEL;
         frontWheelDrive.mRightWheel = FR_WHEEL;
-        frontWheelDrive.mLimitedSlipRatio = this.settings.leftRightLimitedSlipRatio!;
-        if (this.settings.fourWheelDrive)
-            frontWheelDrive.mEngineTorqueRatio = this.settings.splitEngineTorqueFront || 0.5;
+        frontWheelDrive.mLimitedSlipRatio = settings.leftRightLimitedSlipRatio;
+        if (settings.fourWheelDrive)
+            frontWheelDrive.mEngineTorqueRatio = settings.splitEngineTorqueFront ?? 0.5;
         controllerSettings.mDifferentials.push_back(frontWheelDrive);
         Raw.module.destroy(frontWheelDrive);
-        controllerSettings.mDifferentialLimitedSlipRatio = this.settings.frontBackLimitedSlipRatio!;
+        controllerSettings.mDifferentialLimitedSlipRatio = settings.frontBackLimitedSlipRatio;
 
         // Rear Diff
-        if (this.settings.fourWheelDrive) {
+        if (settings.fourWheelDrive) {
             const rearWheelDrive = new Raw.module.VehicleDifferentialSettings();
             rearWheelDrive.mLeftWheel = BL_WHEEL;
             rearWheelDrive.mRightWheel = BR_WHEEL;
-            rearWheelDrive.mLimitedSlipRatio = this.settings.leftRightLimitedSlipRatio!;
-            rearWheelDrive.mEngineTorqueRatio = this.settings.splitEngineTorqueRear || 0.5;
+            rearWheelDrive.mLimitedSlipRatio = settings.leftRightLimitedSlipRatio;
+            rearWheelDrive.mEngineTorqueRatio = settings.splitEngineTorqueRear ?? 0.5;
             controllerSettings.mDifferentials.push_back(rearWheelDrive);
             Raw.module.destroy(rearWheelDrive);
         }
 
         // Anti Roll Bars
-        if (this.settings.antiRollbar) {
+        if (settings.antiRollbar) {
             const frontRollBar = new Raw.module.VehicleAntiRollBar();
             frontRollBar.mLeftWheel = FL_WHEEL;
             frontRollBar.mRightWheel = FR_WHEEL;
-            if (this.settings.frontRollBarStiffness)
-                frontRollBar.mStiffness = this.settings.frontRollBarStiffness;
+            if (settings.frontRollBarStiffness)
+                frontRollBar.mStiffness = settings.frontRollBarStiffness;
             const rearRollBar = new Raw.module.VehicleAntiRollBar();
             rearRollBar.mLeftWheel = BL_WHEEL;
             rearRollBar.mRightWheel = BR_WHEEL;
-            if (this.settings.rearRollBarStiffness)
-                rearRollBar.mStiffness = this.settings.rearRollBarStiffness;
+            if (settings.rearRollBarStiffness)
+                rearRollBar.mStiffness = settings.rearRollBarStiffness;
             vehicle.mAntiRollBars.push_back(frontRollBar);
             vehicle.mAntiRollBars.push_back(rearRollBar);
             Raw.module.destroy(frontRollBar);
@@ -314,24 +419,18 @@ export class VehicleManager {
 
         this.constraint = new Raw.module.VehicleConstraint(this.carBody, vehicle);
         //NOW we can create the wheelStates
-        // TODO this process seems dirty....
-        //@ts-ignore
-        wheelHolder.forEach((wheel: any, i: number) => {
-            const wheelState = new WheelState(this.constraint, i);
-            this.wheels.set(wheelsToCreate[i], wheelState);
-            this.threeObject.add(wheelState.threeObject);
-        });
+        wheelsToCreate.forEach((corner, index) => this.addWheelState(corner, index));
 
         //set the collision tester that checks the wheels for collision with the floor
-        let tester;
-        switch (this.settings.castType) {
+        let tester: Jolt.VehicleCollisionTester;
+        switch (settings.castType) {
             case 'cylinder':
                 tester = new Raw.module.VehicleCollisionTesterCastCylinder(Layer.MOVING, 0.05);
                 break;
             case 'sphere':
                 tester = new Raw.module.VehicleCollisionTesterCastSphere(
                     Layer.MOVING,
-                    0.5 * this.settings.wheelWidth!
+                    0.5 * (settings.wheels?.width ?? 0.3)
                 );
                 break;
             default:
@@ -378,112 +477,118 @@ export class VehicleManager {
         const callbacks = new Raw.module.VehicleConstraintCallbacksJS();
         this.callbacks = callbacks;
         callbacks.GetCombinedFriction = (
-            wheelIndex,
-            tireFrictionDirection,
+            _wheelIndex,
+            _tireFrictionDirection,
             tireFriction,
             body2,
-            subShapeID2
+            _subShapeID2
         ) => {
-            //this exists solely to get typescript to stop complainig
-            //@ts-ignore
-            const uselessprop = wheelIndex + tireFrictionDirection + subShapeID2;
             //@ts-ignore this is a TS bug in wrapPointer
-            body2 = Raw.module.wrapPointer(body2, Raw.module.Body);
-            //@ts-ignore
-            return Math.sqrt(tireFriction * body2.GetFriction()); // This is the default calculation
+            const body = Raw.module.wrapPointer(body2, Raw.module.Body) as Jolt.Body;
+            return Math.sqrt(tireFriction * body.GetFriction()); // This is the default calculation
         };
         // jolt-physics 0.26 replaced the (vehicle, deltaTime, physicsSystem) arguments of these
         // callbacks with (vehicle, PhysicsStepListenerContext*). Unwrap the context so our own
         // listeners keep receiving the delta time and physics system they always did.
         const unwrapContext = (inContext: number) =>
             Raw.module.wrapPointer(inContext, Raw.module.PhysicsStepListenerContext);
+        const unwrapVehicle = (inVehicle: number) =>
+            Raw.module.wrapPointer(inVehicle, Raw.module.VehicleConstraint);
         callbacks.OnPreStepCallback = (vehicle, context) => {
             const ctx = unwrapContext(context);
-            this.triggerListeners('preStepListeners', vehicle, ctx.mDeltaTime, ctx.mPhysicsSystem);
+            this.triggerListeners(
+                'preStepListeners',
+                unwrapVehicle(vehicle),
+                ctx.mDeltaTime,
+                ctx.mPhysicsSystem
+            );
         };
         callbacks.OnPostCollideCallback = (vehicle, context) => {
             const ctx = unwrapContext(context);
             this.triggerListeners(
                 'postCollideListeners',
-                vehicle,
+                unwrapVehicle(vehicle),
                 ctx.mDeltaTime,
                 ctx.mPhysicsSystem
             );
         };
         callbacks.OnPostStepCallback = (vehicle, context) => {
             const ctx = unwrapContext(context);
-            this.triggerListeners('postStepListeners', vehicle, ctx.mDeltaTime, ctx.mPhysicsSystem);
+            this.triggerListeners(
+                'postStepListeners',
+                unwrapVehicle(vehicle),
+                ctx.mDeltaTime,
+                ctx.mPhysicsSystem
+            );
         };
         callbacks.SetVehicleConstraint(this.constraint);
     }
     //trigger listeners
-    triggerListeners(listenerType: any, vehicle: any, deltaTime: any, physicsSystem: any) {
-        //@ts-ignore
-        const listeners = this[listenerType];
-        listeners.forEach((listener: any) => {
+    triggerListeners(
+        listenerType: ListenerBucket,
+        vehicle: Jolt.VehicleConstraint,
+        deltaTime: number,
+        physicsSystem: Jolt.PhysicsSystem
+    ) {
+        this[listenerType].forEach((listener) => {
             listener(vehicle, deltaTime, physicsSystem);
         });
     }
     // for actions
-    triggerActions(action: any) {
-        this.actionListeners.forEach((listener: any) => {
-            listener(action);
+    triggerActions(action: string) {
+        this.actionListeners.forEach((listener) => {
+            listener(action, this);
         });
     }
     // add a listener to the correct type and return a function to remove the listener
-    private addListener(listenerType: any, listener: any) {
-        //@ts-ignore
+    private addListener(listenerType: ListenerBucket, listener: VehicleStepListener) {
         this[listenerType].push(listener);
         return () => {
-            //@ts-ignore
-            this[listenerType] = this[listenerType].filter((l: any) => l !== listener);
+            this[listenerType] = this[listenerType].filter((l) => l !== listener);
         };
     }
     //explicit callback shorthands
-    onPreStep(listener: any) {
+    onPreStep(listener: VehicleStepListener) {
         return this.addListener('preStepListeners', listener);
     }
-    onPostCollide(listener: any) {
+    onPostCollide(listener: VehicleStepListener) {
         return this.addListener('postCollideListeners', listener);
     }
-    onPostStep(listener: any) {
+    onPostStep(listener: VehicleStepListener) {
         return this.addListener('postStepListeners', listener);
     }
     // take an action type and filter it
-    onAction(actionType: string, listener: any) {
-        const newListener = (action: any) => {
+    onAction(actionType: string, listener: VehicleActionListener) {
+        const newListener: VehicleActionListener = (action) => {
             if (action === actionType) listener(action, this);
         };
-        //@ts-ignore
         this.actionListeners.push(newListener);
         return () => {
             this.actionListeners = this.actionListeners.filter((l) => l !== newListener);
         };
     }
     //* Input Handling ====================================
-    move(direction: any) {
-        //console.log('move', direction);
-        this.moveDirection = direction;
+    move(direction: THREE.Vector3 | THREE.Vector2) {
+        this.moveDirection.set(direction.x, direction.y, 0);
     }
-    setHandBrake(value: any) {
+    setHandBrake(value: boolean) {
         this.handBrake = value;
     }
-    setBrake(value: any) {
+    setBrake(value: boolean) {
         this.brake = value;
     }
-    triggerTurbo(extraTime?: any) {
+    triggerTurbo(extraTime?: number) {
         if (this.destroyed) return;
         this.turboActive = true;
-        this.turboTimeLimit;
         // the handle is kept so destroy() can clear it
         this.turboTimer = setTimeout(() => {
             this.turboActive = false;
         }, extraTime || this.turboTimeLimit);
     }
-    setPosition(position: any) {
+    setPosition(position: THREE.Vector3 | number[]) {
         if (this.destroyed) return;
-        // `vec3.rjolt` always allocates a vector we own (issue #76) and `SetPosition` copies it;
-        // this used to leak one RVec3 per call.
+        // `joltScratch.rvec3` hands back a shared vector and `SetPosition` copies it;
+        // this used to allocate (and leak) one RVec3 per call.
         this.physicsSystem.bodyInterface.SetPosition(
             this.carBody.GetID(),
             joltScratch.rvec3(position),
@@ -494,14 +599,8 @@ export class VehicleManager {
     //* Physics Update ====================================
     // attach to loop
     // we are going to do this in the main vehicle system
-    /*
-    private attachToLoop() {
-        this.physicsSystem.addPreStepListener(this.prePhysicsUpdate);
-        this.physicsSystem.addPostStepListener(this.postPhysicsUpdate);
-    }
-    */
-    //@ts-ignore deltaTime not used at the moment but it's here if we need it
-    prePhysicsUpdate(deltaTime: number) {
+    // the delta time is unused here but the subclasses (and the system) pass it
+    prePhysicsUpdate(_deltaTime: number) {
         if (this.destroyed) return;
         let forward = this.moveDirection.y;
         const right = this.moveDirection.x;
@@ -534,13 +633,20 @@ export class VehicleManager {
             forward = 0;
             handBrake = 1;
         }
-        this.controller.SetDriverInput(forward, right, brake, handBrake);
-        if (right != 0 || forward != 0 || brake != 0 || handBrake != 0) {
+        this.driverInput(forward, right, brake, handBrake);
+        if (right !== 0 || forward !== 0 || brake !== 0 || handBrake !== 0) {
             this.physicsSystem.bodyInterface.ActivateBody(this.carBody.GetID());
         }
     }
-    //@ts-ignore
-    postPhysicsUpdate(deltaTime) {
+    /** the controller is typed per vehicle flavour; both expose `SetDriverInput` */
+    protected driverInput(forward: number, right: number, brake: number, handBrake: number) {
+        (
+            this.controller as unknown as {
+                SetDriverInput: (f: number, r: number, b: number, h: number) => void;
+            }
+        ).SetDriverInput(forward, right, brake, handBrake);
+    }
+    postPhysicsUpdate(_deltaTime: number) {
         if (this.destroyed) return;
         // lets try what happens if we update the render state after the world tick.
         // GetPosition/GetRotation return static temporaries by value, so reading straight into
