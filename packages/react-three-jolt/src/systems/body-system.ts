@@ -81,6 +81,21 @@ export class BodySystem {
     worldEvents?: Emitter<WorldEventMap>;
     /** Mirrors `PhysicsSystem.debug`: turns on payload poisoning after dispatch. */
     debug = false;
+    /**
+     * Registered bodies Jolt currently has awake. Maintained by the activation listener rather
+     * than by scanning, and the basis of `settled` / `activityChange` (#52).
+     */
+    activeBodyCount = 0;
+    private lastReportedActive = -1;
+
+    /** Bodies that can be awake at all: dynamic (including rigs) and kinematic. */
+    get simulatedBodyCount(): number {
+        return this.dynamicBodies.size + this.kinematicBodies.size;
+    }
+    /** True when nothing is awake. `settled` fires on the transition into this state. */
+    get isSettled(): boolean {
+        return this.activeBodyCount === 0;
+    }
     /** Single reused payload for the synchronous, inside-the-step validate callback. */
     private readonly validatePayload: ValidatePayload = {
         target: { body: undefined, object: undefined, handle: 0, subShapeId: -1 },
@@ -383,6 +398,14 @@ export class BodySystem {
 
     private queueActivation(userData: number, kind: number): void {
         const state = userData ? this.bodies.get(userData) : undefined;
+        // The count is maintained here, unconditionally and synchronously: it is a single
+        // integer, safe to touch inside the step, and it is what `settled` is edge triggered
+        // off instead of scanning every body each frame. Bodies this system did not create are
+        // not counted, so `activeBodyCount <= simulatedBodyCount` holds.
+        if (state) {
+            if (kind === EventKind.wake) this.activeBodyCount++;
+            else if (this.activeBodyCount > 0) this.activeBodyCount--;
+        }
         // A body is activated by `AddBody` before any listener could have subscribed, and
         // deactivated by `RemoveBody` after `dispose()` cleared its emitter. Gating on the mask
         // keeps both of those out of the queue instead of delivering a phantom wake on mount.
@@ -390,6 +413,22 @@ export class BodySystem {
         const bit = kind === EventKind.wake ? EventBit.wake : EventBit.sleep;
         if ((mask & bit) === 0) return;
         this.eventQueue.push(kind, userData, 0, -1, -1, 0);
+    }
+
+    /**
+     * Report `activityChange`, and `settled` when the last awake body goes to sleep (#52).
+     * Edge triggered off {@link activeBodyCount}, so this costs one comparison per step.
+     */
+    private reportActivity(): void {
+        const active = this.activeBodyCount;
+        if (active === this.lastReportedActive) return;
+        const previous = this.lastReportedActive;
+        this.lastReportedActive = active;
+        const world = this.worldEvents;
+        if (!world) return;
+        world.emit('activityChange', active, this.simulatedBodyCount);
+        // `previous > 0` so a world that was never active does not announce itself settled
+        if (active === 0 && previous > 0) world.emit('settled');
     }
 
     // Contact Listeners ===================================
@@ -640,10 +679,13 @@ export class BodySystem {
      * `Step()` and `afterStep`, so handlers may freely add, move and remove bodies.
      */
     flushEvents(): void {
-        if (this.eventQueue.length === 0) return;
-        this.payloads.debug = this.debug;
-        this.payloads.reset();
-        this.eventQueue.drain(FLUSH_ORDER, this.dispatchEvent);
+        if (this.eventQueue.length > 0) {
+            this.payloads.debug = this.debug;
+            this.payloads.reset();
+            this.eventQueue.drain(FLUSH_ORDER, this.dispatchEvent);
+        }
+        // after the sleep/wake events, so a handler that counts them agrees with the totals
+        this.reportActivity();
     }
 
     /** Drop queued events without dispatching them (the world is going away). */
@@ -770,6 +812,8 @@ export class BodySystem {
     destroy(): void {
         this.eventQueue.clear();
         this.contactPairs.clear();
+        this.activeBodyCount = 0;
+        this.lastReportedActive = -1;
         for (const state of this.bodies.values()) state.events.clear();
         this.bodies.clear();
         this.dynamicBodies.clear();

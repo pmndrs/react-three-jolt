@@ -266,3 +266,37 @@ test('<Physics module> can be toggled without breaking the hook order', async ()
     );
     await renderer.unmount();
 });
+
+test('<Physics onSettled / onActivityChange>', async () => {
+    let system: PhysicsSystem | undefined;
+    let settled = 0;
+    const activity: [number, number][] = [];
+
+    const renderer = await create(
+        <Physics
+            onSettled={() => settled++}
+            onActivityChange={(active, total) => activity.push([active, total])}
+        >
+            <Capture
+                onSystem={(s) => {
+                    system = s;
+                }}
+            />
+            <Floor />
+            <RigidBody position={[0, 0.5, 0]}>
+                <mesh>
+                    <boxGeometry args={[1, 1, 1]} />
+                </mesh>
+            </RigidBody>
+        </Physics>
+    );
+
+    assert.isDefined(system);
+    for (let i = 0; i < 400 && settled === 0; i++) system!.onUpdate(STEP);
+
+    assert.equal(settled, 1, 'the world never reported itself settled');
+    // one dynamic body; the floor is static and never awake
+    assert.deepEqual(activity.at(-1), [0, 1]);
+
+    await renderer.unmount();
+});

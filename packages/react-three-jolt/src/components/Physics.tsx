@@ -148,6 +148,14 @@ export type PhysicsProps = {
     onSleep?: WorldEventMap['sleep'];
     /** Any body was activated. */
     onWake?: WorldEventMap['wake'];
+    /**
+     * Every simulated body has gone to sleep: the world has stopped moving. Edge triggered off
+     * a count the activation listener maintains, so it costs one comparison per step rather
+     * than a per-frame scan.
+     */
+    onSettled?: WorldEventMap['settled'];
+    /** The number of awake bodies changed. `(active, total)`. */
+    onActivityChange?: WorldEventMap['activityChange'];
 };
 
 export const Physics: FC<PhysicsProps> = (props) => {
@@ -173,6 +181,8 @@ export const Physics: FC<PhysicsProps> = (props) => {
         onIntersectionExit,
         onSleep,
         onWake,
+        onSettled,
+        onActivityChange,
 
         //possible module or path?
         module
@@ -270,6 +280,8 @@ export const Physics: FC<PhysicsProps> = (props) => {
     useSystemEvent(physicsSystem, 'sensorExit', onSensorExit ?? onIntersectionExit);
     useSystemEvent(physicsSystem, 'sleep', onSleep);
     useSystemEvent(physicsSystem, 'wake', onWake);
+    useSystemEvent(physicsSystem, 'settled', onSettled);
+    useSystemEvent(physicsSystem, 'activityChange', onActivityChange);
 
     // set the context
     useEffect(() => {

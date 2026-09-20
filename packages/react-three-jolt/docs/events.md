@@ -14,6 +14,8 @@ React prop, a hook, or an imperative subscription.
 | went to sleep | `onSleep` | `body.onSleep(fn)` |
 | woke up | `onWake` | `body.onWake(fn)` |
 | accept/reject a contact | `onContactValidate` | `body.onContactValidate(fn)` |
+| the world stopped moving | `<Physics onSettled>` | `physicsSystem.events.on("settled", fn)` |
+| awake body count changed | `<Physics onActivityChange>` | `physicsSystem.events.on("activityChange", fn)` |
 | before a physics step | — | `useBeforePhysicsStep(fn)` / `physicsSystem.onBeforeStep(fn)` |
 | after a physics step | — | `useAfterPhysicsStep(fn)` / `physicsSystem.onAfterStep(fn)` |
 
@@ -117,6 +119,21 @@ lower `handle`, so a world-wide counter is right without dividing by two.
 ```tsx
 <Physics onCollisionEnter={(e) => count++} onSleep={(e) => sleeping.add(e.handle)}>
 ```
+
+### Steady state
+
+```tsx
+<Physics
+    onSettled={() => console.log('everything is asleep')}
+    onActivityChange={(active, total) => setLabel(`${active}/${total} awake`)}
+/>
+```
+
+`onSettled` is edge-triggered: it fires on the step where the last awake body goes to sleep, and
+not again until something wakes up. Both are driven by a count the activation listener
+maintains (`bodySystem.activeBodyCount`, `bodySystem.simulatedBodyCount`,
+`bodySystem.isSettled`), so they cost one comparison per step rather than a per-frame scan. A
+world that was never active does not announce itself settled.
 
 Or imperatively, from anywhere under `<Physics>`:
 
