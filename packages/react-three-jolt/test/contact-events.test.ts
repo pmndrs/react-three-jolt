@@ -3,7 +3,7 @@
 //
 // One PhysicsSystem per test where the body set matters, because every world shares the Jolt
 // module and its body id space - a body created by one turns up in the contact listener of
-// another. `maxInterfaces` is 3, so each test destroys its world.
+// another. Worlds are expensive (~20MB of wasm heap each), so each test destroys its own.
 
 import * as THREE from 'three';
 import { assert, beforeAll, describe, test } from 'vitest';

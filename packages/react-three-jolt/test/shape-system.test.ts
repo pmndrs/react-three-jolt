@@ -12,7 +12,7 @@
 
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
-import { afterEach, assert, beforeAll, describe, expect, test } from 'vitest';
+import { afterEach, assert, beforeAll, describe, expect, onTestFinished, test } from 'vitest';
 import { initJolt, Raw } from '../src/raw';
 import {
     type AutoShape,
@@ -43,7 +43,7 @@ import {
     subShapeCount,
     validScaleFor
 } from '../src/systems/shape-system';
-import { setDebug } from '../src/utils';
+import { joltScratch, setDebug } from '../src/utils';
 import { createMeshFloor } from '../src/utils/meshTools';
 import { installAllocTracker } from './jolt-alloc';
 
@@ -129,6 +129,21 @@ afterEach(() => {
 beforeAll(async () => {
     await initJolt();
 });
+
+/**
+ * A real physics world, destroyed when the test ends.
+ *
+ * These used to be built inline and never destroyed. That was survivable only because
+ * `PhysicsSystem` capped itself at three JoltInterfaces and silently handed every later world
+ * the first one (issue #176); now that each world really gets its own interface - ~20MB of the
+ * fixed 128MB wasm heap - leaking nine of them in one file would exhaust it.
+ */
+const makeWorld = async (label: string) => {
+    const { PhysicsSystem } = await import('../src/systems/physics-system');
+    const system = new PhysicsSystem(label);
+    onTestFinished(() => system.destroy());
+    return system;
+};
 
 //* Per shape type ==========================================
 // [name, how to build the settings, expected subtype]
@@ -1007,8 +1022,7 @@ describe('mutable compounds', () => {
     });
 
     test('a body whose shape is a mutable compound edits it through BodyState', async () => {
-        const { PhysicsSystem } = await import('../src/systems/physics-system');
-        const system = new PhysicsSystem('mutable-compound-test');
+        const system = await makeWorld('mutable-compound-test');
         const shape = generateShape({
             type: 'mutableCompound',
             children: [{ type: 'box', size: [1, 1, 1] }]
@@ -1040,8 +1054,7 @@ describe('mutable compounds', () => {
     });
 
     test('BodyState rejects editing a body that is not a mutable compound', async () => {
-        const { PhysicsSystem } = await import('../src/systems/physics-system');
-        const system = new PhysicsSystem('mutable-compound-reject-test');
+        const system = await makeWorld('mutable-compound-reject-test');
         const body = system.bodySystem.getBody(
             system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
         )!;
@@ -1193,10 +1206,16 @@ describe('offsetCenterOfMass descriptors (issue #40)', () => {
 
 describe('BodyState.scale goes through the pipeline', () => {
     test('scaling a body wraps its shape once and re-wraps the inner shape after that', async () => {
-        const { PhysicsSystem } = await import('../src/systems/physics-system');
-        const system = new PhysicsSystem('scale-test');
+        const system = await makeWorld('scale-test');
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
         const body = system.bodySystem.getBody(system.bodySystem.addBody(mesh))!;
+
+        // The shared joltScratch vectors are lazily built and released when the last world is
+        // destroyed, so the previous test in this file took them with it. Warm them *outside*
+        // the spy window: they are a one-off per module, not part of what scaling allocates.
+        joltScratch.vec3([0, 0, 0]);
+        joltScratch.rvec3([0, 0, 0]);
+        joltScratch.quat([0, 0, 0, 1]);
 
         const allocations = startSpy();
         body.scale = [2, 2, 2];
@@ -1219,8 +1238,7 @@ describe('BodyState.scale goes through the pipeline', () => {
     });
 
     test('a numeric scale is uniform, not (n, NaN, NaN)', async () => {
-        const { PhysicsSystem } = await import('../src/systems/physics-system');
-        const system = new PhysicsSystem('numeric-scale-test');
+        const system = await makeWorld('numeric-scale-test');
         const body = system.bodySystem.getBody(
             system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
         )!;
@@ -1239,9 +1257,8 @@ describe('BodyState.scale goes through the pipeline', () => {
     });
 
     test('a non-uniform scale works on a box and is clamped on a sphere', async () => {
-        const { PhysicsSystem } = await import('../src/systems/physics-system');
         const { setDebug } = await import('../src/utils');
-        const system = new PhysicsSystem('non-uniform-scale-test');
+        const system = await makeWorld('non-uniform-scale-test');
 
         const box = system.bodySystem.getBody(
             system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
@@ -1277,8 +1294,7 @@ describe('BodyState.scale goes through the pipeline', () => {
     });
 
     test('setting the scale a body already has does nothing', async () => {
-        const { PhysicsSystem } = await import('../src/systems/physics-system');
-        const system = new PhysicsSystem('scale-noop-test');
+        const system = await makeWorld('scale-noop-test');
         const body = system.bodySystem.getBody(
             system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
         )!;
@@ -1388,8 +1404,7 @@ describe('dynamic trimesh bodies', () => {
     });
 
     test('a dynamic trimesh body becomes convex, falls under gravity and rests on a box', async () => {
-        const { PhysicsSystem } = await import('../src/systems/physics-system');
-        const system = new PhysicsSystem('dynamic-trimesh-test');
+        const system = await makeWorld('dynamic-trimesh-test');
 
         // a static floor
         const floor = new THREE.Mesh(new THREE.BoxGeometry(40, 1, 40));
@@ -1431,8 +1446,7 @@ describe('dynamic trimesh bodies', () => {
     });
 
     test('a static trimesh body is still a real MeshShape', async () => {
-        const { PhysicsSystem } = await import('../src/systems/physics-system');
-        const system = new PhysicsSystem('static-trimesh-test');
+        const system = await makeWorld('static-trimesh-test');
         const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1));
         const body = system.bodySystem.getBody(
             system.bodySystem.addBody(mesh, { shapeType: 'trimesh', bodyType: 'static' })
@@ -1442,8 +1456,7 @@ describe('dynamic trimesh bodies', () => {
     });
 
     test("dynamicMeshStrategy: 'error' refuses to create the body", async () => {
-        const { PhysicsSystem } = await import('../src/systems/physics-system');
-        const system = new PhysicsSystem('dynamic-trimesh-error-test');
+        const system = await makeWorld('dynamic-trimesh-error-test');
         const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1));
         expect(() =>
             system.bodySystem.addBody(mesh, {
@@ -1455,8 +1468,7 @@ describe('dynamic trimesh bodies', () => {
     });
 
     test('a ready made MeshShape handed to a dynamic body is converted too', async () => {
-        const { PhysicsSystem } = await import('../src/systems/physics-system');
-        const system = new PhysicsSystem('dynamic-trimesh-shape-test');
+        const system = await makeWorld('dynamic-trimesh-shape-test');
         const shape = generateShape(
             describeShape(new THREE.BoxGeometry(2, 2, 2), { type: 'trimesh' })
         );

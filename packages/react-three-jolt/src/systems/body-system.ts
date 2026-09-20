@@ -481,6 +481,28 @@ export class BodySystem {
         // console.log('Removed body', bodyHandle);
     }
 
+    /**
+     * Remove and destroy every registered body, whether it was made by `addBody` or handed in
+     * through `addExistingBody`. Used by `PhysicsSystem.destroy()` (issue #162): the
+     * JoltInterface's destructor would free the bodies anyway, but going through `removeBody`
+     * is what closes open contact pairs, frees each body's `CollisionGroup` and drops the
+     * constraints attached to it - none of which the interface knows about.
+     *
+     * @returns how many bodies were removed
+     */
+    removeAllBodies(): number {
+        let removed = 0;
+        // snapshot: removeBody mutates every map it iterates, and a contact `exit` dispatched
+        // from `dispose()` may add more pending actions
+        for (const handle of [...this.bodies.keys()]) {
+            if (!this.bodies.has(handle)) continue;
+            this.removeBody(handle);
+            removed++;
+        }
+        this.pendingActions = [];
+        return removed;
+    }
+
     /** Drop a handle from every map. Jolt recycles handles, so nothing may be left behind. */
     private forget(bodyHandle: number) {
         const state = this.bodies.get(bodyHandle);

@@ -11,10 +11,10 @@ we'll expose various parts of the system through the physics component and conte
 import { invalidate } from '@react-three/fiber';
 import type Jolt from 'jolt-physics';
 import { MathUtils } from 'three';
-import { Layer, NUM_OBJECT_LAYERS } from '../constants';
+import { Layer, NUM_BROAD_PHASE_LAYERS, NUM_OBJECT_LAYERS } from '../constants';
 import { Raw } from '../raw';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
-import { anyVec3, devWarn, joltScratch, vec3 } from '../utils';
+import { anyVec3, joltScratch, vec3 } from '../utils';
 import { BodyState } from './body-state';
 import { BodySystem } from './body-system';
 import { ConstraintSystem } from './constraint-system';
@@ -31,6 +31,101 @@ const capturePose = (state: BodyState): void => {
 const resetPoseCache = (state: BodyState): void => {
     state.resetPoseCache();
 };
+
+/**
+ * Anything with a lifetime tied to a world: a character controller, a camera rig, a vehicle
+ * system, a raycaster. Register one with {@link PhysicsSystem.registerDisposable} and
+ * `PhysicsSystem.destroy()` will tear it down - while the world is still alive - before it
+ * frees the JoltInterface.
+ */
+export type Disposable = { destroy(): void } | (() => void);
+
+//* Deferred world teardown ==========================================
+// React destroys a parent's effects before its children's, so `<Physics>`'s unmount cleanup runs
+// *before* the `<RigidBody>` / `useConstraint` / controller cleanups underneath it. Destroying
+// the world there would leave every child cleaning up against a dead JoltInterface. `<Physics>`
+// therefore schedules the real `destroy()` through here: a microtask queued during React's
+// commit runs only once the whole commit (including every child's cleanup) has finished.
+//
+// The queue is module level - rather than a bare `queueMicrotask` in the component - so that the
+// heap guard below can force it to drain before deciding there is no room for another world.
+// Otherwise a page (or a test file) that unmounts one `<Physics>` and mounts the next in the
+// same tick would be holding two worlds' worth of WASM heap for no reason.
+const pendingWorldDestroys = new Set<() => void>();
+let flushingWorldDestroys = false;
+
+/** Run `destroy` after the current React commit. Safe to call more than once for one world. */
+export function deferWorldDestroy(destroy: () => void): void {
+    pendingWorldDestroys.add(destroy);
+    queueMicrotask(() => {
+        if (!pendingWorldDestroys.delete(destroy)) return;
+        destroy();
+    });
+}
+
+/**
+ * Run every teardown {@link deferWorldDestroy} is still holding, right now. Called before
+ * allocating a new world, and useful in tests that need the heap settled synchronously.
+ */
+export function flushDeferredWorldDestroys(): void {
+    if (flushingWorldDestroys || pendingWorldDestroys.size === 0) return;
+    flushingWorldDestroys = true;
+    try {
+        for (const destroy of [...pendingWorldDestroys]) {
+            if (pendingWorldDestroys.delete(destroy)) destroy();
+        }
+    } finally {
+        flushingWorldDestroys = false;
+    }
+}
+
+/**
+ * WASM heap one `JoltInterface` needs, measured against jolt-physics 1.1.0 with the default
+ * `JoltSettings` (10 MB temp allocator + the body/contact managers): 20,191,160 bytes. Rounded
+ * up for the margin.
+ */
+const INTERFACE_HEAP_COST = 21 * 1024 * 1024;
+
+/**
+ * Refuse to build a world there is no heap for, with an error that says what to do about it.
+ *
+ * The jolt-physics wasm builds ship a fixed 128 MB heap with no growth, so roughly six worlds
+ * fit at once and the seventh `new JoltInterface(...)` calls emscripten's `abort(OOM)` - which
+ * kills the module for the rest of the page and surfaces as a hang or an unrelated trap much
+ * later. That is the real cause of issue #176; the old `maxInterfaces = 3` cap papered over it
+ * by silently handing the fourth `<Physics>` the *first* world's interface, so two components
+ * shared bodies without either knowing.
+ */
+function assertHeapRoomForWorld(jolt: typeof Jolt): void {
+    // `sGetFreeMemory` is a static on JoltInterface; it is not in every build, so treat a
+    // missing or throwing probe as "no information" rather than as a failure.
+    let freeMemory: number;
+    try {
+        const probe = jolt.JoltInterface?.prototype?.sGetFreeMemory;
+        if (typeof probe !== 'function') return;
+        freeMemory = probe.call(jolt.JoltInterface.prototype);
+    } catch {
+        return;
+    }
+    if (!(freeMemory >= 0) || freeMemory >= INTERFACE_HEAP_COST) return;
+
+    // A world whose `<Physics>` has already unmounted may still be queued for teardown.
+    flushDeferredWorldDestroys();
+    try {
+        freeMemory = jolt.JoltInterface.prototype.sGetFreeMemory();
+    } catch {
+        return;
+    }
+    if (freeMemory >= INTERFACE_HEAP_COST) return;
+
+    const mb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+    throw new Error(
+        `r3/jolt: not enough WASM heap for another physics world - ${mb(freeMemory)} free, ` +
+            `about ${mb(INTERFACE_HEAP_COST)} needed, ${Raw.interfaceCount} world(s) already ` +
+            'live. Call `destroy()` on a PhysicsSystem you no longer need (unmounting its ' +
+            '<Physics> does this for you) before creating another one.'
+    );
+}
 
 export class PhysicsSystem {
     /**
@@ -54,6 +149,14 @@ export class PhysicsSystem {
     bodyInterface!: Jolt.BodyInterface;
     bodySystem!: BodySystem;
     constraintSystem!: ConstraintSystem;
+
+    /**
+     * This world's slot in `Raw`'s interface registry, from a counter that only ever goes up.
+     * `Raw.getInterface(id)` resolves it; `destroy()` gives it back. -1 once destroyed.
+     */
+    interfaceId: number;
+    /** Whatever the world was constructed with. Debug label only; it identifies nothing. */
+    readonly label: string;
 
     // Public properties ----------------------------
     /**
@@ -131,11 +234,29 @@ export class PhysicsSystem {
         this.bodySystem.kinematicBodies.forEach(resetPoseCache);
     }
 
-    maxInterfaces = 3;
-    constructor(pid = '0') {
+    /**
+     * Every world owns exactly one `JoltInterface`, built here and freed in {@link destroy}.
+     *
+     * @param label optional debug label, shown in `debug` logs. It used to be the React `useId()`
+     * of the owning `<Physics>` and was the key the interface was cached under; interfaces are
+     * now keyed by {@link interfaceId} instead, so this identifies nothing (issues #35, #176).
+     */
+    constructor(label = '0') {
+        this.label = label;
         const jolt = Raw.module;
+        if (!jolt)
+            throw new Error(
+                'r3/jolt: new PhysicsSystem() before the jolt-physics module was loaded. ' +
+                    'Await `initJolt()` first - <Physics> does this for you.'
+            );
+
+        // Bail out with a readable error rather than letting emscripten abort the module.
+        assertHeapRoomForWorld(jolt);
 
         /* setup collisions and broadphase */
+        // NOTE: every table below is sized by NUM_OBJECT_LAYERS, which has to cover the *highest*
+        // Layer id. Jolt only bounds checks these with asserts that the release wasm compiles
+        // out, so a table that is too small corrupts the heap silently (issue #95).
         const objectFilter = new jolt.ObjectLayerPairFilterTable(NUM_OBJECT_LAYERS);
         objectFilter.EnableCollision(Layer.NON_MOVING, Layer.MOVING);
         objectFilter.EnableCollision(Layer.MOVING, Layer.MOVING);
@@ -146,13 +267,15 @@ export class PhysicsSystem {
         const BP_LAYER_MOVING = new jolt.BroadPhaseLayer(0);
         const BP_LAYER_NON_MOVING = new jolt.BroadPhaseLayer(1);
         const BP_LAYER_RIG = new jolt.BroadPhaseLayer(2);
-        const NUM_BROAD_PHASE_LAYERS = 3;
         const bpInterface = new jolt.BroadPhaseLayerInterfaceTable(
             NUM_OBJECT_LAYERS,
             NUM_BROAD_PHASE_LAYERS
         );
         bpInterface.MapObjectToBroadPhaseLayer(Layer.NON_MOVING, BP_LAYER_NON_MOVING);
         bpInterface.MapObjectToBroadPhaseLayer(Layer.MOVING, BP_LAYER_MOVING);
+        // kinematic bodies are created on Layer.MOVING today, but the entry has to be mapped:
+        // an unmapped object layer means the broadphase reads a slot nothing ever wrote.
+        bpInterface.MapObjectToBroadPhaseLayer(Layer.KINEMATIC, BP_LAYER_MOVING);
         bpInterface.MapObjectToBroadPhaseLayer(Layer.RIG, BP_LAYER_RIG);
         const settings = new jolt.JoltSettings();
         settings.mObjectLayerPairFilter = objectFilter;
@@ -164,29 +287,22 @@ export class PhysicsSystem {
             NUM_OBJECT_LAYERS
         );
 
-        // if the interface alread exists use it, otherwise make a new one
-        if (Raw.joltInterfaces.has(pid)) {
-            this.joltInterface = Raw.joltInterfaces.get(pid);
-        } else {
-            // we need to check ourselves and limit interfaces for memory reasons
-            if (Raw.joltInterfaces.size > this.maxInterfaces - 1) {
-                // throw a warning about excess
-                devWarn(
-                    '*** WARNING: Excess Jolt Interfaces Attempted, using first initialized interface ***'
-                );
-                const interfaces = Raw.joltInterfaces.values();
-                this.joltInterface = interfaces.next().value;
-            } else {
-                this.joltInterface = new jolt.JoltInterface(settings);
-                Raw.joltInterfaces.set(pid, this.joltInterface);
-            }
-        }
+        // One interface per world, always. The old code cached interfaces by `pid` and, past a
+        // cap of three, silently handed the caller the *first* world's interface - two <Physics>
+        // trees then shared bodies, and the loser's filter tables were orphaned (issues #35/#176).
+        this.joltInterface = new jolt.JoltInterface(settings);
+        this.interfaceId = Raw.registerInterface(this.joltInterface);
+
         /* get interfaces */
 
         this.physicsSystem = this.joltInterface.GetPhysicsSystem();
         this.bodyInterface = this.physicsSystem.GetBodyInterface();
 
         /* cleanup */
+        // NOTE: `settings` is only a shell - the JoltInterface took ownership of the three filter
+        // tables inside it and frees them in its own destructor. Destroying them here (or in
+        // destroy()) is a double free that traps in wasm. Verified against jolt-physics 1.1.0:
+        // free memory returns exactly to baseline after destroying the interface alone.
         jolt.destroy(settings);
         jolt.destroy(BP_LAYER_NON_MOVING);
         jolt.destroy(BP_LAYER_MOVING);
@@ -206,35 +322,121 @@ export class PhysicsSystem {
         this.bodySystem.debug = this._debug;
     }
 
-    destroy(pid = '0'): void {
-        // console.log('Request to destroy PhysicsSystem', pid);
-        // Drop every subscription first: nothing should be dispatched into user code once the
-        // world is on its way out.
-        this.events.clear();
-        this.legacyStepSubs.clear();
-        this.bodySystem.clearEvents();
-        // When `maxInterfaces` is exceeded the constructor reuses somebody else's JoltInterface
-        // rather than making one. Such a world does not own it, and must not free the listeners
-        // installed on it either - another PhysicsSystem is still stepping it.
-        const owned = Raw.joltInterfaces.get(pid) === this.joltInterface;
-        if (owned) {
-            // The JoltInterface goes FIRST. Jolt's PhysicsSystem holds raw pointers to the
-            // contact and activation listeners, so freeing an installed listener before the
-            // interface is a use after free on the next step.
+    //* Disposables ===================================
+    /**
+     * Objects whose lifetime is this world's. Held weakly in spirit (a controller unregisters
+     * itself in its own `destroy()`), and torn down first by {@link destroy}.
+     */
+    private disposables = new Set<Disposable>();
+
+    /**
+     * Tie something to this world's lifetime. `destroy()` will call it - before the world is
+     * freed, so it can still remove its bodies and constraints - and anything registered is
+     * torn down exactly once.
+     *
+     * Registering is *not* a substitute for the owner's own cleanup: a `<CharacterController>`
+     * that unmounts on its own still destroys its controller, which unregisters it here. This
+     * is the safety net for everything still alive when the whole world goes away.
+     *
+     * @returns an unregister function. Call it from your own `destroy()`.
+     */
+    registerDisposable(disposable: Disposable): () => void {
+        if (this.destroyed) return () => {};
+        this.disposables.add(disposable);
+        return () => {
+            this.disposables.delete(disposable);
+        };
+    }
+
+    /** How many disposables are registered. Test hook. */
+    get disposableCount(): number {
+        return this.disposables.size;
+    }
+
+    // Set while `destroy()` is walking the world. `destroyed` cannot be used for this: every
+    // wasm-facing method keys off it to become a no-op, and the teardown below has to be able
+    // to call those methods for real.
+    private destroying = false;
+
+    /**
+     * Free everything this world owns, in dependency order, and mark it {@link destroyed}.
+     *
+     * Idempotent: a second call (StrictMode, an explicit `destroy()` plus an unmount, a child
+     * that tears itself down afterwards) does nothing.
+     *
+     * The order matters, top to bottom:
+     *  1. stop stepping, so nothing below runs against a half torn down world;
+     *  2. registered disposables - controllers, rigs, vehicles - while the world is still live,
+     *     so each can remove its own bodies, constraints and listeners normally;
+     *  3. constraints, because Jolt dereferences *both* bodies while detaching a constraint, so
+     *     every constraint has to go before any body does (issue #82);
+     *  4. bodies, which frees the per-body CollisionGroups and closes open contact pairs;
+     *  5. event subscriptions, so nothing is dispatched into user code from here on;
+     *  6. the JoltInterface, which takes the Jolt PhysicsSystem, the broadphase/object layer
+     *     filter tables, the temp allocator and the job system with it;
+     *  7. only now the `ContactListenerJS` / `BodyActivationListenerJS` objects, via
+     *     `bodySystem.destroy()` - Jolt's PhysicsSystem holds raw pointers to them, so freeing
+     *     an installed listener before the interface is a use after free on the next step;
+     *  8. the shared scratch vectors, but only when this was the last world on the module.
+     *
+     * @param _pid ignored. Kept so `destroy(pid)` written against the old API still compiles.
+     */
+    destroy(_pid?: string): void {
+        if (this.destroyed || this.destroying) return;
+        this.destroying = true;
+        try {
+            // 1. time stops here
+            this.paused = true;
+            this.resetAccumulator();
+
+            // 2. anything that registered itself against this world
+            for (const disposable of [...this.disposables]) {
+                this.disposables.delete(disposable);
+                try {
+                    if (typeof disposable === 'function') disposable();
+                    else disposable.destroy();
+                } catch (error) {
+                    // one broken disposable must not strand the rest of the teardown
+                    console.error('r3/jolt: a registered disposable threw during destroy', error);
+                }
+            }
+            this.disposables.clear();
+
+            // 3. constraints before bodies
+            this.constraintSystem.removeAllConstraints();
+
+            // 4. every body, including ones handed to `addExistingBody`
+            this.bodySystem.removeAllBodies();
+
+            // 5. no more dispatching into user code
+            this.events.clear();
+            this.legacyStepSubs.clear();
+            this.bodySystem.clearEvents();
+
+            // 6. the world itself
             Raw.module.destroy(this.joltInterface);
-            Raw.joltInterfaces.delete(pid);
-            // console.log('*** PhysicsSystem:' + pid + ' destroyed ***');
+            Raw.releaseInterface(this.interfaceId);
+            this.interfaceId = -1;
+
+            // 7. ...and only now the listener objects it was pointing at, plus the rest of the
+            // BodySystem's own heap allocations (the ref counted GroupFilterTable - issue #95).
+            this.bodySystem.destroy(true);
+        } finally {
+            this.destroying = false;
+            this.destroyed = true;
         }
-        // ...and only now the listener objects it was pointing at, plus the body maps. Every
-        // body, constraint and shape went with the interface, but the BodySystem also owns plain
-        // heap allocations the interface knows nothing about (per-body CollisionGroups, the ref
-        // counted GroupFilterTable - issue #95), and those go here too. Idempotent, so a second
-        // destroy() of this system is still a no-op.
-        this.bodySystem.destroy(owned);
-        this.destroyed = true;
+
+        // 8. The scratch vectors are shared by every world on this module, so they only go when
+        // the last one does. The next accessor call rebuilds them if a world appears again.
+        if (Raw.interfaceCount === 0) joltScratch.release();
+
+        if (this._debug) console.log(`*** PhysicsSystem "${this.label}" destroyed ***`);
     }
     // TODO: Loops and steps seems messy
     onUpdate(delta: number): void {
+        // A frame callback can outlive the world by one tick (r3f's loop, an independent rAF):
+        // stepping a freed JoltInterface traps in wasm, so this check is not optional.
+        if (this.destroyed || this.destroying) return;
         if (this.paused) return;
         // Frame deltas are not always sane: a clock reset (r3f's scheduler does this when the
         // loop restarts) can hand us a negative one, and a dropped frame can hand us NaN. Either
@@ -439,21 +641,33 @@ export class PhysicsSystem {
     }
 
     //* Raycasters ===================================
+    // Every factory below allocates WASM filters against this world's JoltInterface, so none of
+    // them may run once it has been freed. The caller owns what it gets back and must `destroy()`
+    // it (the hooks do); `registerDisposable` is there for anything longer lived.
+    private assertAlive(what: string): void {
+        if (this.destroyed)
+            throw new Error(`r3/jolt: ${what} on a destroyed PhysicsSystem ("${this.label}")`);
+    }
     getRaycaster() {
+        this.assertAlive('getRaycaster()');
         return new Raycaster(this.physicsSystem, this.joltInterface);
     }
     getAdvancedRaycaster() {
+        this.assertAlive('getAdvancedRaycaster()');
         return new AdvancedRaycaster(this.physicsSystem, this.joltInterface);
     }
     getMulticaster() {
+        this.assertAlive('getMulticaster()');
         return new Multicaster(this.physicsSystem, this.joltInterface);
     }
     // -- Shapecaster
     getShapecaster() {
+        this.assertAlive('getShapecaster()');
         return new Shapecaster(this.physicsSystem, this.joltInterface);
     }
     //* Colliders ===================================
     getShapeCollider() {
+        this.assertAlive('getShapeCollider()');
         return new ShapeCollider(this.physicsSystem, this.joltInterface);
     }
 
@@ -463,6 +677,9 @@ export class PhysicsSystem {
      * (`9.81` -> `[0, -9.81, 0]`); a tuple, THREE.Vector3 or Jolt vector is used as-is.
      */
     setGravity(gravity: number | anyVec3): void {
+        // `<Physics gravity=...>`'s effect can fire after the world has gone (a prop change in
+        // the same commit that unmounts it), and SetGravity on a freed PhysicsSystem traps.
+        if (this.destroyed) return;
         // `SetGravity` takes a Vec3Arg and copies it. This used to allocate two WASM vectors per
         // call (a `new Vec3` and the one `vec3.jolt` made of it) and destroy neither; it runs
         // from a useEffect on every `gravity` prop change, so use the shared scratch vector.

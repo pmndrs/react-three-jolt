@@ -191,7 +191,13 @@ export class CharacterControllerSystem {
         // to `addPreStepListener`, which `removeStepListener` could never match by identity, so
         // a destroyed character carried on being pre-stepped against a freed CharacterVirtual.
         this.detachFromLoop = this.physicsSystem.onBeforeStep(this.handlePreStep);
+        // so a world that is torn down takes the controller (and its anchor body) with it,
+        // even when nothing unmounted the component that made it (issue #162)
+        this.unregisterFromWorld = this.physicsSystem.registerDisposable(this);
     }
+
+    /** Drops this controller from the physics system's disposables. Replaced in the constructor. */
+    private unregisterFromWorld: () => void = () => {};
     /** Unsubscribes the pre-step callback. Replaced in the constructor. */
     private detachFromLoop: () => void = () => {};
 
@@ -203,6 +209,7 @@ export class CharacterControllerSystem {
     destroy() {
         if (this.destroyed) return;
         this.destroyed = true;
+        this.unregisterFromWorld();
 
         // stop being stepped before anything is freed: everything below is memory the step reads
         this.detachFromLoop();

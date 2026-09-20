@@ -36,7 +36,12 @@ export class VehicleSystem {
     constructor(physicSystem: PhysicsSystem) {
         this.physicsSystem = physicSystem;
         this.attachToLoop();
+        // so a world that is torn down takes every vehicle with it (issue #162)
+        this.unregisterFromWorld = physicSystem.registerDisposable(this);
     }
+
+    /** Drops this system from the physics system's disposables. Replaced in the constructor. */
+    private unregisterFromWorld: () => void = () => {};
 
     /**
      * Detach from the loop and destroy every vehicle this system created (issue #140).
@@ -45,6 +50,7 @@ export class VehicleSystem {
     destroy() {
         if (this.destroyed) return;
         this.destroyed = true;
+        this.unregisterFromWorld();
         this.detachFromLoop();
         this.vehicles.forEach((vehicle) => vehicle.destroy());
         this.vehicles.clear();

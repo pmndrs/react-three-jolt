@@ -38,6 +38,7 @@ export class Shapecaster {
     activeRotation = new THREE.Quaternion();
     activeDirection = new THREE.Vector3();
     activeScale = new THREE.Vector3(1, 1, 1);
+    /** Default cast shape, owned by this caster: see the AddRef in the constructor. */
     activeShape: Jolt.Shape = new Raw.module.SphereShape(0.5);
 
     //important
@@ -93,11 +94,15 @@ export class Shapecaster {
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         this.joltPhysicsSystem = joltPhysicsSystem;
         this.joltInterface = joltInterface;
-        // `activeShape` is a Jolt reference counted object (RefTarget) and starts life with a
-        // refcount of 0 (see the jolt-physics README's "Reference counting objects" section).
-        // AddRef() here means the `shape` setter/destroy() below can always treat `activeShape`
-        // uniformly with Release(), regardless of whether it's this default shape or one a caller
-        // handed us. Mirrors `ShapeCollider` (#174/issue #142).
+        // `activeShape` is a Jolt reference counted object (RefTarget) and `new SphereShape(...)`
+        // starts it at zero references (see the jolt-physics README's "Reference counting
+        // objects" section). `RShapeCast` stores a *raw* pointer to it - verified against
+        // jolt-physics 1.1.0: the sphere's refcount is still 0 after the cast is constructed,
+        // and its 40 bytes are still allocated after the cast is destroyed - so nothing else
+        // will ever free it (the leak flagged on issue #162). AddRef() here also means the
+        // `shape` setter/destroy() below can treat `activeShape` uniformly with Release(),
+        // whether it is this default shape or one a caller handed us. Mirrors `ShapeCollider`
+        // (#174/issue #142).
         this.activeShape.AddRef();
         // these two filters mean the ray will cast as if its a dynamic object
         this.bpFilter = new Raw.module.DefaultBroadPhaseLayerFilter(
@@ -137,6 +142,11 @@ export class Shapecaster {
         Raw.module.destroy(this.shapeFilter);
         Raw.module.destroy(this.collector);
         Raw.module.destroy(this.baseOffset);
+        // give back the reference the constructor took; the shapecast that pointed at it is gone
+        if (this.activeShape) {
+            this.activeShape.Release();
+            this.activeShape = null as unknown as Jolt.Shape;
+        }
     }
 
     // Dispose every pooled debug-drawing geometry/material and forget the pooled objects so a
