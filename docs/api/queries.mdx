@@ -1,0 +1,248 @@
+---
+title: Queries
+description: Raycasting, shapecasting and collide-shape overlap tests, and who owns what.
+nav: 5
+---
+
+Four query objects, all created from the physics system and all following the same shape: set up
+a caster, `cast()` it, read hits.
+
+| | what it answers |
+| --- | --- |
+| [`Raycaster`](#raycasting) | what does this ray hit |
+| [`Multicaster`](#multicaster) | what do these *many* rays hit, in one call |
+| [`AdvancedRaycaster`](#advancedraycaster) | same, with your own per-body / per-hit filtering |
+| [`Shapecaster`](#shapecasting) | what does this *shape* hit as it sweeps along a direction |
+| [`ShapeCollider`](#shapecollider) | what is this shape overlapping *right now* (Jolt's `CollideShape`) |
+
+> [!CAUTION]
+> **Every query object owns Jolt (WASM) memory and must be destroyed.** The `useRaycaster` /
+> `useMulticaster` hooks do it for you on unmount. Anything you get from `physicsSystem.get*()`
+> yourself is yours to `destroy()` — see [Lifetime](#lifetime).
+
+## Raycasting
+
+```tsx
+import { Raycaster, RaycastHit, useRaycaster } from '@react-three/jolt';
+import { useEffect } from 'react';
+
+export function Laser() {
+    const raycaster: Raycaster = useRaycaster([0, 5, 0], [0, -10, 0]);
+
+    useEffect(() => {
+        raycaster.cast(
+            (hit: RaycastHit) => {
+                console.log(hit.position, hit.distance, hit.impactNormal, hit.bodyHandle);
+            },
+            () => console.log('no hit')
+        );
+    }, [raycaster]);
+
+    return null;
+}
+```
+
+`useRaycaster(origin?, direction?, type?)` creates a caster, applies the arguments, and destroys
+it when the component unmounts. **`direction` is not normalised** — its length is the length of
+the ray, exactly like `THREE.Raycaster`'s `far`.
+
+### Casting
+
+| call | |
+| --- | --- |
+| `cast(onHit?, onMiss?)` | cast with the current `origin`/`direction` |
+| `castFrom(origin, onHit?, onMiss?)` | move the origin, keep the direction |
+| `castTo(destination, onHit?, onMiss?)` | keep the origin, aim at a point |
+| `castBetween(origin, destination, onHit?, onMiss?)` | both |
+| `set(origin, direction)` | just update, don't cast |
+
+`cast()` also *returns* the hit (or the array of hits in `'all'` mode), so the handlers are
+optional.
+
+### Collectors
+
+`setCollector(type)`, or the third argument to `useRaycaster`, chooses what Jolt collects:
+
+| type | |
+| --- | --- |
+| `'closest'` | the nearest hit (default) |
+| `'any'` | the first hit found — cheapest, use for line-of-sight tests |
+| `'all'` | every hit along the ray; `hits` is the full array |
+
+`cullBackFaces` (default `true`) skips triangles facing away from the ray.
+
+### `RaycastHit`
+
+| member | |
+| --- | --- |
+| `position` | world-space hit point (`THREE.Vector3`) |
+| `start` / `end` | the ray, as cast |
+| `distance` | from `start` to `position` |
+| `normal` / `direction` | the ray's own normalised direction |
+| `impactNormal` | the **surface** normal at the hit — this is the one you usually want |
+| `bodyHandle` | pass to `bodySystem.getBody()` |
+| `shapeIdValue` | sub-shape id within a compound |
+| `index` | position in the hit list |
+
+### Multicaster
+
+One raycaster, many origins or many origin/destination pairs — sweeps, foot probes, spread
+patterns:
+
+```tsx
+import { useMulticaster } from '@react-three/jolt';
+import { useEffect } from 'react';
+import * as THREE from 'three';
+
+export function Sweep() {
+    const multicaster = useMulticaster();
+
+    useEffect(() => {
+        multicaster.positions = [new THREE.Vector3(-5, 5, 0), new THREE.Vector3(5, 5, 0)];
+        multicaster.direction = new THREE.Vector3(0, -10, 0);
+        multicaster.cast();
+    }, [multicaster]);
+
+    return null;
+}
+```
+
+`cast()` walks `positions` with the shared direction; `castRays()` walks `rays`
+(`{ origin, destination }[]`). Both fill `hits` (flat) and `results` (grouped per ray), and both
+clear them first.
+
+### AdvancedRaycaster
+
+`useAdvancedRaycaster()` exposes Jolt's collector callbacks so you can filter or bail out during
+the cast:
+
+```ts
+const caster = useAdvancedRaycaster();
+caster.onBody((body, collector) => { /* inspect each body the ray reaches */ });
+caster.addHit((result) => { /* return true to stop the cast early */ });
+```
+
+The callbacks hand you **raw Jolt objects** the collector owns. Read what you need and return —
+do not keep them, and never `destroy()` them.
+
+## Shapecasting
+
+A shapecast sweeps a whole shape along a direction — "will this capsule fit through there", a
+thick ground probe, a camera collision test. There is no hook yet; take one from the physics
+system and destroy it yourself.
+
+```tsx
+import { Shapecaster, ShapecastHit, useJolt, useUnmount } from '@react-three/jolt';
+import { useEffect } from 'react';
+import * as THREE from 'three';
+
+export function GroundProbe() {
+    const { physicsSystem } = useJolt();
+    const shapecaster: Shapecaster = physicsSystem.getShapecaster();
+
+    useUnmount(() => shapecaster.destroy());
+
+    useEffect(() => {
+        shapecaster.origin = new THREE.Vector3(0, 5, 0);
+        shapecaster.direction = new THREE.Vector3(0, -6, 0);
+        shapecaster.cast((hit: ShapecastHit) => {
+            console.log(hit.position, hit.distance, hit.bodyHandle);
+        });
+    }, [shapecaster]);
+
+    return null;
+}
+```
+
+It casts a 0.5-radius sphere by default. `shape` takes any `Jolt.Shape` (build one with
+[`createShapeFromSettings`](/api/shapes#building-shapes-yourself)); `origin`, `rotation`, `scale`
+and `direction` accept three.js values and rebuild the underlying cast for you.
+`ignoreBackfaceTriangles` and `ignoreBackfaceConvex` (both `true`) control back-face handling,
+and `setCollector('closest' | 'any' | 'all')` works as it does for rays.
+
+`ShapecastHit` carries `position`, `start`, `end`, `distance`, `normal`/`direction`,
+`impactNormal`, `bodyHandle`, `shapeIdValue` and `index` — the same surface as `RaycastHit`.
+
+## ShapeCollider
+
+`CollideShape` asks a different question: not "what will I hit if I move", but "what am I
+overlapping right now, and by how much". This is what you want for triggers, spawn checks and
+push-out resolution.
+
+```tsx
+import { ShapeCollider, useJolt, useUnmount } from '@react-three/jolt';
+import { useEffect } from 'react';
+import * as THREE from 'three';
+
+export function Overlap() {
+    const { physicsSystem } = useJolt();
+    const collider: ShapeCollider = physicsSystem.getShapeCollider();
+
+    useUnmount(() => collider.destroy());
+
+    useEffect(() => {
+        collider.position = new THREE.Vector3(0, 1, 0);
+        collider.setCollector('all');
+        collider.cast((hits: typeof collider.hits) => {
+            hits.forEach((hit) => console.log(hit.penetrationDepth, hit.contactNormal));
+        });
+    }, [collider]);
+
+    return null;
+}
+```
+
+Set `position`, `rotation` or `matrix` and the world transform is rebuilt **in place** — no
+allocation per frame, which is what makes it safe to drive from `useFrame` (the camera rig does).
+
+### `CollisionResult`
+
+| member | |
+| --- | --- |
+| `contactPointOn1` / `contactPointOn2` | world-space contact points |
+| `penetrationAxis` | the raw Jolt axis (not normalised) |
+| `contactNormal` | `penetrationAxis`, normalised |
+| `penetrationDepth` | how deep the overlap is |
+| `bodyHandle` | the other body |
+| `shapeMatrix` | the transform the query was run with |
+| `subShapeId1` / `subShapeId2` | **raw `Jolt.SubShapeID` objects owned by the collector** — read `.GetValue()`, never destroy |
+
+## Debugging
+
+Casters draw themselves when you ask — they deliberately ignore `<Physics debug>`, because a
+caster can fire thousands of times a second.
+
+```ts
+raycaster.initDebugging(scene);   // adds a debug object to the scene
+raycaster.drawPoints = true;      // start/hit/end points
+raycaster.drawMarkers = true;     // markers at each hit
+raycaster.lineColor = '#68D8D6';
+raycaster.stopDebugging();
+```
+
+Raycasters, shapecasters and the multicaster's inner raycaster all share this API.
+
+## Lifetime
+
+Every caster allocates Jolt filters, a collector and settings objects on the WASM heap. They are
+freed only by `destroy()`.
+
+- `useRaycaster()` and `useMulticaster()` destroy theirs on unmount.
+- `useAdvancedRaycaster()` currently does **not** — call `destroy()` yourself.
+- Anything from `physicsSystem.getShapecaster()` / `getShapeCollider()` / `getRaycaster()` is
+  yours: pair it with `useUnmount(() => caster.destroy())`.
+- `destroy()` is idempotent on `ShapeCollider`; don't rely on that for the others.
+
+### Objects Jolt hands you
+
+Some query surfaces give you real Jolt objects: `AdvancedRaycaster`'s collector callbacks,
+`CollisionResult.subShapeId1/2`, `BodyState.body`, anything reached through `useJolt().jolt`.
+
+> [!CAUTION]
+> **Never `destroy()` an object you did not create.** Jolt's Emscripten binding returns
+> by-value results as a pointer to *one shared static temporary per function* — freeing it hands
+> memory the binder still owns back to the allocator, which reuses it immediately, and the crash
+> surfaces somewhere else entirely. The same goes for references into a collector's storage.
+> Copy what you need out (`vec3.three(v)`, `id.GetValue()`) and let go.
+
+Full rules in [Memory & lifecycle](/advanced/memory).

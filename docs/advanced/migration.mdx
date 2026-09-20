@@ -1,0 +1,159 @@
+---
+title: Migration
+description: Upgrading from the pre-2026 builds of @react-three/jolt.
+nav: 11
+---
+
+The 2026 refresh moves the whole stack forward — React 19, react-three-fiber 10, three 0.186 and
+jolt-physics 1.1 — and fixes a long list of memory and lifecycle bugs along the way. This page
+is what changes for you.
+
+> [!NOTE]
+> The library is still alpha and was never widely published, so this is a "how the code differs"
+> guide rather than a formal breaking-change list. If something you used isn't mentioned, it
+> probably didn't change.
+
+## 1. Peer dependencies
+
+All three packages now require:
+
+| package | before | now |
+| --- | --- | --- |
+| `react` / `react-dom` | 18.2 | `>=19.0 <19.3` (use `19.2.x`; `19.3` is outside r3f 10's range) |
+| `@react-three/fiber` | 8.16 | `>=10.0.0-0` |
+| `three` | 0.163, undeclared | `>=0.185`, now a declared peer |
+| `@react-three/drei` | undeclared | `>=11.0.0-0`, now a **required** peer |
+| `jolt-physics` | `^0.22.0`, a dependency | `>=1.1.0`, now a **peer** |
+| node | — | `>=22` |
+
+Two of those need action even if your code doesn't change:
+
+- **`jolt-physics` is a peer now.** It is no longer installed for you — add it to your app. In
+  exchange you get to pick the [build variant](/getting-started/installation#choosing-a-jolt-build),
+  and you can no longer end up with two copies of the WASM module in one bundle.
+- **`drei` is a peer now** (it was always imported by `<Heightfield>`, just never declared).
+  Install it, or `@react-three/jolt` won't resolve.
+
+React 19 and r3f 10 have their own migration notes; if you are coming from r3f 8 you are making
+two major jumps at once.
+
+## 2. jolt-physics 0.22 → 1.1.0
+
+Two years of engine changes (Jolt C++ v5.6). What surfaces in this library's API:
+
+- **World-space positions are `Jolt.RVec3`.** `BodyState.getPosition(true)` returns an `RVec3`
+  rather than a `Vec3`. In the single-precision builds the two are interchangeable at runtime,
+  but not in the types.
+- **`vec3.rjolt()` is new** — the `RVec3` counterpart of `vec3.jolt()`. Use it wherever you feed
+  a position back into Jolt.
+- **`generateJoltMatrix()` returns an `RMat44`**, which is what `CollideShape` and `RShapeCast`
+  take. It also returns a real copy now instead of the binder's shared static temporary — the
+  old value was silently rewritten by the next caller, and destroying it freed memory Jolt owned.
+- **`Shapecaster.shapecast` is a `Jolt.RShapeCast`.**
+
+If you call Jolt directly, note two upstream changes that bit this library:
+`BodyInterface.AddForce`/`AddTorque` gained an `EActivation` parameter (0.24), and body user data
+went from 64-bit to 32-bit (0.39).
+
+## 3. Removed
+
+| gone | instead |
+| --- | --- |
+| `heightField/heightfieldManager.ts` and its worker scaffold | — (never referenced) |
+| `heightField/generators-save.ts`, `utils/heightmap.ts`, `utils/psrddnoise3.ts` | — |
+| the `camera-controls`-based camera rig (`camera-rig-system-camera-controls.ts`) | the default [`CameraRigManager`](/api/controllers#camerarig) |
+| `use-character-controller.ts` (empty), `tmp.ts` | — |
+| the `camera-controls` runtime dependency of `@react-three/jolt-controllers` | — |
+| `apps/examples/src/jolt/` (vendored Jolt builds, ~1 GB) | the `jolt-physics` package |
+
+`createMeshForShape` and `createMeshFromShape` were byte-identical copies; there is now one
+implementation and **both names still work**.
+
+## 4. Behaviour changes
+
+### `<Physics>`
+
+- **`interpolate` now actually interpolates.** It was declared but commented out of the
+  destructure, so it never reached the physics system; with it wired up, bodies are drawn between
+  the last two steps. The frame loop no longer allocates.
+- **`timeStep` is a new prop** — the `"vary"` code path was unreachable from React before.
+- **`maxSubSteps` is new, and the accumulator is now bounded.** Simulation time beyond
+  `maxSubSteps * timeStep` is dropped (with a warning under `setDebug(true)`) instead of queued,
+  which is what used to turn one long frame into a spiral of death. Negative and `NaN` frame
+  deltas are dropped too.
+- **`defaultShape` is new** — the Jolt answer to rapier's `colliders`.
+- `updatePriority` is typed `number` instead of `any`.
+
+### Constraints
+
+`ConstraintSystem.removeConstraint()` was an empty function with its body commented out — and it
+is `useConstraint`'s entire cleanup path, so every constraint ever created leaked and stayed in
+the world. It works now, which means **constraints actually disappear when your component
+unmounts**. If you worked around the old behaviour by not removing bodies, you can stop.
+
+Also: `addConstraint`/`useConstraint`/the options object are typed now (`ConstraintType`,
+`ConstraintOptions`, `ConstraintTypeMap`), hinge motors call the methods that exist
+(`SetTargetAngularVelocity`/`SetTargetAngle`), `createMotorSettings()` no longer throws a
+`ReferenceError`, and `useConstraint` re-creates its constraint when the type, bodies or option
+values change. New: `constraintSystem.constraints`, `removeConstraintsForBody()`,
+`removeAllConstraints()`.
+
+### Queries
+
+- A `Raycaster` in the default `'closest'` mode never reset its collector between casts, so every
+  cast after the first returned the **first** hit. Fixed — if your code compensated for stale
+  hits, remove the workaround.
+- `AdvancedRaycaster` used to throw `"a JSImplementation must implement all functions"` on its
+  first cast. Fixed.
+- `Multicaster` gained `destroy()` (it leaked its raycaster) and now clears `results` between
+  casts instead of growing forever.
+- `ShapeCollider.destroy()` was a no-op; it now frees everything it owns and is idempotent.
+  Setting `position`/`rotation`/`matrix` no longer allocates a transform per call.
+
+### Input (`@react-three/jolt-addons`)
+
+- **`useCommand` tears itself down.** The commander was a module-level singleton that attached
+  four `window` listeners and a gamepad poll on first use and never released them. It is
+  reference counted now, commands register in an effect rather than during render, and
+  everything is removed on unmount.
+- **`CommandInfo` is a real exported type.** Callbacks were declared as
+  `(info: CommandCallback) => void`, so `info` was typed as the callback itself and every
+  `info.isInitial` needed a `@ts-ignore`. **Delete those.**
+- `Command.setOptions` indexed by value (`setOptions({ sensitivity: 2 })` wrote `command[2]`);
+  fixed.
+- `VectorCommand` mutated the shared preset when given `bindings`, leaking bindings into every
+  other command using that preset; fixed.
+- `useLookCommand` removes its `mouseout` listener and reads state through refs.
+- **New:** `<CommanderProvider>` / `CommanderContext` to scope a commander to a subtree.
+
+### Memory
+
+The conversion helpers changed contract: `vec3.jolt()`, `vec3.rjolt()` and `quat.jolt()` used to
+return **their argument** when it was already a Jolt object, so the call sites that destroyed the
+result were freeing memory Jolt still owned. They now always return a new object the caller owns.
+
+If you wrote code against the old behaviour — passing a Jolt vector in and *not* freeing the
+result because it was the same object — you are now leaking one object per call. Review those
+call sites.
+
+Also fixed along the way: `vec3.jolt(0, 1, 2)` no longer reads a zero first component as "no
+argument"; `quat.jolt(undefined)` returns identity instead of throwing; the shape system no
+longer leaks one WASM object per vertex/triangle; `RaycastHit`/`ShapecastHit.impactNormal` no
+longer leak a `BodyID`, `SubShapeID` and `RVec3` per read.
+
+**New helpers:** `withJolt()` / `withRJolt()` / `withQuat()`, `joltScratch`,
+`createShapeFromSettings()` / `releaseShape()`, `setDebug()`, `PhysicsSystem.destroyed`, and the
+allocation-free `BodyState.readPose()` / `getInterpolatedPose()` / `resetPoseCache()`. See
+[Memory & lifecycle](/advanced/memory).
+
+### Logging
+
+~17 unconditional `console.log` calls are gone, and the remaining warnings are gated behind
+`setDebug(true)` (off by default). If you relied on the library's console output, opt back in.
+
+## 5. Packaging
+
+All three packages declare `"sideEffects": false`, ship `exports` maps with a `./package.json`
+entry and a `default` fallback, keep `main`/`module`/`types` for older resolvers, and externalise
+their real dependencies properly (`gamepad.js` and `suspend-react` used to be silently inlined
+into `dist`).

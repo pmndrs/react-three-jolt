@@ -1,0 +1,206 @@
+---
+title: Installation
+description: Install @react-three/jolt and its peers, and get the WASM module through your bundler.
+nav: 1
+---
+
+```bash
+npm install @react-three/jolt jolt-physics
+```
+
+`@react-three/jolt` ships three packages. The core one is all you need to start; the other two
+are optional:
+
+```bash
+npm install @react-three/jolt-addons        # input commands, helper components
+npm install @react-three/jolt-controllers   # character controller, camera rig, vehicles
+```
+
+## Peer dependencies
+
+Nothing here is bundled — every one of these has to exist in your app, at these ranges:
+
+| package | range | why |
+| --- | --- | --- |
+| `react`, `react-dom` | `>=19.0 <19.3` | the range `@react-three/fiber` 10 accepts. `react@19.3` is **outside** it; use `19.2.x`. |
+| `@react-three/fiber` | `>=10.0.0-0` | currently `10.0.0-alpha.5` |
+| `@react-three/drei` | `>=11.0.0-0` | currently `11.0.0-alpha.7`; used by [`<Heightfield>`](/api/shapes#heightfields) |
+| `three` | `>=0.185` | |
+| `jolt-physics` | `>=1.1.0` | the engine itself |
+
+```bash
+npm install react@19.2.8 react-dom@19.2.8 \
+  three@^0.186.0 \
+  @react-three/fiber@10.0.0-alpha.5 \
+  @react-three/drei@11.0.0-alpha.7 \
+  jolt-physics@^1.1.0 \
+  @react-three/jolt
+```
+
+> [!NOTE]
+> `jolt-physics` is a **peer**, not a dependency, on purpose: it keeps a second copy of a
+> multi-megabyte WASM module out of your bundle, and it lets you choose the
+> [build variant](#choosing-a-jolt-build) yourself.
+
+## Your first scene
+
+```tsx
+import { Canvas } from '@react-three/fiber';
+import { Physics, RigidBody } from '@react-three/jolt';
+import { Suspense } from 'react';
+
+export function App() {
+    return (
+        <Canvas shadows camera={{ position: [0, 5, 12] }}>
+            <Suspense fallback={null}>
+                <Physics gravity={[0, -9.81, 0]}>
+                    <RigidBody position={[0, 8, 0]}>
+                        <mesh castShadow>
+                            <boxGeometry args={[1, 1, 1]} />
+                            <meshStandardMaterial color="hotpink" />
+                        </mesh>
+                    </RigidBody>
+                    <RigidBody type="static" position={[0, -1, 0]}>
+                        <mesh receiveShadow>
+                            <boxGeometry args={[20, 1, 20]} />
+                            <meshStandardMaterial color="#444" />
+                        </mesh>
+                    </RigidBody>
+                </Physics>
+            </Suspense>
+            <directionalLight castShadow position={[5, 10, 5]} />
+            <ambientLight intensity={0.4} />
+        </Canvas>
+    );
+}
+```
+
+`<Physics>` suspends while the WASM module loads, so it needs a `<Suspense>` boundary above it —
+see [SSR & Suspense](/advanced/ssr-and-suspense) for the details and the failure modes.
+
+## Bundlers
+
+By default the library imports `jolt-physics`, whose main entry is the **`wasm-compat`** build:
+the WASM binary is base64-encoded inside the JavaScript, so there is no second file to serve and
+no asset URL to configure. That is why most setups need nothing at all.
+
+### Vite
+
+Works out of the box.
+
+### Next.js with Turbopack
+
+Works out of the box with the default bundler, in both `next dev` and `next build`, App Router
+included. Remember that a `<Canvas>` is client-only:
+
+```tsx
+'use client';
+
+import { Canvas } from '@react-three/fiber';
+import { Physics } from '@react-three/jolt';
+```
+
+See [SSR & Suspense](/advanced/ssr-and-suspense) for the full server-rendering story.
+
+### The webpack workaround
+
+> [!WARNING]
+> Only needed on the **legacy webpack bundler** (`next dev --webpack` / `next build --webpack`).
+> Turbopack, the default since Next 16, does not need any of this.
+
+`jolt-physics` does a Node-only `await import("node:module")` that webpack still tries to resolve
+statically for the browser target, which fails the build with:
+
+```
+UnhandledSchemeError: Reading from "node:module" is not handled by plugins (Unhandled scheme).
+Import trace: node:module → ./node_modules/jolt-physics/dist/jolt-physics.wasm-compat.js
+```
+
+Rewrite the `node:` scheme away and stub the Node builtins for the browser bundle
+(`next.config.ts`):
+
+```ts
+import type { NextConfig } from 'next';
+
+const nextConfig: NextConfig = {
+    webpack: (config, { isServer, webpack }) => {
+        if (!isServer) {
+            config.plugins.push(
+                new webpack.NormalModuleReplacementPlugin(/^node:/, (resource: { request: string }) => {
+                    resource.request = resource.request.replace(/^node:/, '');
+                })
+            );
+            config.resolve.fallback = {
+                ...config.resolve.fallback,
+                module: false,
+                fs: false,
+                path: false,
+                url: false
+            };
+        }
+        return config;
+    }
+};
+
+export default nextConfig;
+```
+
+No `experiments.asyncWebAssembly` flag is needed: the `.wasm` is never imported as a module, it
+is decoded at runtime. ([#111](https://github.com/pmndrs/react-three-jolt/issues/111))
+
+## Choosing a Jolt build
+
+`jolt-physics` ships several flavours. Pass an initializer to `<Physics module>` to use one other
+than the default:
+
+| entry point | what it is |
+| --- | --- |
+| `jolt-physics` / `jolt-physics/wasm-compat` | **default** — WASM embedded as base64 in the JS bundle |
+| `jolt-physics/wasm` | WASM as a separate `.wasm` file — smaller JS, one more asset to serve |
+| `jolt-physics/debug-wasm-compat` | the same, with Jolt's assertions and debug renderer enabled |
+| `jolt-physics/wasm-multithread` | multi-threaded; needs cross-origin isolation (COOP/COEP headers) |
+| `jolt-physics/wasm-compat-multithread` | multi-threaded, embedded |
+| `jolt-physics/debug-wasm-compat-multithread` | multi-threaded, embedded, debug |
+| `jolt-physics/asm` | asm.js fallback for environments without WASM |
+
+```tsx
+import { Physics } from '@react-three/jolt';
+import InitJolt from 'jolt-physics/wasm';
+
+export function MultithreadedWorld({ children }: { children: React.ReactNode }) {
+    return <Physics module={InitJolt}>{children}</Physics>;
+}
+```
+
+### The `/wasm` recipe
+
+The `wasm` flavour fetches `jolt-physics.wasm.wasm` at runtime, so it has to be able to find it.
+With Vite, import the file as a URL and hand Jolt a `locateFile`:
+
+```tsx
+import { Physics } from '@react-three/jolt';
+import initJolt from 'jolt-physics/wasm';
+import joltWasmUrl from 'jolt-physics/jolt-physics.wasm.wasm?url';
+
+// `module` is called with no arguments, so wrap the initializer to pass options through
+const loadJolt = () => initJolt({ locateFile: () => joltWasmUrl });
+
+export function World({ children }: { children: React.ReactNode }) {
+    return <Physics module={loadJolt}>{children}</Physics>;
+}
+```
+
+> [!IMPORTANT]
+> Define the wrapper **outside** the component (or in a `useConst`/`useMemo`). `<Physics>` keys
+> its `suspend()` cache on the value you pass, so a new function identity every render
+> re-initialises the engine.
+
+Other bundlers have their own asset-URL syntax; the requirement is only that `locateFile`
+returns a URL the browser can fetch. If you would rather not think about it, stay on the default
+`wasm-compat` build.
+
+## Next steps
+
+- [Physics](/api/physics) — the world and its props
+- [RigidBody](/api/rigid-body) — bodies and `BodyState`
+- [Contributing](/advanced/contributing) — running this repo locally

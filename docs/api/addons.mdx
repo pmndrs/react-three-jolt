@@ -1,0 +1,171 @@
+---
+title: Addons
+description: useCommand, useLookCommand and the commander — input mapped to named commands.
+nav: 8
+---
+
+```bash
+npm install @react-three/jolt-addons
+```
+
+The addons package is input handling, plus a couple of helper components. Its centrepiece is the
+**commander**: you bind behaviour to a *command* ("jump", "move"), not to a key, and keyboard,
+mouse and gamepad all feed the same command.
+
+## `useCommand`
+
+```tsx
+import { useCommand } from '@react-three/jolt-addons';
+
+function Player() {
+    useCommand(
+        'jump',
+        (info) => {
+            if (info.isInitial) jump();
+        },
+        () => stopJumping(),
+        { keys: [' '], rate: 0.1 }
+    );
+
+    return null;
+}
+```
+
+`useCommand(commandString, onStart?, onEnd?, options?)` registers the command (if it doesn't
+already exist), subscribes both callbacks, and unsubscribes on unmount. Registration happens in
+an effect, so Strict Mode's double render can't double-register, and the callbacks are read
+through refs — inline arrow functions do not re-subscribe on every render.
+
+Commands with a name in `commonCommands` pick up their bindings automatically:
+`moveForward`, `moveBackward`, `moveLeft`, `moveRight`, `jump`, `crouch`, `run`, `fire`,
+`spaceFire`.
+
+### `CommandInfo`
+
+Every callback receives:
+
+| field | |
+| --- | --- |
+| `command` | the `Command` itself |
+| `label` | its name |
+| `method` | what triggered it (`keydown`, `mouseup`, `update`, …) |
+| `value` | `boolean`, `number` or `{ x, y }` for vector commands |
+| `isInitial` | `true` on the first fire of a press — what you check to avoid key repeat |
+| `startTime`, `duration` | ms |
+| `event` | the original keyboard/mouse/gamepad event, if any |
+
+### `CommandOptions`
+
+| option | |
+| --- | --- |
+| `keys` | `KeyboardEvent.key` values, plus `'Mouse0'`-style mouse buttons |
+| `buttons` | gamepad button indices |
+| `axis` | gamepad axis indices |
+| `rate` | minimum seconds between fires — key-repeat throttling |
+| `isVariable`, `min`, `max`, `threshold`, `deadzone` | analogue handling |
+| `active` | enable/disable without unbinding |
+| `asVector` | make it a `VectorCommand` — `value` becomes `{ x, y }` |
+| `preset` | a named vector preset: `'move'`, `'look'`, `'race'` |
+| `bindings` | overrides merged onto the preset |
+| `inverted` | `{ x?, y? }`, flip an axis |
+
+```tsx
+useCommand(
+    'move',
+    (info) => {
+        const { x, y } = info.value as { x: number; y: number };
+        move(x, y);
+    },
+    () => stop(),
+    { asVector: true, preset: 'move' }
+);
+```
+
+## `useCommandState`
+
+The flattened state of every live command, as a `useSyncExternalStore` snapshot — for HUDs,
+debug overlays and anything that should re-render on input:
+
+```tsx
+const state = useCommandState();
+// state.jump -> boolean, state.move -> { x, y }
+```
+
+For per-frame reading prefer `useCommand`'s callbacks; this one re-renders.
+
+## `useLookCommand`
+
+Pointer look and wheel zoom, with optional pointer lock:
+
+```tsx
+import { useLookCommand } from '@react-three/jolt-addons';
+
+useLookCommand(
+    (look) => rig.moveBoom(look), // THREE.Vector2 of movement deltas
+    (zoom) => rig.zoom(zoom),
+    { lockPointer: true, invert: { y: true } }
+);
+```
+
+| option | default | |
+| --- | --- | --- |
+| `domElement` | `document.body` | where the listeners go |
+| `lockPointer` | `false` | request pointer lock on mouse down |
+| `useAccelerated` | `false` | use the OS pointer acceleration curve while locked |
+| `invert` | — | `{ x?, y? }` |
+
+The look handler fires while the pointer is locked **or** the mouse is held down. Both handlers
+are read through refs, and every listener is removed on unmount.
+
+## `useCommander` and `<CommanderProvider>`
+
+The commander attaches four `window` listeners and a gamepad polling loop. It is **reference
+counted**: the first hook to mount connects it, the last to unmount disconnects it, so a screen
+with no command hooks costs nothing.
+
+By default every hook shares one lazily created commander. `<CommanderProvider>` scopes one to a
+subtree instead — a `<Canvas>`, a `<Physics>` world, one scene of a game:
+
+```tsx
+import { CommanderProvider } from '@react-three/jolt-addons';
+
+<CommanderProvider>
+    <Player />
+    <Hud />
+</CommanderProvider>;
+```
+
+Pass your own instance with `<CommanderProvider commander={myCommander}>` if you want to
+configure it up front. `useCommander()` returns whichever commander applies, for
+`addCommand` / `getCommand` / `addListener` / `removeListener` / `subscribe`.
+
+Environments with no gamepad API (SSR, tests, some browsers) are handled — gamepad input is
+simply skipped.
+
+## `useGamepadForCameraControls`
+
+Drives a drei `CameraControls` instance from a gamepad stick:
+
+```tsx
+import { CameraControls } from '@react-three/drei';
+import { useGamepadForCameraControls } from '@react-three/jolt-addons';
+
+function Rig({ controls }: { controls: CameraControls }) {
+    useGamepadForCameraControls('look', controls, { sensitivity: 0.03 });
+    return null;
+}
+```
+
+## `<Floor>`
+
+A static box floor, because every scene needs one:
+
+```tsx
+import { Floor } from '@react-three/jolt-addons';
+
+<Floor size={40} position={[0, -1, 0]} />;
+```
+
+Takes `size`, `position`, `rotation` and any `<mesh>` props. It is a plain static
+[`<RigidBody>`](/api/rigid-body) underneath — read it if you want a template for your own
+helper component.

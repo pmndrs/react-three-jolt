@@ -1,0 +1,181 @@
+---
+title: SSR & Suspense
+description: How Physics suspends while the WASM module loads, and what to do when it fails.
+nav: 10
+---
+
+`<Physics>` loads a multi-megabyte WebAssembly module before it can do anything. It does that by
+**suspending**: on first render it throws a promise, React shows the nearest `<Suspense>`
+fallback, and it renders again once Jolt is ready. That single fact drives everything on this
+page.
+
+## The `<Suspense>` boundary
+
+```tsx
+import { Canvas } from '@react-three/fiber';
+import { Physics, RigidBody } from '@react-three/jolt';
+import { Suspense } from 'react';
+
+export function Scene() {
+    return (
+        <Canvas>
+            <Suspense fallback={null}>
+                <Physics>
+                    <RigidBody>
+                        <mesh>
+                            <boxGeometry args={[1, 1, 1]} />
+                            <meshStandardMaterial />
+                        </mesh>
+                    </RigidBody>
+                </Physics>
+            </Suspense>
+        </Canvas>
+    );
+}
+```
+
+Things worth knowing:
+
+- **The boundary has to be above `<Physics>`, not inside it.** A `<Suspense>` among the children
+  never sees the throw.
+- **Put anything that should stay visible outside it.** Lights, environment, HUD and the camera
+  belong outside the boundary so they render while physics loads. The example above deliberately
+  keeps only the physical scene inside.
+- **A `null` fallback is fine inside a `<Canvas>`,** but a three.js loading indicator (or drei's
+  `<Html>`/`<Loader>`) is friendlier for a first visit — this is a several-hundred-millisecond
+  wait on a cold cache.
+- **The module is loaded once per page.** Later `<Physics>` mounts (a second world, a remount
+  after a `key` change) resolve from the cache and never suspend again.
+- **After the boundary resolves, `<Physics>` renders `null` for one more render** while it builds
+  its system. Children mount on the render after that, so a child effect never sees a
+  half-built world.
+
+### Preloading
+
+To pay the cost earlier — during a menu, say — warm the cache before the world mounts. The key
+is `['jolt']`, or `['jolt', module]` if you pass a
+[custom build](/getting-started/installation#choosing-a-jolt-build):
+
+```ts
+import { initJolt } from '@react-three/jolt';
+import { preload } from 'suspend-react';
+
+preload(() => initJolt(), ['jolt']);
+```
+
+`suspend-react` is a dependency of `@react-three/jolt`; add it to your own `package.json` if you
+import from it directly.
+
+## Server rendering
+
+Physics is client-only. Not "works badly on the server" — a `<Canvas>` needs a DOM and a
+WebGL context, and Jolt needs WebAssembly and a frame loop.
+
+In the Next.js App Router, mark the file that renders the canvas as a client component:
+
+```tsx
+'use client';
+
+import { Canvas } from '@react-three/fiber';
+import { Physics } from '@react-three/jolt';
+import { Suspense } from 'react';
+
+export function Scene({ children }: { children: React.ReactNode }) {
+    return (
+        <Canvas>
+            <Suspense fallback={null}>
+                <Physics>{children}</Physics>
+            </Suspense>
+        </Canvas>
+    );
+}
+```
+
+That is usually enough: the component is skipped during the server pass and hydrates on the
+client. If your setup does try to render it on the server (or a dependency touches `window` at
+import time), keep it out of the server bundle entirely:
+
+```tsx
+import dynamic from 'next/dynamic';
+
+const Scene = dynamic(() => import('./scene').then((m) => m.Scene), { ssr: false });
+```
+
+> [!NOTE]
+> Nothing in `@react-three/jolt` runs at import time — no `window` access, no module
+> instantiation — so importing it on the server is harmless. It is the rendering that has to be
+> client-side.
+
+See [Installation](/getting-started/installation#bundlers) for the bundler configuration Next.js
+needs (nothing for Turbopack; a small `webpack` shim for the legacy bundler).
+
+## When the WASM module fails to load
+
+A failed fetch, a blocked CDN, an environment without WebAssembly: `initJolt()` rejects, and on
+the next render `<Physics>` **throws that error** instead of a promise. A `<Suspense>` boundary
+does not catch errors — you need an error boundary.
+
+```tsx
+import { Physics } from '@react-three/jolt';
+import { Component, type ErrorInfo, type ReactNode, Suspense } from 'react';
+
+class PhysicsErrorBoundary extends Component<
+    { fallback: ReactNode; children: ReactNode },
+    { failed: boolean }
+> {
+    state = { failed: false };
+
+    static getDerivedStateFromError() {
+        return { failed: true };
+    }
+
+    componentDidCatch(error: Error, info: ErrorInfo) {
+        console.error('jolt failed to load', error, info);
+    }
+
+    render() {
+        return this.state.failed ? this.props.fallback : this.props.children;
+    }
+}
+
+export function SafeWorld({ children }: { children: ReactNode }) {
+    return (
+        <PhysicsErrorBoundary fallback={<StaticScene />}>
+            <Suspense fallback={null}>
+                <Physics>{children}</Physics>
+            </Suspense>
+        </PhysicsErrorBoundary>
+    );
+}
+```
+
+Error boundaries have to be class components; [`react-error-boundary`](https://github.com/bvaughn/react-error-boundary)
+wraps that up if you prefer.
+
+Two properties of the underlying cache matter here:
+
+- **The failure is cached.** Once the load has rejected, every subsequent `<Physics>` throws the
+  same error immediately — remounting alone does not retry.
+- **To retry, clear the cache entry first:**
+
+  ```ts
+  import { clear } from 'suspend-react';
+
+  clear(['jolt']); // then re-mount <Physics>
+  ```
+
+A sensible fallback is a non-physical version of the scene — static meshes, animations, a
+message — rather than a blank canvas.
+
+### Other failure modes
+
+| symptom | cause |
+| --- | --- |
+| Hangs on the fallback forever | the `.wasm` file is 404ing with the `wasm` build. Check your `locateFile` — or use the default `wasm-compat` build, which has no separate file |
+| `UnhandledSchemeError: node:module` at build time | webpack; see [the workaround](/getting-started/installation#the-webpack-workaround) |
+| Works in dev, blank in production | the WASM asset isn't being copied into the deploy output |
+| Multi-threaded build never starts | `wasm-multithread` needs cross-origin isolation (`COOP`/`COEP` headers) |
+| `useJolt must be used within a JoltProvider` | a hook is outside `<Physics>`, or in a sibling of it rather than a child |
+
+Turn on [`setDebug(true)`](/advanced/memory#debug-output) to see the library's own warnings while
+diagnosing any of these.
