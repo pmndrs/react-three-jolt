@@ -18,7 +18,7 @@ import {
 } from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { Raw } from '../raw';
-import { type anyVec3, devWarn, vec3 } from '../utils';
+import { type anyQuat, type anyVec3, devWarn, joltScratch, quat, vec3 } from '../utils';
 
 export class ShapeSystem {
     private physicsSystem: Jolt.PhysicsSystem;
@@ -48,6 +48,10 @@ export class ShapeSystem {
  * `getShapeSettingsFromObject` and `generateShapeSettings` - is now a thin wrapper over
  * `describeShape` + `createShapeSettings`, so there is exactly one place that knows how a
  * three.js geometry maps onto a Jolt shape and exactly one place that allocates.
+ *
+ * A `mutableCompound` descriptor (issue #108) is the one shape that can be changed after it
+ * exists: `addSubShape` / `removeSubShape` / `modifySubShape` edit it in place. Everything else
+ * is immutable once built - "changing" it means describing it again and generating a new shape.
  * ========================================================================== */
 
 /**
@@ -173,7 +177,12 @@ export interface StaticCompoundShapeDescriptor extends ShapeDescriptorBase {
     type: 'staticCompound';
     children: ShapeDescriptor[];
 }
-/** Reserved for issue #108 (`MutableCompoundShape`). `generateShape` throws for now. */
+/**
+ * A compound whose children can be added, removed and moved at runtime (issue #108).
+ * Build it like a `staticCompound`, then edit the resulting shape with `addSubShape`,
+ * `removeSubShape` and `modifySubShape` (or `BodyState`'s methods of the same names, which also
+ * tell the body its mass properties and bounds moved).
+ */
 export interface MutableCompoundShapeDescriptor extends ShapeDescriptorBase {
     type: 'mutableCompound';
     children: ShapeDescriptor[];
@@ -183,10 +192,15 @@ export interface ScaledShapeDescriptor extends ShapeDescriptorBase {
     child: ShapeDescriptor;
     scale: Vec3Tuple;
 }
-/** Reserved for issue #40 (centre of mass control). `generateShape` throws for now. */
+/**
+ * Moves the child's centre of mass without moving the child (issue #40): the classic "weeble"
+ * trick, a body that always rights itself, and the way to stop a vehicle or a character tipping
+ * over. The offset is in the child's local space.
+ */
 export interface OffsetCenterOfMassShapeDescriptor extends ShapeDescriptorBase {
     type: 'offsetCenterOfMass';
     child: ShapeDescriptor;
+    /** How far to shift the centre of mass, in the child's local space. */
     centerOfMass: Vec3Tuple;
 }
 
@@ -319,6 +333,15 @@ export type DescribeShapeOptions = {
     convexRadius?: number;
     /** heightfield block size */
     blockSize?: number;
+    /**
+     * Bake the *root* object's own scale into the shape as well (issue #40).
+     *
+     * Off by default: a root object's scale normally belongs to the body (`BodyState.scale`,
+     * which wraps the shape in a `ScaledShape` that can be changed again later), not to the
+     * shape, and baking it in would apply it twice. The scale of any mesh *below* the root is
+     * always baked in, because a compound's children have no other way to carry one.
+     */
+    applyObjectScale?: boolean;
 };
 
 /** `compound` is the historical name for a static compound. */
@@ -545,10 +568,31 @@ export const describeGeometry = (
     }
 };
 
+/** A scale that is (near enough) 1 on every axis needs no `ScaledShape`. */
+const isUnitScale = (scale: THREE.Vector3, epsilon = 1e-6) =>
+    Math.abs(scale.x - 1) < epsilon &&
+    Math.abs(scale.y - 1) < epsilon &&
+    Math.abs(scale.z - 1) < epsilon;
+
+/**
+ * Wrap `descriptor` in a `scaled` descriptor when `scale` is not 1 (issue #40).
+ * A `scaled` wrapper already holding the same child is rescaled rather than stacked.
+ */
+const withScale = (descriptor: ShapeDescriptor, scale: THREE.Vector3): ShapeDescriptor => {
+    if (isUnitScale(scale)) return descriptor;
+    return { type: 'scaled', child: descriptor, scale: toTuple(scale) };
+};
+
 /**
  * Describe a three.js object: every mesh below it (including the object itself) becomes one
- * child descriptor carrying that mesh's local position/rotation. A single mesh is described
- * directly rather than wrapped in a one-child compound.
+ * child descriptor carrying that mesh's local position/rotation - and, when it is scaled, a
+ * `scaled` wrapper around it (issue #40: a scaled mesh used to describe a shape at its unscaled
+ * size, so the collider did not match what was on screen).
+ *
+ * The root object's own scale is left to the body unless `options.applyObjectScale` is set; see
+ * `DescribeShapeOptions.applyObjectScale`.
+ *
+ * A single mesh is described directly rather than wrapped in a one-child compound.
  */
 export const describeObject = (
     object: Object3D,
@@ -558,20 +602,27 @@ export const describeObject = (
     object.traverse((child) => {
         // adding ignore to meshes skips the shape generator
         if (!(child instanceof THREE.Mesh) || !child.geometry) return;
-        const descriptor = describeGeometry(child.geometry, options);
-        descriptor.position = toTuple(child.position);
-        descriptor.rotation = [
+        // a nested mesh's scale can only travel with the shape; the root's belongs to the body
+        const scaled =
+            child === object && !options.applyObjectScale
+                ? describeGeometry(child.geometry, options)
+                : withScale(describeGeometry(child.geometry, options), child.scale);
+        scaled.position = toTuple(child.position);
+        scaled.rotation = [
             child.quaternion.x,
             child.quaternion.y,
             child.quaternion.z,
             child.quaternion.w
         ];
-        children.push(descriptor);
+        children.push(scaled);
     });
 
     // if theres only one, return it - its transform belongs to the body, not to the shape
-    if (children.length === 1) return children[0];
-    return { type: 'staticCompound', children };
+    const described: ShapeDescriptor =
+        children.length === 1 ? children[0] : { type: 'staticCompound', children };
+    // a scaled group scales everything under it; a root *mesh* already had its scale applied above
+    if (!options.applyObjectScale || object instanceof THREE.Mesh) return described;
+    return withScale(described, object.scale);
 };
 
 /**
@@ -838,12 +889,6 @@ const createHeightfieldShapeSettings = (
 const clampConvexRadius = (requested: number | undefined, ...limits: number[]) =>
     Math.max(0, Math.min(requested ?? 0.05, ...limits));
 
-const notImplemented = (type: string, issue: string): never => {
-    throw new Error(
-        `react-three-jolt: the '${type}' shape descriptor is reserved but not implemented yet (see ${issue})`
-    );
-};
-
 /** Build a compound's settings from child descriptors. */
 const createCompoundShapeSettings = (
     children: ShapeDescriptor[],
@@ -952,8 +997,7 @@ export function createShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSett
         case 'staticCompound':
             return createCompoundShapeSettings(descriptor.children, false);
         case 'mutableCompound':
-            // issue #108: jolt 1.1 exports MutableCompoundShape, but nothing here maintains one
-            return notImplemented('mutableCompound', 'issue #108');
+            return createCompoundShapeSettings(descriptor.children, true);
         case 'scaled': {
             // ScaledShapeSettings takes a reference on the inner settings: destroying the scaled
             // settings frees them, so the inner ones are never destroyed here.
@@ -968,9 +1012,21 @@ export function createShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSett
                 jolt.destroy(scale);
             }
         }
-        case 'offsetCenterOfMass':
-            // issue #40: needs the BodyState/<Shape> scale work before it is useful
-            return notImplemented('offsetCenterOfMass', 'issue #40');
+        case 'offsetCenterOfMass': {
+            // like ScaledShapeSettings, this takes a reference on the inner settings: destroying
+            // the decorator frees them, so they are never destroyed here.
+            const inner = createShapeSettings(descriptor.child);
+            const offset = vec3.jolt(descriptor.centerOfMass);
+            try {
+                // note the argument order: OffsetCenterOfMassShapeSettings(offset, shape)
+                return new jolt.OffsetCenterOfMassShapeSettings(offset, inner);
+            } catch (error) {
+                jolt.destroy(inner);
+                throw error;
+            } finally {
+                jolt.destroy(offset);
+            }
+        }
         default:
             throw new Error(
                 `react-three-jolt: unknown shape descriptor type '${
@@ -988,6 +1044,312 @@ export function createShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSett
 export function generateShape(descriptor: ShapeDescriptor): Jolt.Shape {
     return createShapeFromSettings(createShapeSettings(descriptor));
 }
+
+/* ============================================================================
+ * Dynamic mesh shapes (issue #112)
+ *
+ * Jolt does not support a dynamic body with a `MeshShape`. A mesh is a one sided triangle soup
+ * with no inside, so mesh-vs-mesh does not collide at all and mesh-vs-convex only works from the
+ * outside; a dynamic mesh body has no usable mass properties, sinks through everything and ends
+ * up with a NaN position - which is exactly what issue #112 reported.
+ * See https://jrouwe.github.io/JoltPhysics/#dynamic-mesh-shapes
+ *
+ * So a `trimesh` on a dynamic body is converted to something Jolt can simulate. The default is a
+ * convex hull of the same points, which is right for most props; `'error'` refuses instead, and
+ * `'decompose'` (a convex decomposition into several hulls) is reserved.
+ * ========================================================================== */
+
+/** What to do with a `trimesh` descriptor on a dynamic body. See `makeDescriptorDynamicSafe`. */
+export type DynamicMeshStrategy = 'convex' | 'decompose' | 'error';
+
+/** True when `descriptor` is, or contains, a `trimesh`. */
+export const containsMeshShape = (descriptor: ShapeDescriptor): boolean => {
+    switch (descriptor.type) {
+        case 'trimesh':
+            return true;
+        case 'staticCompound':
+        case 'mutableCompound':
+            return descriptor.children.some(containsMeshShape);
+        case 'scaled':
+        case 'offsetCenterOfMass':
+            return containsMeshShape(descriptor.child);
+        default:
+            return false;
+    }
+};
+
+/**
+ * Apply the #112 policy to one trimesh: throw for `'error'`/`'decompose'`, warn for `'convex'`.
+ * Exported so callers that already hold a `MeshShape` (rather than a descriptor) give the same
+ * answers as the descriptor path.
+ */
+export const checkDynamicMeshStrategy = (strategy: DynamicMeshStrategy = 'convex'): void => {
+    if (strategy === 'error')
+        throw new Error(
+            'react-three-jolt: jolt cannot simulate a dynamic body with a trimesh shape (mesh vs ' +
+                'mesh does not collide and the body falls through the world). Use a static body, ' +
+                "or `dynamicMeshStrategy: 'convex'`."
+        );
+    if (strategy === 'decompose')
+        throw new Error(
+            "react-three-jolt: `dynamicMeshStrategy: 'decompose'` (convex decomposition) is " +
+                'reserved and not implemented yet. Use a compound of `convex` shapes you ' +
+                "decomposed yourself, or `'convex'` for a single hull."
+        );
+    devWarn(
+        'react-three-jolt: a dynamic body cannot use a trimesh shape - jolt has no collision for ' +
+            'mesh vs mesh and the body would fall through the world. Using a convex hull of the ' +
+            'same points instead (issue #112); make the body static, or pass ' +
+            "`dynamicMeshStrategy: 'error'`, to opt out."
+    );
+};
+
+/**
+ * Replace every `trimesh` in a descriptor with something a dynamic body can use (issue #112).
+ * Returns the descriptor unchanged when there is no mesh in it.
+ *
+ * @param strategy `'convex'` (default) takes the convex hull of the mesh's own vertices,
+ * `'error'` throws, `'decompose'` is reserved for a future convex decomposition.
+ */
+export function makeDescriptorDynamicSafe(
+    descriptor: ShapeDescriptor,
+    strategy: DynamicMeshStrategy = 'convex'
+): ShapeDescriptor {
+    switch (descriptor.type) {
+        case 'trimesh': {
+            checkDynamicMeshStrategy(strategy);
+            const { type: _type, vertices, indices: _indices, ...rest } = descriptor;
+            return { ...rest, type: 'convex', points: vertices };
+        }
+        case 'staticCompound':
+        case 'mutableCompound': {
+            if (!containsMeshShape(descriptor)) return descriptor;
+            return {
+                ...descriptor,
+                children: descriptor.children.map((child) =>
+                    makeDescriptorDynamicSafe(child, strategy)
+                )
+            };
+        }
+        case 'scaled':
+        case 'offsetCenterOfMass': {
+            if (!containsMeshShape(descriptor)) return descriptor;
+            return { ...descriptor, child: makeDescriptorDynamicSafe(descriptor.child, strategy) };
+        }
+        default:
+            return descriptor;
+    }
+}
+
+/**
+ * Build a convex hull around an existing shape, for the case where the caller handed us a
+ * `MeshShape` rather than a descriptor (issue #112).
+ *
+ * The triangles come back in the shape's own local space (a `MeshShape`'s centre of mass is the
+ * origin), so the hull sits exactly where the mesh did. The returned shape is owned by the caller
+ * with one reference, like `generateShape`; the input shape is not touched.
+ */
+export function convexHullFromShape(shape: Jolt.Shape): Jolt.Shape {
+    const geometry = createMeshFromShape(shape);
+    try {
+        return generateShape(describeConvexGeometry(geometry));
+    } finally {
+        geometry.dispose();
+    }
+}
+
+/* ============================================================================
+ * Mutable compounds - editing a compound at runtime (issue #108)
+ *
+ * A `{ type: 'mutableCompound' }` descriptor builds a `MutableCompoundShape`: the same thing as
+ * a static compound, except its children can be added, removed and moved after the shape exists.
+ * Everything below edits such a shape in place; nothing here rebuilds it.
+ *
+ * Ownership: `MutableCompoundShape::AddShape` takes its own reference on the child shape and
+ * `RemoveShape` releases it. `addSubShape` therefore drops the reference `generateShape` handed
+ * it as soon as the compound has one, and `removeSubShape` must NOT destroy or release anything -
+ * the compound owns its children and frees them itself.
+ *
+ * A body holding the compound caches its bounds and mass properties, so after any of these the
+ * body must be told: that is `BodyState.addSubShape` / `removeSubShape` / `modifySubShape`, which
+ * wrap these and call `BodyInterface::NotifyShapeChanged`.
+ * ========================================================================== */
+
+/** Where a sub shape sits inside its parent compound. Both parts are optional in a modify. */
+export type SubShapeTransform = {
+    position?: anyVec3;
+    rotation?: anyQuat;
+};
+
+/** True when `shape` is a compound whose children can be edited at runtime. */
+export const isMutableCompoundShape = (shape?: Jolt.Shape | null): boolean =>
+    !!shape && shape.GetSubType() === Raw.module.EShapeSubType_MutableCompound;
+
+/**
+ * Narrow a shape to a `MutableCompoundShape`. Throws (rather than handing back a bad cast) when
+ * the shape is a static compound or anything else: `castObject` does not check.
+ */
+export const asMutableCompoundShape = (shape?: Jolt.Shape | null): Jolt.MutableCompoundShape => {
+    if (!isMutableCompoundShape(shape))
+        throw new Error(
+            'react-three-jolt: this shape is not a MutableCompoundShape, so its children cannot ' +
+                "be edited at runtime. Build it from a `{ type: 'mutableCompound' }` descriptor " +
+                '(or a `<Shape dynamic>`) instead of a static compound.'
+        );
+    return Raw.module.castObject(shape as Jolt.Shape, Raw.module.MutableCompoundShape);
+};
+
+/**
+ * A shape's centre of mass as plain numbers.
+ *
+ * `GetCenterOfMass()` hands back a pointer to a static temporary that the next by-value call
+ * overwrites, and `NotifyShapeChanged` needs the value from *before* the edit, so it has to be
+ * copied out rather than held.
+ */
+export const readCenterOfMass = (shape: Jolt.Shape): Vec3Tuple => {
+    const center = shape.GetCenterOfMass();
+    return [center.GetX(), center.GetY(), center.GetZ()];
+};
+
+/** How many children a compound (mutable or static) currently has. */
+export const subShapeCount = (shape: Jolt.Shape): number =>
+    Raw.module.castObject(shape, Raw.module.CompoundShape).GetNumSubShapes();
+
+/**
+ * Read a sub shape's placement back out in the same space `addSubShape` takes it.
+ *
+ * Jolt stores the position relative to the *compound's* centre of mass and shifted by the child's
+ * own (`SubShape::SetTransform` does `positionCOM = position - compoundCOM + rotation * childCOM`),
+ * so this undoes both to give back the local position the caller passed in.
+ */
+export const getSubShapeTransform = (
+    compound: Jolt.Shape,
+    index: number
+): { position: Vec3Tuple; rotation: QuatTuple } => {
+    const mutable = asMutableCompoundShape(compound);
+    const subShape = mutable.GetSubShape(index);
+    // every one of these getters returns the same kind of static temporary: read it immediately
+    const positionCOM = subShape.GetPositionCOM();
+    const local = new Vector3(positionCOM.GetX(), positionCOM.GetY(), positionCOM.GetZ());
+    const subRotation = subShape.GetRotation();
+    const rotation: QuatTuple = [
+        subRotation.GetX(),
+        subRotation.GetY(),
+        subRotation.GetZ(),
+        subRotation.GetW()
+    ];
+    const childCenter = subShape.mShape.GetCenterOfMass();
+    const child = new Vector3(childCenter.GetX(), childCenter.GetY(), childCenter.GetZ());
+    const compoundCenter = mutable.GetCenterOfMass();
+
+    local
+        .add(new Vector3(compoundCenter.GetX(), compoundCenter.GetY(), compoundCenter.GetZ()))
+        .sub(child.applyQuaternion(new THREE.Quaternion(...rotation)));
+    return { position: toTuple(local), rotation };
+};
+
+/**
+ * Add a child to a mutable compound and return its index.
+ *
+ * The child is built from `descriptor` (its `position`/`rotation` are its placement inside the
+ * compound, exactly as in a static compound) and is owned by the compound afterwards.
+ */
+export function addSubShape(
+    compound: Jolt.Shape,
+    descriptor: ShapeDescriptor,
+    index?: number
+): number {
+    const jolt = Raw.module;
+    const mutable = asMutableCompoundShape(compound);
+    // one reference, ours, handed over to the compound below
+    const child = generateShape(descriptor);
+    const position = vec3.jolt(descriptor.position ?? [0, 0, 0]);
+    const rotation = quat.jolt(descriptor.rotation ?? [0, 0, 0, 1]);
+    let added: number;
+    try {
+        // AddShape copies the transform and takes its own reference on the shape
+        added =
+            index === undefined
+                ? mutable.AddShape(position, rotation, child, descriptor.userData ?? 0)
+                : mutable.AddShape(position, rotation, child, descriptor.userData ?? 0, index);
+    } finally {
+        jolt.destroy(position);
+        jolt.destroy(rotation);
+        // the compound holds the child now (or, if AddShape threw, nothing does and this frees it)
+        releaseShape(child);
+    }
+    mutable.AdjustCenterOfMass();
+    return added;
+}
+
+/**
+ * Drop the child at `index`. The remaining children keep their order, so every index above
+ * `index` shifts down by one.
+ *
+ * The compound releases the child itself: do not `releaseShape`/`destroy` it here.
+ */
+export function removeSubShape(compound: Jolt.Shape, index: number): void {
+    const mutable = asMutableCompoundShape(compound);
+    mutable.RemoveShape(index);
+    mutable.AdjustCenterOfMass();
+}
+
+/** Move and/or turn the child at `index`. Anything left out of `transform` is kept as it is. */
+export function modifySubShape(
+    compound: Jolt.Shape,
+    index: number,
+    transform: SubShapeTransform
+): void {
+    const jolt = Raw.module;
+    const mutable = asMutableCompoundShape(compound);
+    const current = getSubShapeTransform(mutable, index);
+    const position = vec3.jolt(transform.position ?? current.position);
+    const rotation = quat.jolt(transform.rotation ?? current.rotation);
+    try {
+        mutable.ModifyShape(index, position, rotation);
+    } finally {
+        jolt.destroy(position);
+        jolt.destroy(rotation);
+    }
+    mutable.AdjustCenterOfMass();
+}
+
+/* ============================================================================
+ * Scaling (issue #40)
+ * ========================================================================== */
+
+/**
+ * The scale `shape` will actually accept, as close to `scale` as Jolt allows.
+ *
+ * Jolt only supports non-uniform scale on shapes whose geometry can take it: a sphere, a capsule
+ * or a tapered capsule has one radius, so squashing it would produce a shape that no longer
+ * matches what is drawn. Rather than let that through silently, this falls back to a uniform
+ * scale built from the largest component (sign kept, so a mirrored scale stays mirrored) and
+ * `devWarn`s; if even that is refused, Jolt's own `MakeScaleValid` decides.
+ *
+ * Allocation free: reads through the shared scratch vector, returns plain three.js data.
+ */
+export const validScaleFor = (shape: Jolt.Shape, scale: anyVec3 | number): THREE.Vector3 => {
+    const requested =
+        typeof scale === 'number' ? new Vector3(scale, scale, scale) : vec3.three(scale);
+    if (shape.IsValidScale(joltScratch.vec3(requested))) return requested;
+
+    // the component furthest from zero, with its sign: a mirrored scale stays mirrored
+    const largest = [requested.x, requested.y, requested.z].reduce((a, b) =>
+        Math.abs(b) > Math.abs(a) ? b : a
+    );
+    const uniform = new Vector3(largest, largest, largest);
+    devWarn(
+        `react-three-jolt: this shape cannot be scaled non-uniformly by (${requested.x}, ` +
+            `${requested.y}, ${requested.z}) - a sphere, capsule or tapered capsule has a single ` +
+            `radius. Falling back to a uniform scale of ${largest}.`
+    );
+    if (shape.IsValidScale(joltScratch.vec3(uniform))) return uniform;
+
+    // last resort: let jolt pick the nearest legal scale (a static temporary - read, never free)
+    const made = shape.MakeScaleValid(joltScratch.vec3(requested));
+    return new Vector3(made.GetX(), made.GetY(), made.GetZ());
+};
 
 /**
  * Wrap an existing shape in a `ScaledShape` (issue #40's building block).

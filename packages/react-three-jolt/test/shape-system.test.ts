@@ -16,6 +16,9 @@ import { afterEach, assert, beforeAll, describe, expect, test } from 'vitest';
 import { initJolt, Raw } from '../src/raw';
 import {
     type AutoShape,
+    addSubShape,
+    containsMeshShape,
+    convexHullFromShape,
     createMeshForShape,
     createMeshFromShape,
     createShapeFromSettings,
@@ -28,10 +31,19 @@ import {
     generateShapeSettings,
     getShapeSettingsFromGeometry,
     getShapeSettingsFromObject,
+    getSubShapeTransform,
+    isMutableCompoundShape,
+    makeDescriptorDynamicSafe,
+    modifySubShape,
+    readCenterOfMass,
     releaseShape,
+    removeSubShape,
     type ShapeDescriptor,
-    scaleShape
+    scaleShape,
+    subShapeCount,
+    validScaleFor
 } from '../src/systems/shape-system';
+import { setDebug } from '../src/utils';
 import { createMeshFloor } from '../src/utils/meshTools';
 import { installAllocTracker } from './jolt-alloc';
 
@@ -709,6 +721,89 @@ describe('scaled shapes', () => {
         releaseShape(base);
     });
 
+    test('a scaled mesh below the root describes a scaled child (issue #40)', () => {
+        const group = new THREE.Group();
+        const big = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+        big.scale.set(2, 3, 4);
+        big.position.set(0, 5, 0);
+        group.add(big);
+        group.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)));
+
+        const descriptor = describeShape(group) as any;
+        assert.equal(descriptor.type, 'staticCompound');
+        const scaled = descriptor.children[0];
+        assert.equal(scaled.type, 'scaled', 'a scaled mesh must describe a scaled shape');
+        assert.deepEqual(scaled.scale, [2, 3, 4]);
+        assert.equal(scaled.child.type, 'box');
+        // the placement stays on the outside, where the compound reads it
+        assert.deepEqual(scaled.position, [0, 5, 0]);
+        // the unscaled sibling is untouched
+        assert.equal(descriptor.children[1].type, 'box');
+
+        const shape = generateShape(descriptor);
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_StaticCompound);
+        const compound = Raw.module.castObject(shape, Raw.module.StaticCompoundShape);
+        assert.equal(compound.GetSubShape(0).mShape.GetSubType(), Raw.module.EShapeSubType_Scaled);
+        releaseShape(shape);
+    });
+
+    test('an unscaled mesh is not wrapped', () => {
+        const group = new THREE.Group();
+        group.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)));
+        group.add(new THREE.Mesh(new THREE.SphereGeometry(1)));
+        const descriptor = describeShape(group) as any;
+        assert.equal(descriptor.children[0].type, 'box');
+        assert.equal(descriptor.children[1].type, 'sphere');
+    });
+
+    test("the root object's own scale is the body's business unless applyObjectScale is set", () => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+        mesh.scale.set(2, 2, 2);
+
+        // by default the root scale belongs to BodyState.scale, not to the shape
+        assert.equal(describeShape(mesh).type, 'box');
+
+        const baked = describeShape(mesh, { applyObjectScale: true }) as any;
+        assert.equal(baked.type, 'scaled');
+        assert.deepEqual(baked.scale, [2, 2, 2]);
+
+        const shape = generateShape(baked);
+        expectBounds(shape, { min: [-1, -1, -1], max: [1, 1, 1] }, 0.02);
+        releaseShape(shape);
+    });
+
+    test('applyObjectScale scales a whole group', () => {
+        const group = new THREE.Group();
+        group.scale.set(2, 2, 2);
+        group.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)));
+        const second = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+        second.position.set(0, 2, 0);
+        group.add(second);
+        const descriptor = describeShape(group, { applyObjectScale: true }) as any;
+        assert.equal(descriptor.type, 'scaled');
+        assert.deepEqual(descriptor.scale, [2, 2, 2]);
+        assert.equal(descriptor.child.type, 'staticCompound');
+    });
+
+    test('validScaleFor passes a legal scale through and fixes an illegal one', () => {
+        const box = generateShape({ type: 'box', size: [1, 1, 1] });
+        const sphere = generateShape({ type: 'sphere', radius: 1 });
+
+        // a box takes any scale
+        const boxScale = validScaleFor(box, [2, 3, 4]);
+        assert.deepEqual([boxScale.x, boxScale.y, boxScale.z], [2, 3, 4]);
+        // a number means a uniform scale
+        const uniform = validScaleFor(box, 2);
+        assert.deepEqual([uniform.x, uniform.y, uniform.z], [2, 2, 2]);
+
+        // a sphere has one radius: the largest component wins, uniformly
+        const sphereScale = validScaleFor(sphere, [2, 3, 1]);
+        assert.deepEqual([sphereScale.x, sphereScale.y, sphereScale.z], [3, 3, 3]);
+
+        releaseShape(box);
+        releaseShape(sphere);
+    });
+
     test('a scaled descriptor builds a ScaledShape in one go', () => {
         const allocations = startSpy();
         const shape = generateShape({
@@ -728,41 +823,233 @@ describe('scaled shapes', () => {
     });
 });
 
-describe('reserved descriptor types', () => {
-    test('mutableCompound explains itself and points at #108', () => {
+describe('unknown descriptor types', () => {
+    test('an unknown type explains itself', () => {
         const allocations = startSpy();
-        expect(() => generateShape({ type: 'mutableCompound', children: [] })).toThrow(
-            /not implemented yet.*#108/
+        expect(() => generateShape({ type: 'nonsense' } as unknown as ShapeDescriptor)).toThrow(
+            /unknown shape descriptor type/
         );
         assert.equal(allocations.total(), 0);
     });
 
-    test('offsetCenterOfMass explains itself and points at #40', () => {
-        const allocations = startSpy();
-        expect(() =>
-            generateShape({
-                type: 'offsetCenterOfMass',
-                centerOfMass: [0, 1, 0],
-                child: { type: 'box', size: [1, 1, 1] }
-            })
-        ).toThrow(/not implemented yet.*#40/);
-        assert.equal(allocations.total(), 0);
-    });
-
-    test('a reserved child inside a compound frees the half built compound', () => {
+    test('a failing child inside a compound frees the half built compound', () => {
         const allocations = startSpy();
         expect(() =>
             generateShape({
                 type: 'staticCompound',
                 children: [
                     { type: 'box', size: [1, 1, 1] },
-                    { type: 'mutableCompound', children: [] }
+                    { type: 'nonsense' } as unknown as ShapeDescriptor
                 ]
             })
-        ).toThrow(/not implemented yet/);
+        ).toThrow(/unknown shape descriptor type/);
         // the compound is destroyed on the error path, which releases (and frees, inside wasm)
         // the box settings it had already taken a reference on - the scratch Vec3/Quat are gone
         expect(allocations.counts()).toEqual({ BoxShapeSettings: 1 });
+    });
+});
+
+//* Mutable compounds (issue #108) ==========================
+describe('mutable compounds', () => {
+    const mutable = (shape: Jolt.Shape) =>
+        Raw.module.castObject(shape, Raw.module.MutableCompoundShape);
+
+    test('a mutableCompound descriptor builds a MutableCompoundShape', () => {
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1], position: [0, 1, 0] },
+                { type: 'sphere', radius: 0.5, position: [0, -1, 0] }
+            ]
+        });
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_MutableCompound);
+        assert.equal(shape.GetRefCount(), 1);
+        assert.equal(subShapeCount(shape), 2);
+        releaseShape(shape);
+    });
+
+    test('a mutable compound with a single child is NOT collapsed into that child', () => {
+        // a static compound is: jolt folds one child into a RotatedTranslatedShape, which would
+        // make it impossible to add a second child later
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [{ type: 'box', size: [1, 1, 1], position: [0, 1, 0] }]
+        });
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_MutableCompound);
+        assert.equal(subShapeCount(shape), 1);
+        releaseShape(shape);
+    });
+
+    test('addSubShape appends a child, grows the bounds, and hands ownership to the compound', () => {
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [{ type: 'box', size: [1, 1, 1] }]
+        });
+        const before = boundsSize(shape);
+
+        const index = addSubShape(shape, { type: 'box', size: [1, 1, 1], position: [0, 3, 0] });
+        assert.equal(index, 1, 'the new child is appended');
+        assert.equal(subShapeCount(shape), 2);
+        // 0.5 below the first box to 3.5 above the second one
+        assert.closeTo(boundsSize(shape)[1], 4, 0.05);
+        assert.isAbove(boundsSize(shape)[1], before[1]);
+        // the compound owns the child: nothing outside holds a reference on it
+        assert.equal(mutable(shape).GetSubShape(1).mShape.GetRefCount(), 1);
+
+        releaseShape(shape);
+    });
+
+    test('removeSubShape drops a child and shrinks the bounds again', () => {
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                { type: 'sphere', radius: 0.5, position: [0, 3, 0] }
+            ]
+        });
+        assert.closeTo(boundsSize(shape)[1], 4, 0.05);
+
+        removeSubShape(shape, 1);
+        assert.equal(subShapeCount(shape), 1);
+        assert.closeTo(boundsSize(shape)[1], 1, 0.05);
+
+        releaseShape(shape);
+    });
+
+    test('modifySubShape moves a child without replacing it', () => {
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                { type: 'box', size: [1, 1, 1], position: [0, 1, 0] }
+            ]
+        });
+        const child = mutable(shape).GetSubShape(1).mShape;
+        assert.closeTo(boundsSize(shape)[1], 2, 0.05);
+
+        modifySubShape(shape, 1, { position: [0, 4, 0] });
+        // same shape object, new placement
+        assert.equal(mutable(shape).GetSubShape(1).mShape.GetSubType(), child.GetSubType());
+        assert.closeTo(boundsSize(shape)[1], 5, 0.05);
+        // the transform reads back in the space it was given in, through the centre of mass shift
+        const transform = getSubShapeTransform(shape, 1);
+        assert.closeTo(transform.position[1], 4, 1e-3);
+
+        releaseShape(shape);
+    });
+
+    test('a rotated child round trips through getSubShapeTransform', () => {
+        const turn = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                {
+                    type: 'box',
+                    size: [2, 0.5, 0.5],
+                    position: [1, 2, -3],
+                    rotation: [turn.x, turn.y, turn.z, turn.w]
+                }
+            ]
+        });
+        const { position, rotation } = getSubShapeTransform(shape, 1);
+        assert.closeTo(position[0], 1, 1e-3);
+        assert.closeTo(position[1], 2, 1e-3);
+        assert.closeTo(position[2], -3, 1e-3);
+        assert.closeTo(rotation[2], turn.z, 1e-3);
+        assert.closeTo(rotation[3], turn.w, 1e-3);
+        releaseShape(shape);
+    });
+
+    test('editing a static compound throws instead of mis-casting it', () => {
+        const shape = generateShape({
+            type: 'staticCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                { type: 'sphere', radius: 0.5, position: [0, 2, 0] }
+            ]
+        });
+        expect(() => addSubShape(shape, { type: 'box', size: [1, 1, 1] })).toThrow(
+            /not a MutableCompoundShape/
+        );
+        expect(() => removeSubShape(shape, 0)).toThrow(/not a MutableCompoundShape/);
+        assert.isFalse(isMutableCompoundShape(shape));
+        releaseShape(shape);
+    });
+
+    test('add then remove is allocation net zero', () => {
+        const tracker = installAllocTracker(Raw);
+        try {
+            const shape = generateShape({
+                type: 'mutableCompound',
+                children: [{ type: 'box', size: [1, 1, 1] }]
+            });
+            const before = tracker.live();
+            for (let i = 0; i < 5; i++) {
+                const index = addSubShape(shape, {
+                    type: 'sphere',
+                    radius: 0.5,
+                    position: [0, i, 0]
+                });
+                modifySubShape(shape, index, { position: [0, i + 1, 0] });
+                removeSubShape(shape, index);
+            }
+            assert.equal(subShapeCount(shape), 1);
+            assert.equal(
+                tracker.live(),
+                before,
+                `editing left ${JSON.stringify(tracker.liveByType())} behind`
+            );
+            releaseShape(shape);
+        } finally {
+            tracker.uninstall();
+        }
+    });
+
+    test('a body whose shape is a mutable compound edits it through BodyState', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('mutable-compound-test');
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [{ type: 'box', size: [1, 1, 1] }]
+        });
+        const handle = system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)), {
+            shape
+        });
+        // the body took its own reference
+        releaseShape(shape);
+        const body = system.bodySystem.getBody(handle)!;
+
+        assert.isTrue(body.isMutableCompound);
+        const massBefore = body.mass;
+
+        const index = body.addSubShape({ type: 'box', size: [1, 1, 1], position: [0, 3, 0] });
+        assert.equal(index, 1);
+        assert.equal(subShapeCount(body.shape), 2);
+        // NotifyShapeChanged(updateMassProperties) recomputed mass from the new shape
+        assert.isAbove(body.mass, massBefore, 'the body kept its old mass properties');
+
+        body.modifySubShape(index, { position: [0, 5, 0] });
+        assert.closeTo(getSubShapeTransform(body.shape, index).position[1], 5, 1e-3);
+
+        body.removeSubShape(index);
+        assert.equal(subShapeCount(body.shape), 1);
+        assert.closeTo(body.mass, massBefore, 1e-3);
+
+        body.destroy(true);
+    });
+
+    test('BodyState rejects editing a body that is not a mutable compound', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('mutable-compound-reject-test');
+        const body = system.bodySystem.getBody(
+            system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
+        )!;
+        assert.isFalse(body.isMutableCompound);
+        expect(() => body.addSubShape({ type: 'box', size: [1, 1, 1] })).toThrow(
+            /not a MutableCompoundShape/
+        );
+        body.destroy(true);
     });
 });
 
@@ -827,7 +1114,17 @@ describe('every descriptor type is allocation neutral', () => {
                 ]
             }
         ],
-        ['scaled', { type: 'scaled', scale: [2, 2, 2], child: { type: 'box', size: [1, 1, 1] } }]
+        ['scaled', { type: 'scaled', scale: [2, 2, 2], child: { type: 'box', size: [1, 1, 1] } }],
+        [
+            'mutableCompound',
+            {
+                type: 'mutableCompound',
+                children: [
+                    { type: 'box', size: [1, 1, 1], position: [0, 1, 0] },
+                    { type: 'sphere', radius: 0.5 }
+                ]
+            }
+        ]
     ];
 
     for (const [name, descriptor] of descriptors) {
@@ -849,6 +1146,49 @@ describe('every descriptor type is allocation neutral', () => {
             }
         });
     }
+});
+
+describe('offsetCenterOfMass descriptors (issue #40)', () => {
+    test('an offset centre of mass moves the centre of mass without moving the shape', () => {
+        const plain = generateShape({ type: 'box', size: [1, 1, 1] });
+        const plainCenter = readCenterOfMass(plain);
+
+        const allocations = startSpy();
+        const shifted = generateShape({
+            type: 'offsetCenterOfMass',
+            centerOfMass: [0, -0.4, 0],
+            child: { type: 'box', size: [1, 1, 1] }
+        });
+
+        assert.equal(shifted.GetSubType(), Raw.module.EShapeSubType_OffsetCenterOfMass);
+        assert.equal(shifted.GetRefCount(), 1);
+        const center = readCenterOfMass(shifted);
+        assert.closeTo(center[1], plainCenter[1] - 0.4, 1e-4);
+        // the box itself has not moved: local bounds are measured from the centre of mass, so
+        // they shift by exactly the offset
+        expectBounds(shifted, { min: [-0.5, -0.1, -0.5], max: [0.5, 0.9, 0.5] }, 0.02);
+        // the inner settings are owned (and freed inside wasm) by the decorator
+        expect(allocations.counts()).toEqual({ BoxShapeSettings: 1 });
+
+        releaseShape(shifted);
+        releaseShape(plain);
+    });
+
+    test('offsetCenterOfMass generate + release is allocation net zero', () => {
+        const tracker = installAllocTracker(Raw);
+        try {
+            const before = tracker.live();
+            const shape = generateShape({
+                type: 'offsetCenterOfMass',
+                centerOfMass: [0, -0.4, 0],
+                child: { type: 'sphere', radius: 1 }
+            });
+            releaseShape(shape);
+            assert.equal(tracker.live(), before, JSON.stringify(tracker.liveByType()));
+        } finally {
+            tracker.uninstall();
+        }
+    });
 });
 
 describe('BodyState.scale goes through the pipeline', () => {
@@ -876,6 +1216,284 @@ describe('BodyState.scale goes through the pipeline', () => {
         assert.equal(rescaled.GetRefCount(), 1);
 
         body.destroy(true);
+    });
+
+    test('a numeric scale is uniform, not (n, NaN, NaN)', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('numeric-scale-test');
+        const body = system.bodySystem.getBody(
+            system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
+        )!;
+
+        // #40: `inScale instanceof Number` is always false for a primitive, so this used to fall
+        // through to vec3.three(2) -> (2, undefined, undefined) and scale the body by NaN
+        body.scale = 2;
+
+        const scaled = Raw.module.castObject(body.body.GetShape(), Raw.module.ScaledShape);
+        const applied = scaled.GetScale();
+        assert.deepEqual([applied.GetX(), applied.GetY(), applied.GetZ()], [2, 2, 2]);
+        expectBounds(scaled, { min: [-1, -1, -1], max: [1, 1, 1] }, 0.02);
+        assert.deepEqual(body.scale.toArray(), [2, 2, 2]);
+
+        body.destroy(true);
+    });
+
+    test('a non-uniform scale works on a box and is clamped on a sphere', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const { setDebug } = await import('../src/utils');
+        const system = new PhysicsSystem('non-uniform-scale-test');
+
+        const box = system.bodySystem.getBody(
+            system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
+        )!;
+        box.scale = [2, 3, 4];
+        expectBounds(box.body.GetShape(), { min: [-1, -1.5, -2], max: [1, 1.5, 2] }, 0.02);
+        assert.deepEqual(box.scale.toArray(), [2, 3, 4]);
+
+        // a sphere has a single radius: jolt refuses a non-uniform scale, so we warn and use
+        // the largest component uniformly rather than producing a mismatched collider
+        const warnings: unknown[][] = [];
+        const original = console.warn;
+        console.warn = (...args: unknown[]) => warnings.push(args);
+        setDebug(true);
+        try {
+            const sphere = system.bodySystem.getBody(
+                system.bodySystem.addBody(new THREE.Mesh(new THREE.SphereGeometry(1, 16, 16)))
+            )!;
+            sphere.scale = [2, 3, 1];
+            assert.deepEqual(sphere.scale.toArray(), [3, 3, 3]);
+            expectBounds(sphere.body.GetShape(), { min: [-3, -3, -3], max: [3, 3, 3] }, 0.05);
+            assert.isTrue(
+                warnings.some((args) => String(args[0]).includes('cannot be scaled non-uniformly')),
+                'a non-uniform sphere scale must warn'
+            );
+            sphere.destroy(true);
+        } finally {
+            setDebug(false);
+            console.warn = original;
+        }
+
+        box.destroy(true);
+    });
+
+    test('setting the scale a body already has does nothing', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('scale-noop-test');
+        const body = system.bodySystem.getBody(
+            system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
+        )!;
+
+        // an unscaled shape asked to stay unscaled must not be wrapped for nothing
+        body.scale = [1, 1, 1];
+        assert.equal(body.body.GetShape().GetSubType(), Raw.module.EShapeSubType_Box);
+
+        body.scale = [2, 2, 2];
+        const wrapped = body.body.GetShape();
+        body.scale = [2, 2, 2];
+        assert.strictEqual(body.body.GetShape(), wrapped, 'the shape was re-wrapped for nothing');
+
+        body.destroy(true);
+    });
+});
+
+//* Dynamic trimeshes (issue #112) ==========================
+// Jolt cannot simulate a dynamic body with a MeshShape: mesh vs mesh has no collision, so the
+// body sinks through everything and its position goes NaN (the issue's report). The library
+// converts to a convex hull instead, loudly.
+describe('dynamic trimesh bodies', () => {
+    const withWarnings = <T>(run: () => T): { result: T; warnings: string[] } => {
+        const warnings: string[] = [];
+        const original = console.warn;
+        console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
+        setDebug(true);
+        try {
+            return { result: run(), warnings };
+        } finally {
+            setDebug(false);
+            console.warn = original;
+        }
+    };
+
+    test('makeDescriptorDynamicSafe turns a trimesh into a hull over the same points', () => {
+        const descriptor = describeShape(new THREE.IcosahedronGeometry(1, 1), {
+            type: 'trimesh'
+        }) as any;
+        assert.equal(descriptor.type, 'trimesh');
+
+        const { result: safe, warnings } = withWarnings(() =>
+            makeDescriptorDynamicSafe(descriptor)
+        );
+        assert.equal((safe as any).type, 'convex');
+        assert.deepEqual((safe as any).points, descriptor.vertices);
+        assert.isTrue(warnings.some((w) => w.includes('cannot use a trimesh shape')));
+
+        const shape = generateShape(safe);
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_ConvexHull);
+        releaseShape(shape);
+    });
+
+    test('it converts a trimesh nested in a compound and leaves other shapes alone', () => {
+        const descriptor: ShapeDescriptor = {
+            type: 'staticCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                {
+                    type: 'scaled',
+                    scale: [2, 2, 2],
+                    position: [0, 3, 0],
+                    child: describeShape(new THREE.BoxGeometry(1, 1, 1), { type: 'trimesh' })
+                }
+            ]
+        };
+        assert.isTrue(containsMeshShape(descriptor));
+
+        const safe = makeDescriptorDynamicSafe(descriptor) as any;
+        assert.equal(safe.children[0].type, 'box', 'an unrelated child was rewritten');
+        assert.equal(safe.children[1].type, 'scaled');
+        assert.equal(safe.children[1].child.type, 'convex');
+        assert.deepEqual(safe.children[1].position, [0, 3, 0], 'the placement was lost');
+        // the original is untouched
+        assert.equal((descriptor as any).children[1].child.type, 'trimesh');
+        assert.isFalse(containsMeshShape(safe));
+
+        // a descriptor with no mesh in it is handed straight back
+        const plain: ShapeDescriptor = { type: 'box', size: [1, 1, 1] };
+        assert.strictEqual(makeDescriptorDynamicSafe(plain), plain);
+    });
+
+    test("the 'error' and 'decompose' strategies explain themselves", () => {
+        const trimesh = describeShape(new THREE.BoxGeometry(1, 1, 1), { type: 'trimesh' });
+        expect(() => makeDescriptorDynamicSafe(trimesh, 'error')).toThrow(
+            /cannot simulate a dynamic body with a trimesh/
+        );
+        expect(() => makeDescriptorDynamicSafe(trimesh, 'decompose')).toThrow(
+            /reserved and not implemented yet/
+        );
+    });
+
+    test('convexHullFromShape hulls an existing MeshShape without touching it', () => {
+        const mesh = generateShape(
+            describeShape(new THREE.BoxGeometry(2, 2, 2), { type: 'trimesh' })
+        );
+        const hull = convexHullFromShape(mesh);
+
+        assert.equal(hull.GetSubType(), Raw.module.EShapeSubType_ConvexHull);
+        assert.equal(hull.GetRefCount(), 1);
+        // the hull of a box is the same box, in the same place
+        expectBounds(hull, { min: [-1, -1, -1], max: [1, 1, 1] }, 0.02);
+        assert.equal(mesh.GetRefCount(), 1, 'the source shape was not left alone');
+
+        releaseShape(hull);
+        releaseShape(mesh);
+    });
+
+    test('a dynamic trimesh body becomes convex, falls under gravity and rests on a box', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('dynamic-trimesh-test');
+
+        // a static floor
+        const floor = new THREE.Mesh(new THREE.BoxGeometry(40, 1, 40));
+        floor.position.set(0, -0.5, 0);
+        system.bodySystem.addBody(floor, { bodyType: 'static' });
+
+        // ...and a dynamic body whose shape is asked for as a trimesh, the #112 case
+        const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1));
+        mesh.position.set(0, 8, 0);
+        const { result: body, warnings } = withWarnings(
+            () =>
+                system.bodySystem.getBody(
+                    system.bodySystem.addBody(mesh, { shapeType: 'trimesh', bodyType: 'dynamic' })
+                )!
+        );
+
+        assert.isTrue(
+            warnings.some((w) => w.includes('cannot use a trimesh shape')),
+            'a dynamic trimesh must warn'
+        );
+        assert.equal(
+            body.body.GetShape().GetSubType(),
+            Raw.module.EShapeSubType_ConvexHull,
+            'the mesh shape was not converted'
+        );
+        // a MeshShape has no volume, so a dynamic mesh body has no usable mass either
+        assert.isAbove(body.mass, 0, 'the converted shape has no mass');
+
+        for (let i = 0; i < 120; i++) system.onUpdate(1 / 60);
+
+        const resting = body.position;
+        assert.isFalse(Number.isNaN(resting.y), 'the body ended up at NaN - issue #112');
+        assert.isBelow(resting.y, 8, 'the body never fell');
+        // an icosahedron of radius 1 resting on a floor whose top is y = 0
+        assert.isAbove(resting.y, 0.2, 'the body fell through the floor');
+        assert.isBelow(resting.y, 1.2, 'the body is not resting on the floor');
+
+        body.destroy(true);
+    });
+
+    test('a static trimesh body is still a real MeshShape', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('static-trimesh-test');
+        const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1));
+        const body = system.bodySystem.getBody(
+            system.bodySystem.addBody(mesh, { shapeType: 'trimesh', bodyType: 'static' })
+        )!;
+        assert.equal(body.body.GetShape().GetSubType(), Raw.module.EShapeSubType_Mesh);
+        body.destroy(true);
+    });
+
+    test("dynamicMeshStrategy: 'error' refuses to create the body", async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('dynamic-trimesh-error-test');
+        const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1));
+        expect(() =>
+            system.bodySystem.addBody(mesh, {
+                shapeType: 'trimesh',
+                bodyType: 'dynamic',
+                dynamicMeshStrategy: 'error'
+            })
+        ).toThrow(/cannot simulate a dynamic body with a trimesh/);
+    });
+
+    test('a ready made MeshShape handed to a dynamic body is converted too', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('dynamic-trimesh-shape-test');
+        const shape = generateShape(
+            describeShape(new THREE.BoxGeometry(2, 2, 2), { type: 'trimesh' })
+        );
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2));
+        const { result: body } = withWarnings(
+            () =>
+                system.bodySystem.getBody(
+                    // `mass` makes generateBodySettings read the hull's real mass properties
+                    system.bodySystem.addBody(mesh, { shape, bodyType: 'dynamic', mass: 12 })
+                )!
+        );
+
+        assert.equal(body.body.GetShape().GetSubType(), Raw.module.EShapeSubType_ConvexHull);
+        // the *body's* mass comes from the override (BodyState.mass reads the shape's density
+        // based mass properties instead, which the override deliberately replaces)
+        const simulatedMass = 1 / body.body.GetMotionProperties().GetInverseMass();
+        assert.closeTo(simulatedMass, 12, 1e-3, 'the requested mass was not applied');
+        // the hull we made for the body is owned by the body; the caller's mesh shape is not
+        assert.equal(shape.GetRefCount(), 1, 'the caller`s shape was not left alone');
+
+        body.destroy(true);
+        releaseShape(shape);
+    });
+
+    test('converting a dynamic trimesh body leaks nothing', () => {
+        const tracker = installAllocTracker(Raw);
+        try {
+            const before = tracker.live();
+            const descriptor = describeShape(new THREE.IcosahedronGeometry(1, 1), {
+                type: 'trimesh'
+            });
+            const shape = generateShape(makeDescriptorDynamicSafe(descriptor));
+            releaseShape(shape);
+            assert.equal(tracker.live(), before, JSON.stringify(tracker.liveByType()));
+        } finally {
+            tracker.uninstall();
+        }
     });
 });
 

@@ -53,6 +53,21 @@ most restricted shape Jolt has. Per Jolt's own docs, dynamic and kinematic trime
 collide with each other or with heightfields, and trying throws. Use them for static level
 geometry; use `convex` (or a compound of convex parts) for anything that moves.
 
+**Dynamic bodies cannot use a trimesh.** A Jolt mesh shape is a one-sided triangle soup with no
+inside, so mesh vs mesh does not collide at all and a dynamic mesh body sinks through the world
+and ends up with a `NaN` position ([issue #112](https://github.com/pmndrs/react-three-jolt/issues/112),
+[Jolt docs](https://jrouwe.github.io/JoltPhysics/#dynamic-mesh-shapes)). Asking for one warns and
+builds a convex hull of the same points instead. Pick a different behaviour with
+`dynamicMeshStrategy`:
+
+| value | behaviour |
+| --- | --- |
+| `'convex'` (default) | warn and use a convex hull of the mesh's points |
+| `'error'` | throw, so the mistake is loud |
+| `'decompose'` | reserved for a convex decomposition; throws with an explanation for now |
+
+Static (and kinematic) bodies keep a real mesh shape.
+
 ## Compound shapes
 
 Put several meshes in one `<RigidBody>` and you get a compound shape — positioned in the body's

@@ -15,7 +15,20 @@ import { anyVec3, joltScratch, quat, vec3 } from '../utils';
 import { type BodySystem, getThreeObjectForBody } from './body-system';
 import { Emitter, type Unsubscribe } from './emitter';
 import { BODY_EVENT_BITS, type BodyEventMap, EventBit } from './events';
-import { releaseShape, scaleShape } from './shape-system';
+import {
+    addSubShape,
+    asMutableCompoundShape,
+    isMutableCompoundShape,
+    modifySubShape,
+    readCenterOfMass,
+    releaseShape,
+    removeSubShape,
+    type ShapeDescriptor,
+    type SubShapeTransform,
+    scaleShape,
+    type Vec3Tuple,
+    validScaleFor
+} from './shape-system';
 
 // Initital body object copied from r3/rapier's state object
 export class BodyState {
@@ -322,6 +335,79 @@ export class BodyState {
         if (this.debugMesh) this.updateDebugMesh();
     }
 
+    //* Mutable compounds (issue #108) ========================
+    /**
+     * True when this body's shape is a `MutableCompoundShape`, i.e. when `addSubShape`,
+     * `removeSubShape` and `modifySubShape` can be used on it. Build one with a
+     * `{ type: 'mutableCompound' }` descriptor or a `<Shape dynamic>`.
+     */
+    get isMutableCompound() {
+        return isMutableCompoundShape(this.shape);
+    }
+    /** The body's shape as a `MutableCompoundShape`. Throws when it is anything else. */
+    get mutableCompound(): Jolt.MutableCompoundShape {
+        return asMutableCompoundShape(this.shape);
+    }
+
+    /**
+     * Tell Jolt the shape this body holds changed underneath it.
+     *
+     * Editing a `MutableCompoundShape` in place does not touch the body, so its broadphase bounds
+     * and its mass properties would both go stale: the body would collide against the shape it
+     * had when it was created. `NotifyShapeChanged` re-inserts it in the broadphase and (with
+     * `updateMassProperties`) recomputes mass and inertia from the new shape.
+     *
+     * @param previousCenterOfMass the shape's centre of mass *before* the edit - Jolt moves the
+     * body so the shape stays where it was. Read it with `readCenterOfMass(body.shape)` before
+     * editing; it defaults to the current one, which is only right if the edit did not move it.
+     */
+    notifyShapeChanged(
+        previousCenterOfMass: Vec3Tuple = readCenterOfMass(this.shape),
+        updateMassProperties = true
+    ) {
+        // NotifyShapeChanged takes the vector by value, so the shared scratch is safe here
+        this.bodyInterface.NotifyShapeChanged(
+            this.BodyID,
+            joltScratch.vec3(previousCenterOfMass),
+            updateMassProperties,
+            Raw.module.EActivation_Activate
+        );
+        if (this.debugMesh) this.updateDebugMesh();
+    }
+
+    /**
+     * Add a shape to this body's mutable compound and return its index.
+     *
+     * The descriptor's `position`/`rotation` place it inside the compound. The compound owns the
+     * new sub shape; drop it again with `removeSubShape(index)`, never by hand.
+     */
+    addSubShape(descriptor: ShapeDescriptor): number {
+        const compound = this.mutableCompound;
+        const previousCenterOfMass = readCenterOfMass(compound);
+        const index = addSubShape(compound, descriptor);
+        this.notifyShapeChanged(previousCenterOfMass);
+        return index;
+    }
+
+    /**
+     * Remove the sub shape at `index`. Every index above it shifts down by one, so a caller
+     * holding several indices should remove from the back.
+     */
+    removeSubShape(index: number) {
+        const compound = this.mutableCompound;
+        const previousCenterOfMass = readCenterOfMass(compound);
+        removeSubShape(compound, index);
+        this.notifyShapeChanged(previousCenterOfMass);
+    }
+
+    /** Move and/or turn the sub shape at `index`; anything left out keeps its current value. */
+    modifySubShape(index: number, transform: SubShapeTransform) {
+        const compound = this.mutableCompound;
+        const previousCenterOfMass = readCenterOfMass(compound);
+        modifySubShape(compound, index, transform);
+        this.notifyShapeChanged(previousCenterOfMass);
+    }
+
     //* Debugging ===============================================
     updateDebugMesh() {
         const newMesh = getThreeObjectForBody(this.body);
@@ -445,10 +531,24 @@ export class BodyState {
         return this.activeScale;
     }
 
+    /**
+     * Scale the body's collision shape (issue #40).
+     *
+     * A number means a uniform scale on all three axes. Non-uniform scale is allowed wherever
+     * Jolt allows it (a box, a convex hull, a mesh...); the shapes that cannot take it - spheres,
+     * capsules, tapered capsules - fall back to a uniform scale of the largest component, with a
+     * `devWarn`, rather than silently producing a shape that does not match what is on screen.
+     *
+     * Re-scaling replaces the `ScaledShape` rather than stacking a new one on top of it, so the
+     * scale is always relative to the *unscaled* shape and the superseded wrapper is freed with
+     * the body's reference.
+     */
     set scale(inScale: THREE.Vector3 | number[] | number) {
-        const scale =
-            inScale instanceof Number
-                ? vec3.three(inScale, inScale as number, inScale as number)
+        // `inScale instanceof Number` was always false for a primitive number, so a numeric
+        // scale used to fall through to `vec3.three(2)` -> (2, undefined, undefined).
+        const requested =
+            typeof inScale === 'number'
+                ? new THREE.Vector3(inScale, inScale, inScale)
                 : vec3.three(inScale);
 
         let existingShape = this.body.GetShape() as Jolt.ScaledShape;
@@ -461,16 +561,29 @@ export class BodyState {
             const existingScale = existingShape.GetScale();
             // compare existing scale to new scale
             if (
-                existingScale.GetX() === scale.x &&
-                existingScale.GetY() === scale.y &&
-                existingScale.GetZ() === scale.z
+                existingScale.GetX() === requested.x &&
+                existingScale.GetY() === requested.y &&
+                existingScale.GetZ() === requested.z
             ) {
                 // if they are the same, we don't need to do anything
                 return;
             }
 
             baseShape = existingShape.GetInnerShape();
+        } else if (
+            requested.x === 1 &&
+            requested.y === 1 &&
+            requested.z === 1 &&
+            this.activeScale.x === 1 &&
+            this.activeScale.y === 1 &&
+            this.activeScale.z === 1
+        ) {
+            // an unscaled shape asked to stay unscaled: don't wrap it for nothing
+            return;
         }
+        // a sphere/capsule cannot be squashed: ask Jolt rather than guessing from the subtype,
+        // because the answer also depends on what is inside a compound
+        const scale = validScaleFor(baseShape, requested);
         // create the new scaled shape. `scaleShape` wraps the base shape in a `ScaledShape` that
         // takes its own reference on it, and hands back a shape we own exactly one reference on.
         const newShape = Raw.module.castObject(

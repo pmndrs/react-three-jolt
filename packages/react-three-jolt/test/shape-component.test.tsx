@@ -13,11 +13,12 @@ import type Jolt from 'jolt-physics';
 import React from 'react';
 import { preload } from 'suspend-react';
 import * as THREE from 'three';
-import { assert, beforeAll, describe, expect, test } from 'vitest';
+import { assert, beforeAll, describe, expect, test, vi } from 'vitest';
 import { Physics } from '../src/components/Physics';
-import { RigidBodyContext } from '../src/components/RigidBody';
+import { RigidBody, RigidBodyContext } from '../src/components/RigidBody';
 import { Shape, type ShapeProps } from '../src/components/shape/Shape';
 import { initJolt, Raw } from '../src/raw';
+import type { BodyState } from '../src/systems/body-state';
 
 // <Physics> suspends on `suspend(() => initJolt(), ['jolt'])`; pre-resolving the load and
 // seeding suspend-react's cache makes it mount synchronously inside act(). See heightfield.test.
@@ -51,7 +52,11 @@ const shapeLog = (): ShapeLog => {
     };
 };
 
-const Harness = ({ log, ...props }: ShapeProps & { log: ShapeLog }) => (
+const Harness = ({
+    log,
+    onNotify,
+    ...props
+}: ShapeProps & { log: ShapeLog; onNotify?: () => void }) => (
     <RigidBodyContext.Provider
         value={
             {
@@ -61,7 +66,8 @@ const Harness = ({ log, ...props }: ShapeProps & { log: ShapeLog }) => (
                 rotation: undefined,
                 scale: undefined,
                 quaternion: undefined,
-                setActiveShape: log.onShape
+                setActiveShape: log.onShape,
+                notifyShapeChanged: onNotify
             } as any
         }
     >
@@ -260,7 +266,186 @@ describe('<Shape>', () => {
         assert.equal(shape.GetRefCount(), 1, 'unmounting did not release the shape');
         log.release();
     });
+});
 
+//* <Shape dynamic> - mutable compounds (issue #108) ========
+// The point of `dynamic` is that a child mounting, unmounting or moving edits the compound the
+// body already holds instead of building a new one: the shape object identity must NOT change,
+// and jolt's own AddShape/RemoveShape/ModifyShape must be the things that ran.
+const spyOnCompound = () => {
+    const prototype = Raw.module.MutableCompoundShape.prototype as any;
+    return {
+        add: vi.spyOn(prototype, 'AddShape'),
+        remove: vi.spyOn(prototype, 'RemoveShape'),
+        modify: vi.spyOn(prototype, 'ModifyShape'),
+        adjust: vi.spyOn(prototype, 'AdjustCenterOfMass'),
+        restore: () => vi.restoreAllMocks()
+    };
+};
+
+const subShapeCount = (shape: Jolt.Shape) =>
+    Raw.module.castObject(shape, Raw.module.CompoundShape).GetNumSubShapes();
+
+describe('<Shape dynamic>', () => {
+    test('nested children build a MutableCompoundShape, not a static one', async () => {
+        const log = shapeLog();
+        const renderer = await create(
+            <Physics>
+                <Harness log={log} dynamic>
+                    <Shape size={[1, 1, 1]} position={[0, 1, 0]} />
+                    <Shape size={[1, 1, 1]} position={[0, -1, 0]} />
+                </Harness>
+            </Physics>
+        );
+
+        assert.equal(log.shapes.length, 1);
+        assert.equal(log.shapes[0].GetSubType(), Raw.module.EShapeSubType_MutableCompound);
+        assert.equal(subShapeCount(log.shapes[0]), 2);
+
+        await renderer.unmount();
+        log.release();
+    });
+
+    test('adding a child edits the live compound instead of rebuilding it', async () => {
+        const log = shapeLog();
+        const notify = vi.fn();
+        const renderer = await create(
+            <Physics>
+                <Harness log={log} onNotify={notify} dynamic>
+                    <Shape size={[1, 1, 1]} position={[0, 1, 0]} />
+                    <Shape size={[1, 1, 1]} position={[0, -1, 0]} />
+                </Harness>
+            </Physics>
+        );
+        const compound = log.shapes[0];
+        const spies = spyOnCompound();
+
+        try {
+            await renderer.update(
+                <Physics>
+                    <Harness log={log} onNotify={notify} dynamic>
+                        <Shape size={[1, 1, 1]} position={[0, 1, 0]} />
+                        <Shape size={[1, 1, 1]} position={[0, -1, 0]} />
+                        <Shape type="sphere" radius={0.5} position={[0, 4, 0]} />
+                    </Harness>
+                </Physics>
+            );
+
+            expect(spies.add).toHaveBeenCalledTimes(1);
+            expect(spies.adjust).toHaveBeenCalled();
+            assert.equal(log.shapes.length, 1, 'the compound was rebuilt instead of edited');
+            assert.equal(subShapeCount(compound), 3, 'the new child never reached jolt');
+            // the sphere sits 4 above the middle box: the compound is taller now
+            assert.isAbove(boundsSize(compound)[1], 4);
+            // the body has to be told, or it keeps the bounds it was created with
+            expect(notify).toHaveBeenCalled();
+        } finally {
+            spies.restore();
+        }
+
+        await renderer.unmount();
+        log.release();
+    });
+
+    test('removing a child edits the live compound instead of rebuilding it', async () => {
+        const log = shapeLog();
+        const notify = vi.fn();
+        const tree = (withSecond: boolean) => (
+            <Physics>
+                <Harness log={log} onNotify={notify} dynamic>
+                    <Shape key="a" size={[1, 1, 1]} position={[0, 1, 0]} />
+                    {withSecond ? <Shape key="b" size={[1, 1, 1]} position={[0, -1, 0]} /> : null}
+                    <Shape key="c" type="sphere" radius={0.5} position={[0, 4, 0]} />
+                </Harness>
+            </Physics>
+        );
+        const renderer = await create(tree(true));
+        const compound = log.shapes[0];
+        assert.equal(subShapeCount(compound), 3);
+        const spies = spyOnCompound();
+
+        try {
+            await renderer.update(tree(false));
+
+            expect(spies.remove).toHaveBeenCalledTimes(1);
+            // jolt's indices close up behind a removal: the sphere was index 2 and is now 1
+            expect(spies.remove).toHaveBeenCalledWith(1);
+            assert.equal(log.shapes.length, 1, 'the compound was rebuilt instead of edited');
+            assert.equal(subShapeCount(compound), 2);
+            expect(notify).toHaveBeenCalled();
+        } finally {
+            spies.restore();
+        }
+
+        await renderer.unmount();
+        log.release();
+    });
+
+    test('moving a child calls ModifyShape; resizing one still rebuilds', async () => {
+        const log = shapeLog();
+        const tree = (y: number, size: number[]) => (
+            <Physics>
+                <Harness log={log} dynamic>
+                    <Shape size={[1, 1, 1]} position={[0, 1, 0]} />
+                    <Shape size={size} position={[0, y, 0]} />
+                </Harness>
+            </Physics>
+        );
+        const renderer = await create(tree(-1, [1, 1, 1]));
+        const compound = log.shapes[0];
+        const spies = spyOnCompound();
+
+        try {
+            // a pure move: same shape, new placement
+            await renderer.update(tree(-4, [1, 1, 1]));
+            expect(spies.modify).toHaveBeenCalledTimes(1);
+            assert.equal(log.shapes.length, 1, 'a move rebuilt the compound');
+            // 0.5 above the box at y = 1 down to 0.5 below the one now at y = -4
+            assert.closeTo(boundsSize(compound)[1], 6, 0.1);
+
+            // a different size is a different shape: that rebuilds
+            await renderer.update(tree(-4, [2, 2, 2]));
+            expect(spies.modify).toHaveBeenCalledTimes(1);
+            assert.equal(log.shapes.length, 2, 'a resized child did not rebuild the compound');
+            assert.equal(log.shapes[1].GetSubType(), Raw.module.EShapeSubType_MutableCompound);
+        } finally {
+            spies.restore();
+        }
+
+        await renderer.unmount();
+        log.release();
+    });
+
+    test('a non dynamic compound still rebuilds when a child is added', async () => {
+        const log = shapeLog();
+        const renderer = await create(
+            <Physics>
+                <Harness log={log}>
+                    <Shape size={[1, 1, 1]} position={[0, 1, 0]} />
+                    <Shape size={[1, 1, 1]} position={[0, -1, 0]} />
+                </Harness>
+            </Physics>
+        );
+        assert.equal(log.shapes[0].GetSubType(), Raw.module.EShapeSubType_StaticCompound);
+
+        await renderer.update(
+            <Physics>
+                <Harness log={log}>
+                    <Shape size={[1, 1, 1]} position={[0, 1, 0]} />
+                    <Shape size={[1, 1, 1]} position={[0, -1, 0]} />
+                    <Shape size={[1, 1, 1]} position={[0, 3, 0]} />
+                </Harness>
+            </Physics>
+        );
+        assert.equal(log.shapes.length, 2, 'a static compound must be rebuilt');
+        assert.equal(log.shapes[0].GetRefCount(), 1, 'the old compound was not released');
+
+        await renderer.unmount();
+        log.release();
+    });
+});
+
+describe('<Shape> geometry props', () => {
     test('a geometry prop is described once and survives a re-render', async () => {
         const log = shapeLog();
         const geometry = new THREE.IcosahedronGeometry(1, 1);
@@ -280,5 +465,80 @@ describe('<Shape>', () => {
 
         await renderer.unmount();
         log.release();
+    });
+});
+
+//* <RigidBody scale> (issue #40) ===========================
+// This is the Scaler example (apps/examples/src/examples/Bodies/Scaler.tsx) as a test: a body
+// whose `scale` prop changes over time has to re-wrap its shape, not stack wrappers, and a body
+// created with a scale has to be the right size from the first frame.
+describe('<RigidBody scale>', () => {
+    const scaleOf = (body: BodyState) => {
+        const shape = body.body.GetShape();
+        if (shape.GetSubType() !== Raw.module.EShapeSubType_Scaled) return [1, 1, 1];
+        const scaled = Raw.module.castObject(shape, Raw.module.ScaledShape).GetScale();
+        return [scaled.GetX(), scaled.GetY(), scaled.GetZ()];
+    };
+
+    test('a scale prop is applied when the body is created and re-applied when it changes', async () => {
+        const bodyRef = React.createRef<BodyState>();
+        const tree = (scale: number[]) => (
+            <Physics>
+                <RigidBody ref={bodyRef} scale={scale}>
+                    <mesh>
+                        <sphereGeometry args={[1.3, 16, 16]} />
+                    </mesh>
+                </RigidBody>
+            </Physics>
+        );
+
+        const renderer = await create(tree([1, 1, 1]));
+        const body = bodyRef.current!;
+        assert.isOk(body, '<RigidBody> never produced a body');
+        // a scale of 1 must not wrap the shape for nothing
+        assert.equal(body.body.GetShape().GetSubType(), Raw.module.EShapeSubType_Sphere);
+
+        await renderer.update(tree([1.33, 1.33, 1.33]));
+        expect(scaleOf(body).map((n) => Math.round(n * 100))).toEqual([133, 133, 133]);
+        const wrapper = body.body.GetShape();
+
+        // Scaler cycles through several scales: each one must re-wrap the *inner* sphere rather
+        // than wrap the previous ScaledShape again
+        await renderer.update(tree([1.8, 1.8, 1.8]));
+        expect(scaleOf(body).map((n) => Math.round(n * 100))).toEqual([180, 180, 180]);
+        const rescaled = Raw.module.castObject(body.body.GetShape(), Raw.module.ScaledShape);
+        assert.equal(rescaled.GetInnerShape().GetSubType(), Raw.module.EShapeSubType_Sphere);
+        assert.notStrictEqual(rescaled, wrapper);
+        // and back to the start, the way Scaler's reset() does
+        await renderer.update(tree([1, 1, 1]));
+        expect(scaleOf(body).map(Math.round)).toEqual([1, 1, 1]);
+
+        await renderer.unmount();
+    });
+
+    test('a scaled child mesh is described at its scaled size (issue #40)', async () => {
+        const bodyRef = React.createRef<BodyState>();
+        const renderer = await create(
+            <Physics>
+                <RigidBody ref={bodyRef}>
+                    <mesh scale={[2, 2, 2]} position={[0, 1, 0]}>
+                        <boxGeometry args={[1, 1, 1]} />
+                    </mesh>
+                    <mesh position={[0, -1, 0]}>
+                        <boxGeometry args={[1, 1, 1]} />
+                    </mesh>
+                </RigidBody>
+            </Physics>
+        );
+
+        const shape = bodyRef.current!.body.GetShape();
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_StaticCompound);
+        const compound = Raw.module.castObject(shape, Raw.module.StaticCompoundShape);
+        const subTypes = [0, 1].map((i) => compound.GetSubShape(i).mShape.GetSubType());
+        assert.include(subTypes, Raw.module.EShapeSubType_Scaled, 'the scaled mesh');
+        // the scaled box reaches y = 2 and the plain one y = -1.5: 3.5 tall, not 2.5
+        assert.closeTo(boundsSize(shape)[1], 3.5, 0.1);
+
+        await renderer.unmount();
     });
 });

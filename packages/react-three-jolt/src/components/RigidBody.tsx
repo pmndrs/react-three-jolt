@@ -6,6 +6,7 @@ import React, {
     forwardRef,
     memo,
     ReactNode,
+    useCallback,
     useEffect,
     //  useLayoutEffect,
     useMemo,
@@ -98,6 +99,12 @@ export interface RigidBodyContext {
     quaternion: THREE.Quaternion | undefined;
     // methods
     setActiveShape: (shape: any) => void;
+    /**
+     * Tell the body its shape changed underneath it (#108: a `<Shape dynamic>` edits its
+     * `MutableCompoundShape` in place rather than handing over a new shape, so `setActiveShape`
+     * never fires and the body would keep the bounds and mass properties it was created with).
+     */
+    notifyShapeChanged?: (previousCenterOfMass?: [number, number, number]) => void;
 }
 export const RigidBodyContext = createContext<RigidBodyContext | undefined>(undefined!);
 
@@ -218,6 +225,10 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                     body.rotation = new THREE.Quaternion().setFromEuler(
                         new THREE.Euler(rotation[0], rotation[1], rotation[2])
                     );
+                // #40: scale the shape as part of creating the body rather than a frame later,
+                // so the body never exists at the wrong size (BodyState.scale wraps the shape in
+                // a ScaledShape, which is what lets it change again afterwards)
+                if (scale) body.scale = vec3.three(scale);
             }
         }, [activeShape, bodySystem, rigidBodyRef]);
 
@@ -347,6 +358,17 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             if (lockTranslations) body.lockTranslations();
         }, [dof, lockRotations, lockTranslations, rigidBodyRef]);
 
+        // #108: a <Shape dynamic> edits its compound in place; this is how it reaches the body.
+        // Read through the ref so the callback identity never changes (the context value below
+        // is memoised, and a child's registration effect depends on it).
+        const notifyShapeChanged = useCallback(
+            (previousCenterOfMass?: [number, number, number]) => {
+                const body = rigidBodyRef.current as BodyState | undefined;
+                body?.notifyShapeChanged(previousCenterOfMass);
+            },
+            [rigidBodyRef]
+        );
+
         // the context should update when a new handle is added
         //@ts-ignore
         const contextValue: RigidBodyContext = useMemo(() => {
@@ -359,9 +381,10 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                 rotation,
                 scale,
                 quaternion,
-                setActiveShape
+                setActiveShape,
+                notifyShapeChanged
             };
-        }, [body, type, position, rotation, scale, quaternion]);
+        }, [body, type, position, rotation, scale, quaternion, notifyShapeChanged]);
         return (
             <RigidBodyContext.Provider value={contextValue}>
                 <object3D ref={objectRef} {...objectProps}>
