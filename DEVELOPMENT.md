@@ -63,3 +63,18 @@ ESLint + Prettier).
 > yarn lint    # biome check .
 > yarn format  # biome format --write .
 ```
+
+`yarn lint` runs in CI and must exit 0. A handful of rules are currently downgraded to
+`warn` rather than fixed outright - see [`LINTING.md`](./LINTING.md) for the list and
+the plan to re-enable them one by one.
+
+## Continuous Integration
+
+Every pull request and push to `main` runs [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)
+on Node 22: `yarn install --immutable`, `yarn lint`, `yarn build`, then `yarn test`. Make
+sure all three pass locally before opening a PR.
+
+Dependency updates are handled by Dependabot ([`.github/dependabot.yml`](./.github/dependabot.yml)):
+weekly, grouped minor/patch bumps for both npm and GitHub Actions, with major bumps of
+`three`, `react`/`react-dom`, and `@react-three/*` excluded since those are tracked as
+deliberate, hand-verified upgrades (see the toolchain notes in this repo's changesets).
