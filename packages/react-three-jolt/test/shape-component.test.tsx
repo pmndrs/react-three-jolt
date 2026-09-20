@@ -15,9 +15,10 @@ import { preload } from 'suspend-react';
 import * as THREE from 'three';
 import { assert, beforeAll, describe, expect, test, vi } from 'vitest';
 import { Physics } from '../src/components/Physics';
-import { RigidBodyContext } from '../src/components/RigidBody';
+import { RigidBody, RigidBodyContext } from '../src/components/RigidBody';
 import { Shape, type ShapeProps } from '../src/components/shape/Shape';
 import { initJolt, Raw } from '../src/raw';
+import type { BodyState } from '../src/systems/body-state';
 
 // <Physics> suspends on `suspend(() => initJolt(), ['jolt'])`; pre-resolving the load and
 // seeding suspend-react's cache makes it mount synchronously inside act(). See heightfield.test.
@@ -464,5 +465,80 @@ describe('<Shape> geometry props', () => {
 
         await renderer.unmount();
         log.release();
+    });
+});
+
+//* <RigidBody scale> (issue #40) ===========================
+// This is the Scaler example (apps/examples/src/examples/Bodies/Scaler.tsx) as a test: a body
+// whose `scale` prop changes over time has to re-wrap its shape, not stack wrappers, and a body
+// created with a scale has to be the right size from the first frame.
+describe('<RigidBody scale>', () => {
+    const scaleOf = (body: BodyState) => {
+        const shape = body.body.GetShape();
+        if (shape.GetSubType() !== Raw.module.EShapeSubType_Scaled) return [1, 1, 1];
+        const scaled = Raw.module.castObject(shape, Raw.module.ScaledShape).GetScale();
+        return [scaled.GetX(), scaled.GetY(), scaled.GetZ()];
+    };
+
+    test('a scale prop is applied when the body is created and re-applied when it changes', async () => {
+        const bodyRef = React.createRef<BodyState>();
+        const tree = (scale: number[]) => (
+            <Physics>
+                <RigidBody ref={bodyRef} scale={scale}>
+                    <mesh>
+                        <sphereGeometry args={[1.3, 16, 16]} />
+                    </mesh>
+                </RigidBody>
+            </Physics>
+        );
+
+        const renderer = await create(tree([1, 1, 1]));
+        const body = bodyRef.current!;
+        assert.isOk(body, '<RigidBody> never produced a body');
+        // a scale of 1 must not wrap the shape for nothing
+        assert.equal(body.body.GetShape().GetSubType(), Raw.module.EShapeSubType_Sphere);
+
+        await renderer.update(tree([1.33, 1.33, 1.33]));
+        expect(scaleOf(body).map((n) => Math.round(n * 100))).toEqual([133, 133, 133]);
+        const wrapper = body.body.GetShape();
+
+        // Scaler cycles through several scales: each one must re-wrap the *inner* sphere rather
+        // than wrap the previous ScaledShape again
+        await renderer.update(tree([1.8, 1.8, 1.8]));
+        expect(scaleOf(body).map((n) => Math.round(n * 100))).toEqual([180, 180, 180]);
+        const rescaled = Raw.module.castObject(body.body.GetShape(), Raw.module.ScaledShape);
+        assert.equal(rescaled.GetInnerShape().GetSubType(), Raw.module.EShapeSubType_Sphere);
+        assert.notStrictEqual(rescaled, wrapper);
+        // and back to the start, the way Scaler's reset() does
+        await renderer.update(tree([1, 1, 1]));
+        expect(scaleOf(body).map(Math.round)).toEqual([1, 1, 1]);
+
+        await renderer.unmount();
+    });
+
+    test('a scaled child mesh is described at its scaled size (issue #40)', async () => {
+        const bodyRef = React.createRef<BodyState>();
+        const renderer = await create(
+            <Physics>
+                <RigidBody ref={bodyRef}>
+                    <mesh scale={[2, 2, 2]} position={[0, 1, 0]}>
+                        <boxGeometry args={[1, 1, 1]} />
+                    </mesh>
+                    <mesh position={[0, -1, 0]}>
+                        <boxGeometry args={[1, 1, 1]} />
+                    </mesh>
+                </RigidBody>
+            </Physics>
+        );
+
+        const shape = bodyRef.current!.body.GetShape();
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_StaticCompound);
+        const compound = Raw.module.castObject(shape, Raw.module.StaticCompoundShape);
+        const subTypes = [0, 1].map((i) => compound.GetSubShape(i).mShape.GetSubType());
+        assert.include(subTypes, Raw.module.EShapeSubType_Scaled, 'the scaled mesh');
+        // the scaled box reaches y = 2 and the plain one y = -1.5: 3.5 tall, not 2.5
+        assert.closeTo(boundsSize(shape)[1], 3.5, 0.1);
+
+        await renderer.unmount();
     });
 });

@@ -24,7 +24,8 @@ import {
     type ShapeDescriptor,
     type SubShapeTransform,
     scaleShape,
-    type Vec3Tuple
+    type Vec3Tuple,
+    validScaleFor
 } from './shape-system';
 
 // Initital body object copied from r3/rapier's state object
@@ -425,10 +426,24 @@ export class BodyState {
         return this.activeScale;
     }
 
+    /**
+     * Scale the body's collision shape (issue #40).
+     *
+     * A number means a uniform scale on all three axes. Non-uniform scale is allowed wherever
+     * Jolt allows it (a box, a convex hull, a mesh...); the shapes that cannot take it - spheres,
+     * capsules, tapered capsules - fall back to a uniform scale of the largest component, with a
+     * `devWarn`, rather than silently producing a shape that does not match what is on screen.
+     *
+     * Re-scaling replaces the `ScaledShape` rather than stacking a new one on top of it, so the
+     * scale is always relative to the *unscaled* shape and the superseded wrapper is freed with
+     * the body's reference.
+     */
     set scale(inScale: THREE.Vector3 | number[] | number) {
-        const scale =
-            inScale instanceof Number
-                ? vec3.three(inScale, inScale as number, inScale as number)
+        // `inScale instanceof Number` was always false for a primitive number, so a numeric
+        // scale used to fall through to `vec3.three(2)` -> (2, undefined, undefined).
+        const requested =
+            typeof inScale === 'number'
+                ? new THREE.Vector3(inScale, inScale, inScale)
                 : vec3.three(inScale);
 
         let existingShape = this.body.GetShape() as Jolt.ScaledShape;
@@ -441,16 +456,29 @@ export class BodyState {
             const existingScale = existingShape.GetScale();
             // compare existing scale to new scale
             if (
-                existingScale.GetX() === scale.x &&
-                existingScale.GetY() === scale.y &&
-                existingScale.GetZ() === scale.z
+                existingScale.GetX() === requested.x &&
+                existingScale.GetY() === requested.y &&
+                existingScale.GetZ() === requested.z
             ) {
                 // if they are the same, we don't need to do anything
                 return;
             }
 
             baseShape = existingShape.GetInnerShape();
+        } else if (
+            requested.x === 1 &&
+            requested.y === 1 &&
+            requested.z === 1 &&
+            this.activeScale.x === 1 &&
+            this.activeScale.y === 1 &&
+            this.activeScale.z === 1
+        ) {
+            // an unscaled shape asked to stay unscaled: don't wrap it for nothing
+            return;
         }
+        // a sphere/capsule cannot be squashed: ask Jolt rather than guessing from the subtype,
+        // because the answer also depends on what is inside a compound
+        const scale = validScaleFor(baseShape, requested);
         // create the new scaled shape. `scaleShape` wraps the base shape in a `ScaledShape` that
         // takes its own reference on it, and hands back a shape we own exactly one reference on.
         const newShape = Raw.module.castObject(

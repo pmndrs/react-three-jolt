@@ -32,11 +32,13 @@ import {
     getSubShapeTransform,
     isMutableCompoundShape,
     modifySubShape,
+    readCenterOfMass,
     releaseShape,
     removeSubShape,
     type ShapeDescriptor,
     scaleShape,
-    subShapeCount
+    subShapeCount,
+    validScaleFor
 } from '../src/systems/shape-system';
 import { createMeshFloor } from '../src/utils/meshTools';
 import { installAllocTracker } from './jolt-alloc';
@@ -715,6 +717,89 @@ describe('scaled shapes', () => {
         releaseShape(base);
     });
 
+    test('a scaled mesh below the root describes a scaled child (issue #40)', () => {
+        const group = new THREE.Group();
+        const big = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+        big.scale.set(2, 3, 4);
+        big.position.set(0, 5, 0);
+        group.add(big);
+        group.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)));
+
+        const descriptor = describeShape(group) as any;
+        assert.equal(descriptor.type, 'staticCompound');
+        const scaled = descriptor.children[0];
+        assert.equal(scaled.type, 'scaled', 'a scaled mesh must describe a scaled shape');
+        assert.deepEqual(scaled.scale, [2, 3, 4]);
+        assert.equal(scaled.child.type, 'box');
+        // the placement stays on the outside, where the compound reads it
+        assert.deepEqual(scaled.position, [0, 5, 0]);
+        // the unscaled sibling is untouched
+        assert.equal(descriptor.children[1].type, 'box');
+
+        const shape = generateShape(descriptor);
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_StaticCompound);
+        const compound = Raw.module.castObject(shape, Raw.module.StaticCompoundShape);
+        assert.equal(compound.GetSubShape(0).mShape.GetSubType(), Raw.module.EShapeSubType_Scaled);
+        releaseShape(shape);
+    });
+
+    test('an unscaled mesh is not wrapped', () => {
+        const group = new THREE.Group();
+        group.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)));
+        group.add(new THREE.Mesh(new THREE.SphereGeometry(1)));
+        const descriptor = describeShape(group) as any;
+        assert.equal(descriptor.children[0].type, 'box');
+        assert.equal(descriptor.children[1].type, 'sphere');
+    });
+
+    test("the root object's own scale is the body's business unless applyObjectScale is set", () => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+        mesh.scale.set(2, 2, 2);
+
+        // by default the root scale belongs to BodyState.scale, not to the shape
+        assert.equal(describeShape(mesh).type, 'box');
+
+        const baked = describeShape(mesh, { applyObjectScale: true }) as any;
+        assert.equal(baked.type, 'scaled');
+        assert.deepEqual(baked.scale, [2, 2, 2]);
+
+        const shape = generateShape(baked);
+        expectBounds(shape, { min: [-1, -1, -1], max: [1, 1, 1] }, 0.02);
+        releaseShape(shape);
+    });
+
+    test('applyObjectScale scales a whole group', () => {
+        const group = new THREE.Group();
+        group.scale.set(2, 2, 2);
+        group.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)));
+        const second = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+        second.position.set(0, 2, 0);
+        group.add(second);
+        const descriptor = describeShape(group, { applyObjectScale: true }) as any;
+        assert.equal(descriptor.type, 'scaled');
+        assert.deepEqual(descriptor.scale, [2, 2, 2]);
+        assert.equal(descriptor.child.type, 'staticCompound');
+    });
+
+    test('validScaleFor passes a legal scale through and fixes an illegal one', () => {
+        const box = generateShape({ type: 'box', size: [1, 1, 1] });
+        const sphere = generateShape({ type: 'sphere', radius: 1 });
+
+        // a box takes any scale
+        const boxScale = validScaleFor(box, [2, 3, 4]);
+        assert.deepEqual([boxScale.x, boxScale.y, boxScale.z], [2, 3, 4]);
+        // a number means a uniform scale
+        const uniform = validScaleFor(box, 2);
+        assert.deepEqual([uniform.x, uniform.y, uniform.z], [2, 2, 2]);
+
+        // a sphere has one radius: the largest component wins, uniformly
+        const sphereScale = validScaleFor(sphere, [2, 3, 1]);
+        assert.deepEqual([sphereScale.x, sphereScale.y, sphereScale.z], [3, 3, 3]);
+
+        releaseShape(box);
+        releaseShape(sphere);
+    });
+
     test('a scaled descriptor builds a ScaledShape in one go', () => {
         const allocations = startSpy();
         const shape = generateShape({
@@ -1059,6 +1144,49 @@ describe('every descriptor type is allocation neutral', () => {
     }
 });
 
+describe('offsetCenterOfMass descriptors (issue #40)', () => {
+    test('an offset centre of mass moves the centre of mass without moving the shape', () => {
+        const plain = generateShape({ type: 'box', size: [1, 1, 1] });
+        const plainCenter = readCenterOfMass(plain);
+
+        const allocations = startSpy();
+        const shifted = generateShape({
+            type: 'offsetCenterOfMass',
+            centerOfMass: [0, -0.4, 0],
+            child: { type: 'box', size: [1, 1, 1] }
+        });
+
+        assert.equal(shifted.GetSubType(), Raw.module.EShapeSubType_OffsetCenterOfMass);
+        assert.equal(shifted.GetRefCount(), 1);
+        const center = readCenterOfMass(shifted);
+        assert.closeTo(center[1], plainCenter[1] - 0.4, 1e-4);
+        // the box itself has not moved: local bounds are measured from the centre of mass, so
+        // they shift by exactly the offset
+        expectBounds(shifted, { min: [-0.5, -0.1, -0.5], max: [0.5, 0.9, 0.5] }, 0.02);
+        // the inner settings are owned (and freed inside wasm) by the decorator
+        expect(allocations.counts()).toEqual({ BoxShapeSettings: 1 });
+
+        releaseShape(shifted);
+        releaseShape(plain);
+    });
+
+    test('offsetCenterOfMass generate + release is allocation net zero', () => {
+        const tracker = installAllocTracker(Raw);
+        try {
+            const before = tracker.live();
+            const shape = generateShape({
+                type: 'offsetCenterOfMass',
+                centerOfMass: [0, -0.4, 0],
+                child: { type: 'sphere', radius: 1 }
+            });
+            releaseShape(shape);
+            assert.equal(tracker.live(), before, JSON.stringify(tracker.liveByType()));
+        } finally {
+            tracker.uninstall();
+        }
+    });
+});
+
 describe('BodyState.scale goes through the pipeline', () => {
     test('scaling a body wraps its shape once and re-wraps the inner shape after that', async () => {
         const { PhysicsSystem } = await import('../src/systems/physics-system');
@@ -1082,6 +1210,83 @@ describe('BodyState.scale goes through the pipeline', () => {
         assert.equal(rescaled.GetInnerShape().GetSubType(), Raw.module.EShapeSubType_Box);
         assert.closeTo(rescaled.GetScale().GetX(), 3, 1e-5);
         assert.equal(rescaled.GetRefCount(), 1);
+
+        body.destroy(true);
+    });
+
+    test('a numeric scale is uniform, not (n, NaN, NaN)', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('numeric-scale-test');
+        const body = system.bodySystem.getBody(
+            system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
+        )!;
+
+        // #40: `inScale instanceof Number` is always false for a primitive, so this used to fall
+        // through to vec3.three(2) -> (2, undefined, undefined) and scale the body by NaN
+        body.scale = 2;
+
+        const scaled = Raw.module.castObject(body.body.GetShape(), Raw.module.ScaledShape);
+        const applied = scaled.GetScale();
+        assert.deepEqual([applied.GetX(), applied.GetY(), applied.GetZ()], [2, 2, 2]);
+        expectBounds(scaled, { min: [-1, -1, -1], max: [1, 1, 1] }, 0.02);
+        assert.deepEqual(body.scale.toArray(), [2, 2, 2]);
+
+        body.destroy(true);
+    });
+
+    test('a non-uniform scale works on a box and is clamped on a sphere', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const { setDebug } = await import('../src/utils');
+        const system = new PhysicsSystem('non-uniform-scale-test');
+
+        const box = system.bodySystem.getBody(
+            system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
+        )!;
+        box.scale = [2, 3, 4];
+        expectBounds(box.body.GetShape(), { min: [-1, -1.5, -2], max: [1, 1.5, 2] }, 0.02);
+        assert.deepEqual(box.scale.toArray(), [2, 3, 4]);
+
+        // a sphere has a single radius: jolt refuses a non-uniform scale, so we warn and use
+        // the largest component uniformly rather than producing a mismatched collider
+        const warnings: unknown[][] = [];
+        const original = console.warn;
+        console.warn = (...args: unknown[]) => warnings.push(args);
+        setDebug(true);
+        try {
+            const sphere = system.bodySystem.getBody(
+                system.bodySystem.addBody(new THREE.Mesh(new THREE.SphereGeometry(1, 16, 16)))
+            )!;
+            sphere.scale = [2, 3, 1];
+            assert.deepEqual(sphere.scale.toArray(), [3, 3, 3]);
+            expectBounds(sphere.body.GetShape(), { min: [-3, -3, -3], max: [3, 3, 3] }, 0.05);
+            assert.isTrue(
+                warnings.some((args) => String(args[0]).includes('cannot be scaled non-uniformly')),
+                'a non-uniform sphere scale must warn'
+            );
+            sphere.destroy(true);
+        } finally {
+            setDebug(false);
+            console.warn = original;
+        }
+
+        box.destroy(true);
+    });
+
+    test('setting the scale a body already has does nothing', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('scale-noop-test');
+        const body = system.bodySystem.getBody(
+            system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
+        )!;
+
+        // an unscaled shape asked to stay unscaled must not be wrapped for nothing
+        body.scale = [1, 1, 1];
+        assert.equal(body.body.GetShape().GetSubType(), Raw.module.EShapeSubType_Box);
+
+        body.scale = [2, 2, 2];
+        const wrapped = body.body.GetShape();
+        body.scale = [2, 2, 2];
+        assert.strictEqual(body.body.GetShape(), wrapped, 'the shape was re-wrapped for nothing');
 
         body.destroy(true);
     });

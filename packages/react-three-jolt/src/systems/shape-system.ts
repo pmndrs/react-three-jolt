@@ -18,7 +18,7 @@ import {
 } from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { Raw } from '../raw';
-import { type anyQuat, type anyVec3, devWarn, quat, vec3 } from '../utils';
+import { type anyQuat, type anyVec3, devWarn, joltScratch, quat, vec3 } from '../utils';
 
 export class ShapeSystem {
     private physicsSystem: Jolt.PhysicsSystem;
@@ -192,10 +192,15 @@ export interface ScaledShapeDescriptor extends ShapeDescriptorBase {
     child: ShapeDescriptor;
     scale: Vec3Tuple;
 }
-/** Reserved for issue #40 (centre of mass control). `generateShape` throws for now. */
+/**
+ * Moves the child's centre of mass without moving the child (issue #40): the classic "weeble"
+ * trick, a body that always rights itself, and the way to stop a vehicle or a character tipping
+ * over. The offset is in the child's local space.
+ */
 export interface OffsetCenterOfMassShapeDescriptor extends ShapeDescriptorBase {
     type: 'offsetCenterOfMass';
     child: ShapeDescriptor;
+    /** How far to shift the centre of mass, in the child's local space. */
     centerOfMass: Vec3Tuple;
 }
 
@@ -328,6 +333,15 @@ export type DescribeShapeOptions = {
     convexRadius?: number;
     /** heightfield block size */
     blockSize?: number;
+    /**
+     * Bake the *root* object's own scale into the shape as well (issue #40).
+     *
+     * Off by default: a root object's scale normally belongs to the body (`BodyState.scale`,
+     * which wraps the shape in a `ScaledShape` that can be changed again later), not to the
+     * shape, and baking it in would apply it twice. The scale of any mesh *below* the root is
+     * always baked in, because a compound's children have no other way to carry one.
+     */
+    applyObjectScale?: boolean;
 };
 
 /** `compound` is the historical name for a static compound. */
@@ -554,10 +568,31 @@ export const describeGeometry = (
     }
 };
 
+/** A scale that is (near enough) 1 on every axis needs no `ScaledShape`. */
+const isUnitScale = (scale: THREE.Vector3, epsilon = 1e-6) =>
+    Math.abs(scale.x - 1) < epsilon &&
+    Math.abs(scale.y - 1) < epsilon &&
+    Math.abs(scale.z - 1) < epsilon;
+
+/**
+ * Wrap `descriptor` in a `scaled` descriptor when `scale` is not 1 (issue #40).
+ * A `scaled` wrapper already holding the same child is rescaled rather than stacked.
+ */
+const withScale = (descriptor: ShapeDescriptor, scale: THREE.Vector3): ShapeDescriptor => {
+    if (isUnitScale(scale)) return descriptor;
+    return { type: 'scaled', child: descriptor, scale: toTuple(scale) };
+};
+
 /**
  * Describe a three.js object: every mesh below it (including the object itself) becomes one
- * child descriptor carrying that mesh's local position/rotation. A single mesh is described
- * directly rather than wrapped in a one-child compound.
+ * child descriptor carrying that mesh's local position/rotation - and, when it is scaled, a
+ * `scaled` wrapper around it (issue #40: a scaled mesh used to describe a shape at its unscaled
+ * size, so the collider did not match what was on screen).
+ *
+ * The root object's own scale is left to the body unless `options.applyObjectScale` is set; see
+ * `DescribeShapeOptions.applyObjectScale`.
+ *
+ * A single mesh is described directly rather than wrapped in a one-child compound.
  */
 export const describeObject = (
     object: Object3D,
@@ -567,20 +602,27 @@ export const describeObject = (
     object.traverse((child) => {
         // adding ignore to meshes skips the shape generator
         if (!(child instanceof THREE.Mesh) || !child.geometry) return;
-        const descriptor = describeGeometry(child.geometry, options);
-        descriptor.position = toTuple(child.position);
-        descriptor.rotation = [
+        // a nested mesh's scale can only travel with the shape; the root's belongs to the body
+        const scaled =
+            child === object && !options.applyObjectScale
+                ? describeGeometry(child.geometry, options)
+                : withScale(describeGeometry(child.geometry, options), child.scale);
+        scaled.position = toTuple(child.position);
+        scaled.rotation = [
             child.quaternion.x,
             child.quaternion.y,
             child.quaternion.z,
             child.quaternion.w
         ];
-        children.push(descriptor);
+        children.push(scaled);
     });
 
     // if theres only one, return it - its transform belongs to the body, not to the shape
-    if (children.length === 1) return children[0];
-    return { type: 'staticCompound', children };
+    const described: ShapeDescriptor =
+        children.length === 1 ? children[0] : { type: 'staticCompound', children };
+    // a scaled group scales everything under it; a root *mesh* already had its scale applied above
+    if (!options.applyObjectScale || object instanceof THREE.Mesh) return described;
+    return withScale(described, object.scale);
 };
 
 /**
@@ -847,12 +889,6 @@ const createHeightfieldShapeSettings = (
 const clampConvexRadius = (requested: number | undefined, ...limits: number[]) =>
     Math.max(0, Math.min(requested ?? 0.05, ...limits));
 
-const notImplemented = (type: string, issue: string): never => {
-    throw new Error(
-        `react-three-jolt: the '${type}' shape descriptor is reserved but not implemented yet (see ${issue})`
-    );
-};
-
 /** Build a compound's settings from child descriptors. */
 const createCompoundShapeSettings = (
     children: ShapeDescriptor[],
@@ -976,9 +1012,21 @@ export function createShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSett
                 jolt.destroy(scale);
             }
         }
-        case 'offsetCenterOfMass':
-            // issue #40: needs the BodyState/<Shape> scale work before it is useful
-            return notImplemented('offsetCenterOfMass', 'issue #40');
+        case 'offsetCenterOfMass': {
+            // like ScaledShapeSettings, this takes a reference on the inner settings: destroying
+            // the decorator frees them, so they are never destroyed here.
+            const inner = createShapeSettings(descriptor.child);
+            const offset = vec3.jolt(descriptor.centerOfMass);
+            try {
+                // note the argument order: OffsetCenterOfMassShapeSettings(offset, shape)
+                return new jolt.OffsetCenterOfMassShapeSettings(offset, inner);
+            } catch (error) {
+                jolt.destroy(inner);
+                throw error;
+            } finally {
+                jolt.destroy(offset);
+            }
+        }
         default:
             throw new Error(
                 `react-three-jolt: unknown shape descriptor type '${
@@ -1152,6 +1200,43 @@ export function modifySubShape(
     }
     mutable.AdjustCenterOfMass();
 }
+
+/* ============================================================================
+ * Scaling (issue #40)
+ * ========================================================================== */
+
+/**
+ * The scale `shape` will actually accept, as close to `scale` as Jolt allows.
+ *
+ * Jolt only supports non-uniform scale on shapes whose geometry can take it: a sphere, a capsule
+ * or a tapered capsule has one radius, so squashing it would produce a shape that no longer
+ * matches what is drawn. Rather than let that through silently, this falls back to a uniform
+ * scale built from the largest component (sign kept, so a mirrored scale stays mirrored) and
+ * `devWarn`s; if even that is refused, Jolt's own `MakeScaleValid` decides.
+ *
+ * Allocation free: reads through the shared scratch vector, returns plain three.js data.
+ */
+export const validScaleFor = (shape: Jolt.Shape, scale: anyVec3 | number): THREE.Vector3 => {
+    const requested =
+        typeof scale === 'number' ? new Vector3(scale, scale, scale) : vec3.three(scale);
+    if (shape.IsValidScale(joltScratch.vec3(requested))) return requested;
+
+    // the component furthest from zero, with its sign: a mirrored scale stays mirrored
+    const largest = [requested.x, requested.y, requested.z].reduce((a, b) =>
+        Math.abs(b) > Math.abs(a) ? b : a
+    );
+    const uniform = new Vector3(largest, largest, largest);
+    devWarn(
+        `react-three-jolt: this shape cannot be scaled non-uniformly by (${requested.x}, ` +
+            `${requested.y}, ${requested.z}) - a sphere, capsule or tapered capsule has a single ` +
+            `radius. Falling back to a uniform scale of ${largest}.`
+    );
+    if (shape.IsValidScale(joltScratch.vec3(uniform))) return uniform;
+
+    // last resort: let jolt pick the nearest legal scale (a static temporary - read, never free)
+    const made = shape.MakeScaleValid(joltScratch.vec3(requested));
+    return new Vector3(made.GetX(), made.GetY(), made.GetZ());
+};
 
 /**
  * Wrap an existing shape in a `ScaledShape` (issue #40's building block).

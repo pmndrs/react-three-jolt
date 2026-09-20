@@ -176,6 +176,10 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                     body.rotation = new THREE.Quaternion().setFromEuler(
                         new THREE.Euler(rotation[0], rotation[1], rotation[2])
                     );
+                // #40: scale the shape as part of creating the body rather than a frame later,
+                // so the body never exists at the wrong size (BodyState.scale wraps the shape in
+                // a ScaledShape, which is what lets it change again afterwards)
+                if (scale) body.scale = vec3.three(scale);
             }
         }, [activeShape, bodySystem, rigidBodyRef]);
 
