@@ -5,7 +5,7 @@ import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { Layer } from '../../constants';
 import { Raw } from '../../raw';
-import { generateJoltMatrix, vec3 } from '../../utils';
+import { vec3 } from '../../utils';
 
 type CollideShapeCollector =
     | Jolt.CollideShapeAllHitCollisionCollector
@@ -44,12 +44,29 @@ export class ShapeCollider {
 
     // required jolt props
     shapeScale = new Raw.module.Vec3(1, 1, 1);
-    centerOfMassTransform = new Raw.module.RMat44();
+    // world space transform used for the query. Kept alive for the collider's whole lifetime and
+    // mutated in place by setJoltMatrix() instead of being replaced every call - see the comment
+    // there for why.
+    centerOfMassTransform: Jolt.RMat44 = new Raw.module.RMat44();
     baseOffset = new Raw.module.RVec3(0, 0, 0);
+
+    // scratch objects owned for the collider's lifetime so setJoltMatrix() (called from every
+    // position/rotation/matrix setter - CameraBoom.checkCollision does this every frame) never
+    // allocates. `.Set()` copies components in place.
+    private scratchPosition: Jolt.RVec3 = new Raw.module.RVec3(0, 0, 0);
+    private scratchRotation: Jolt.Quat = new Raw.module.Quat(0, 0, 0, 1);
+
+    private destroyed = false;
 
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         this.joltPhysicsSystem = joltPhysicsSystem;
         this.joltInterface = joltInterface;
+        // `activeShape` is a Jolt reference counted object (RefTarget) and starts life with a
+        // refcount of 0 (see the jolt-physics README's "Reference counting objects" section).
+        // AddRef() here means the `shape` setter/destroy() below can always treat
+        // `activeShape` uniformly with Release(), regardless of whether it's this default shape
+        // or one a caller handed us.
+        this.activeShape.AddRef();
         // these two filters mean the ray will cast as if its a dynamic object
         this.bpFilter = new Raw.module.DefaultBroadPhaseLayerFilter(
             joltInterface.GetObjectVsBroadPhaseLayerFilter(),
@@ -59,9 +76,52 @@ export class ShapeCollider {
             joltInterface.GetObjectLayerPairFilter(),
             Layer.MOVING
         );
+        // make sure centerOfMassTransform reflects the initial (identity) position/rotation
+        // instead of whatever `new RMat44()` default-constructs to.
+        this.setJoltMatrix();
     }
 
-    destroy() {}
+    // Free every Jolt object this collider allocated. Idempotent - safe to call more than once
+    // (React unmount + an explicit caller cleanup, for example).
+    destroy() {
+        if (this.destroyed) return;
+        this.destroyed = true;
+
+        // `activeShape` is reference counted - see the `shape` setter and the constructor. We
+        // AddRef()'d whatever shape we're holding, so give that reference back with Release()
+        // rather than a hard destroy(), which would free memory a caller (or another owner) might
+        // still be using.
+        if (this.activeShape) {
+            this.activeShape.Release();
+            this.activeShape = null as unknown as Jolt.Shape;
+        }
+
+        Raw.module.destroy(this.bodyFilter);
+        Raw.module.destroy(this.shapeFilter);
+        Raw.module.destroy(this.bpFilter);
+        Raw.module.destroy(this.objectFilter);
+        Raw.module.destroy(this.collideShapeSettings);
+        Raw.module.destroy(this.collector);
+        Raw.module.destroy(this.shapeScale);
+        Raw.module.destroy(this.baseOffset);
+        Raw.module.destroy(this.centerOfMassTransform);
+        Raw.module.destroy(this.scratchPosition);
+        Raw.module.destroy(this.scratchRotation);
+
+        // null everything out so a stray call after destroy() fails loudly (or is a no-op)
+        // instead of silently touching freed memory.
+        this.bodyFilter = null as unknown as Jolt.BodyFilter;
+        this.shapeFilter = null as unknown as Jolt.ShapeFilter;
+        this.bpFilter = null as unknown as Jolt.DefaultBroadPhaseLayerFilter;
+        this.objectFilter = null as unknown as Jolt.DefaultObjectLayerFilter;
+        this.collideShapeSettings = null as unknown as Jolt.CollideShapeSettings;
+        this.collector = null as unknown as CollideShapeCollector;
+        this.shapeScale = null as unknown as Jolt.Vec3;
+        this.baseOffset = null as unknown as Jolt.RVec3;
+        this.centerOfMassTransform = null as unknown as Jolt.RMat44;
+        this.scratchPosition = null as unknown as Jolt.RVec3;
+        this.scratchRotation = null as unknown as Jolt.Quat;
+    }
 
     //raw jolt cast query
     rawCast() {
@@ -88,9 +148,16 @@ export class ShapeCollider {
         return this.activeShape;
     }
     set shape(shape: Jolt.Shape) {
-        //if we had a shape already, we need to destroy it
-        if (this.activeShape) Raw.module.destroy(this.activeShape);
+        if (shape === this.activeShape) return;
+        // Shape is reference counted (RefTarget) and starts life with a refcount of 0. AddRef()
+        // here means a caller that later Release()s (or reassigns) its own reference to `shape`
+        // doesn't leave us holding a dangling pointer once they're done with theirs, and
+        // Release() (rather than a hard destroy()) on whichever shape we're replacing means it's
+        // only actually freed once every owner - us included - is done with it.
+        shape.AddRef();
+        const previous = this.activeShape;
         this.activeShape = shape;
+        if (previous) previous.Release();
     }
     // possition
     get position() {
@@ -187,11 +254,35 @@ export class ShapeCollider {
     //* Internal Methods ===============================
     // set the matrix for the cast
     setJoltMatrix() {
-        // `generateJoltMatrix` hands back a matrix we own. This runs per frame from the camera
-        // rig, so the one it replaced has to go or the transform leaks every frame.
-        const previous = this.centerOfMassTransform;
-        this.centerOfMassTransform = generateJoltMatrix(this.position, this.rotation);
-        if (previous) Raw.module.destroy(previous);
+        // Mutate the persistent scratch position/rotation and centerOfMassTransform in place
+        // instead of allocating a new RMat44 every call. This runs from every position/rotation/
+        // matrix setter, and CameraBoom.checkCollision sets `collider.position` every frame, so a
+        // naive `this.centerOfMassTransform = generateJoltMatrix(...)` here means a brand new
+        // RMat44 every frame (utils/general.ts's generateJoltMatrix always returns a new
+        // caller-owned object precisely so callers who DO want a fresh one can free it - see its
+        // docstring). `.Set()` on RVec3/Quat copies components in place, no allocation.
+        //
+        // RMat44 has no SetRotation(Quat) overload, only SetRotation(Mat44), so we go through
+        // Mat44.sRotation() to build the 3x3 part. Its by-value return is a single static
+        // temporary owned by the emscripten WebIDL binder (overwritten on the next call to that
+        // same function, never destroy()ed - see the "CRITICAL Jolt memory facts" in the repo
+        // brief) - SetRotation() copies out of it immediately, before anything else can
+        // overwrite it.
+        this.scratchPosition.Set(
+            this.activePosition.x,
+            this.activePosition.y,
+            this.activePosition.z
+        );
+        this.scratchRotation.Set(
+            this.activeRotation.x,
+            this.activeRotation.y,
+            this.activeRotation.z,
+            this.activeRotation.w
+        );
+        this.centerOfMassTransform.SetRotation(
+            Raw.module.Mat44.prototype.sRotation(this.scratchRotation)
+        );
+        this.centerOfMassTransform.SetTranslation(this.scratchPosition);
     }
 
     //
