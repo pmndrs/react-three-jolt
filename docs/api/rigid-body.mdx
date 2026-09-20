@@ -53,9 +53,9 @@ and `<RigidBody colliders>`. See [Colliders](/api/colliders).
 | `debug` | `boolean` | draw this body's collision shape |
 | `activateOnChange` | `boolean` | default `true`. `false` stops `position`/`rotation`/`velocity`/`angularVelocity`/`scale`/`group`/`subGroup` writes from waking a sleeping body — see [Activation](#activation) |
 | `matrixAutoUpdate` | `boolean` | default `true`. `false` skips three's per-object matrix recompute in the physics sync — see [matrixAutoUpdate](#matrixautoupdate) |
-| `onContactAdded` | `(body1: number, body2: number) => void` | handles, not bodies — see [Events](#events) |
-| `onContactRemoved` | `(body1: number, body2: number) => void` | |
-| `onContactPersisted` | `(body1: number, body2: number) => void` | |
+| `onContactAdded` | `(payload: CollisionEnterPayload) => void` | deprecated alias of `onCollisionEnter` — see [Events](#events) |
+| `onContactRemoved` | `(payload: CollisionPayload) => void` | deprecated alias of `onCollisionExit` |
+| `onContactPersisted` | `(payload: CollisionEnterPayload) => void` | deprecated alias of `onCollisionPersist` |
 | `ref` | `Ref<BodyState>` | see [the ref caveat](#the-ref-caveat) |
 
 Event props — `onCollisionEnter`, `onCollisionPersist`, `onCollisionExit`, `onSensorEnter`,

@@ -421,7 +421,11 @@ import { Attractor, Physics, RigidBody } from '@react-three/jolt';
             <sphereGeometry args={[0.4]} />
         </mesh>
     </Attractor>
-    <RigidBody position={[8, 4, 0]}>{/* ... */}</RigidBody>
+    <RigidBody position={[8, 4, 0]}>
+        <mesh>
+            <sphereGeometry args={[0.5]} />
+        </mesh>
+    </RigidBody>
 </Physics>;
 ```
 
