@@ -1,0 +1,220 @@
+---
+title: Physics
+description: The Physics world component, its props, and the systems behind it.
+nav: 2
+---
+
+`<Physics>` is the entry point to the simulation. Everything physical has to be inside one, the
+way everything three.js has to be inside a `<Canvas>`.
+
+```tsx
+import { Physics, RigidBody } from '@react-three/jolt';
+
+<Physics gravity={20} debug={false} paused={false}>
+    <RigidBody>
+        <mesh>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial color="hotpink" />
+        </mesh>
+    </RigidBody>
+</Physics>;
+```
+
+It suspends while the Jolt WASM module loads, so it needs a `<Suspense>` boundary above it —
+see [SSR & Suspense](/advanced/ssr-and-suspense).
+
+Each `<Physics>` creates its own `PhysicsSystem` (and Jolt interface) and destroys it on unmount.
+Most props are reactive: changing them writes straight through to the running system on the next
+frame rather than rebuilding the world.
+
+## Props
+
+| prop | type | default | |
+| --- | --- | --- | --- |
+| `gravity` | `number \| number[] \| THREE.Vector3` | `[0, -9.81, 0]` | reactive |
+| `paused` | `boolean` | `false` | reactive |
+| `interpolate` | `boolean` | `true` | reactive |
+| `timeStep` | `number \| 'vary'` | `1 / 60` | reactive |
+| `maxSubSteps` | `number` | `5` | reactive |
+| `updatePriority` | `number` | `0` | mount only |
+| `updateLoop` | `'follow' \| 'independent'` | `'follow'` | mount only |
+| `debug` | `boolean` | `false` | reactive |
+| `defaultShape` | [`AutoShape`](/api/shapes#autoshape) | — | reactive |
+| `defaultBodySettings` | `Jolt.BodyCreationSettings` fields | — | reactive |
+| `module` | Jolt module initializer | `jolt-physics` | mount only |
+
+```tsx
+<Physics
+    gravity={20}
+    paused={paused}
+    interpolate
+    timeStep={1 / 120}
+    maxSubSteps={8}
+    updateLoop="follow"
+    updatePriority={0}
+    debug={false}
+    defaultShape="box"
+    defaultBodySettings={{ mRestitution: 0.5 }}
+>
+    {children}
+</Physics>
+```
+
+### `gravity`
+
+World gravity. A tuple or `THREE.Vector3` is used as-is; a plain **number is read as a downward
+magnitude**, so `gravity={20}` means `[0, -20, 0]`. `0` is a valid value (zero-g). Changing it
+calls `physicsSystem.setGravity()` at runtime.
+
+Gravity is compared by value, not by identity, so an inline `gravity={[0, -9.81, 0]}` does not
+reallocate a Jolt vector on every parent render.
+
+### `paused`
+
+Blocks the physics step. Rendering, shaders and your `useFrame` callbacks carry on, the scene
+stays interactive, queries still work, and unpausing resumes from exactly where it stopped —
+this is not a "freeze the page" switch, only a "stop time" one.
+
+### `interpolate`
+
+The simulation runs on its own fixed clock, which almost never lines up with your render rate,
+so without interpolation objects visibly stutter whenever a frame lands between two steps. With
+it on, each object is drawn on the path between the last two steps instead of snapped to the most
+recent one.
+
+It only changes what is *drawn* — the bodies themselves are untouched — and it is ignored when
+`timeStep="vary"`, because then every step already lands on a frame.
+
+### `timeStep`
+
+The length of one physics step, in seconds. A fixed step is what makes a simulation reproducible:
+the same inputs give the same result regardless of frame rate.
+
+`"vary"` steps with the render delta instead (clamped to 0.5s, 1–2 substeps). It never falls
+behind, but it is not deterministic and it disables interpolation.
+
+### `maxSubSteps`
+
+The most fixed steps a single frame is allowed to run. When a frame takes far longer than
+`timeStep` — a backgrounded tab, a debugger pause, a large asset decode — simulation time beyond
+`maxSubSteps * timeStep` is **dropped** rather than queued. Without that cap each slow frame makes
+the next one slower still, until the app locks up (the "spiral of death"). Turn on `debug` to log
+when time is being dropped.
+
+### `updateLoop` / `updatePriority`
+
+`"follow"` (the default) steps from r3f's `useFrame`, in sync with rendering.
+`"independent"` steps from its own `requestAnimationFrame` loop.
+
+`updatePriority` is passed straight to `useFrame`; as in r3f, **any non-zero priority means you
+take over rendering yourself**. It only applies to `"follow"`.
+
+### `debug`
+
+Turns on debugging globally: bodies draw their collision shapes, and the systems log lifecycle
+information. Individual [`<RigidBody debug>`](/api/rigid-body#props) props can opt in without
+switching the whole world on.
+
+Raycasters deliberately do **not** follow this flag — they can fire thousands of times a second
+and you rarely want the screen filled with lasers. Turn debugging on per caster instead
+(see [Queries](/api/queries#debugging)).
+
+> [!NOTE]
+> `debug` controls in-scene visualisation. The library's internal `console` output is separate
+> and off by default — enable it with `setDebug(true)` (see [Memory & lifecycle](/advanced/memory#debug-output)).
+
+### `defaultShape`
+
+The collision shape used for bodies that don't ask for one, instead of guessing from each
+geometry. `<Physics defaultShape="box">` is the Jolt equivalent of rapier's `colliders` prop.
+Individual `<RigidBody shape="...">` props still win. See [Shapes](/api/shapes).
+
+### `defaultBodySettings`
+
+Jolt `BodyCreationSettings` fields merged into **every** body this world creates. It is applied
+before any body exists, so it covers the first frame too.
+
+> [!WARNING]
+> This injects directly into the Jolt settings pipeline, so the keys are Jolt's own names — which
+> almost always start with `m`.
+
+```tsx
+const defaultBodySettings = { mRestitution: 0.5 };
+
+<Physics defaultBodySettings={defaultBodySettings}>
+    <RigidBody position={[0, 20, 3]}>
+        <mesh>
+            <sphereGeometry args={[1, 32, 32]} />
+            <meshStandardMaterial color="hotpink" />
+        </mesh>
+    </RigidBody>
+</Physics>;
+```
+
+### `module`
+
+A `jolt-physics` module initializer to use instead of the bundled default — how you pick a
+different [build variant](/getting-started/installation#choosing-a-jolt-build). Keep its identity
+stable across renders.
+
+## `useJolt()`
+
+Inside `<Physics>`, `useJolt()` gives you the systems behind the components.
+
+```tsx
+import { useJolt } from '@react-three/jolt';
+
+function Inspector() {
+    const { jolt, physicsSystem, bodySystem, joltInterface, paused, debug, step } = useJolt();
+    // ...
+    return null;
+}
+```
+
+| field | what it is |
+| --- | --- |
+| `physicsSystem` | the `PhysicsSystem` for this world — gravity, stepping, queries, and every other system hangs off it |
+| `bodySystem` | shortcut for `physicsSystem.bodySystem`: create, look up and remove bodies |
+| `joltInterface` | the live `Jolt.JoltInterface`. Careful. |
+| `jolt` | the raw WASM module (`Raw.module`). **Very** careful — see [Memory & lifecycle](/advanced/memory) |
+| `paused`, `debug` | the world's current flags |
+| `step` | the step function the frame loop calls |
+
+Calling `useJolt()` outside a `<Physics>` throws.
+
+## `PhysicsSystem`
+
+The object most of the world's behaviour lives on. Beyond the props above:
+
+| member | |
+| --- | --- |
+| `setGravity(gravity)` | accepts a number, tuple or `THREE.Vector3` |
+| `paused`, `interpolate`, `timeStep`, `maxSubSteps`, `debug` | the same knobs as the props |
+| `accumulator` | simulation time not yet consumed by a fixed step, in seconds |
+| `resetAccumulator()` | drop it (e.g. after a long stall you handled yourself) |
+| `invalidatePoseCache()` | forget every body's cached poses; frames render live poses until it refills |
+| `addPreStepListener(fn)` / `addPostStepListener(fn)` / `removeStepListener(fn)` | fired `(deltaTime, currentSubframe)` |
+| `getRaycaster()` / `getAdvancedRaycaster()` / `getMulticaster()` / `getShapecaster()` / `getShapeCollider()` | [queries](/api/queries) |
+| `constraintSystem` | [constraints](/api/rigid-body#constraints) |
+| `destroyed` | true once the world has been torn down |
+
+> [!WARNING]
+> Step listeners are currently removed by **function identity**, so an inline arrow function can
+> never be removed. Keep a reference if you intend to unsubscribe. A uniform `on(type, fn) => off`
+> API is coming in the next release.
+
+## Stepping and the frame loop
+
+One `<Physics>` per world; multiple worlds in one app are supported (each gets its own Jolt
+interface), but only **three** live interfaces are allowed for memory reasons. A fourth
+`<Physics>` silently reuses the first world's interface instead of getting its own (with a
+warning under [`setDebug(true)`](/advanced/memory#debug-output)).
+
+To restart a world from scratch, change its `key`:
+
+```tsx
+<Physics key={resetCount}>{scene}</Physics>
+```
+
+That unmounts the old `PhysicsSystem` (freeing its bodies and Jolt allocations) and builds a new
+one.

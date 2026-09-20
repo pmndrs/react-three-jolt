@@ -22,8 +22,8 @@
         "version": "yarn changeset version && yarn install --mode update-lockfile",
         "lint": "biome check .",
         "format": "biome format --write .",
-        "docs": "curl -sL https://raw.githubusercontent.com/pmndrs/docs/refs/heads/main/preview.sh | MDX=docs ICON=⚡ LOGO=logo.png NEXT_PUBLIC_LIBNAME='React Three Jolt' NEXT_PUBLIC_LIBNAME_SHORT='r3/jolt' GITHUB=https://github.com/pmndrs/react-three-jolt sh",
-        "docs:build": "npx -y @pmndrs/docs@4 build docs docs/out --format website"
+        "docs": "curl -sL https://raw.githubusercontent.com/pmndrs/docs/refs/heads/main/preview.sh | MDX=docs ICON=⚡ LOGO=https://github.com/pmndrs/react-three-jolt/raw/main/docs/logo.png NEXT_PUBLIC_LIBNAME='React Three Jolt' NEXT_PUBLIC_LIBNAME_SHORT='r3/jolt' GITHUB=https://github.com/pmndrs/react-three-jolt sh",
+        "docs:build": "npx -y @pmndrs/docs@4 build docs docs/out --format website --libname \"React Three Jolt\" --libname-short \"r3/jolt\" --home-redirect \"/getting-started/introduction\" --icon \"⚡\" --logo \"https://github.com/pmndrs/react-three-jolt/raw/main/docs/logo.png\" --github \"https://github.com/pmndrs/react-three-jolt\" --discord \"https://discord.gg/ZZjjNvJ\""
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.14",

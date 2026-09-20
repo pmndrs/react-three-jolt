@@ -1,0 +1,127 @@
+---
+title: Contributing
+description: Running the repo, the package layout, linting, tests and changesets.
+nav: 12
+---
+
+The library is alpha and moving; issues and PRs are welcome. Everything below assumes a clone of
+[pmndrs/react-three-jolt](https://github.com/pmndrs/react-three-jolt).
+
+## Setup
+
+**Node 22** and **Yarn 4** (a Yarn 4 monorepo). With Corepack enabled you get the right Yarn
+automatically:
+
+```sh
+corepack enable
+yarn install
+yarn build
+```
+
+## Layout
+
+| path | |
+| --- | --- |
+| `packages/react-three-jolt` | `@react-three/jolt` — components, hooks, systems |
+| `packages/react-three-jolt-addons` | `@react-three/jolt-addons` — [input commands](/api/addons), helper components |
+| `packages/react-three-jolt-controllers` | `@react-three/jolt-controllers` — [character, camera rig, vehicles](/api/controllers) |
+| `apps/examples` | the Vite demo app |
+| `docs/` | this site (MDX) |
+
+Inside the core package: `components/` (the React layer), `systems/` (the physics layer —
+`physics-system`, `body-system`, `body-state`, `constraint-system`, `shape-system`, `queries/`),
+`hooks/`, `utils/`, and `raw.ts`, which holds the one global reference to the Jolt WASM module.
+
+The split matters: components own React lifecycle and props, systems own Jolt. A component
+should not talk to `Raw.module`.
+
+## Running the examples
+
+```sh
+cd apps/examples
+yarn dev
+```
+
+For HMR against your library changes, run a watch build in a second terminal:
+
+```sh
+cd packages/react-three-jolt
+yarn build -w
+```
+
+## Docs
+
+This site is MDX in `docs/`, built by [pmndrs/docs](https://github.com/pmndrs/docs).
+
+```sh
+yarn docs        # build and serve locally
+yarn docs:build  # static build into docs/out
+```
+
+Front matter is `title`, `description` and `nav` — one ordering number shared across every page.
+`DEVELOPMENT.md` has the full conventions and the GitHub Pages setup.
+
+## Lint, format, test
+
+```sh
+yarn lint    # biome check .
+yarn format  # biome format --write .
+yarn test    # vitest across the workspaces
+```
+
+[Biome](https://biomejs.dev/) replaced ESLint + Prettier: 4-space indent, 100-column lines,
+single quotes, no trailing commas. `yarn lint` runs in CI and must exit 0.
+
+> [!CAUTION]
+> Do **not** run `biome check --write` (and never `--unsafe`) across files you didn't touch. Two
+> of its "safe" fixes break this codebase's build: rewriting `@ts-ignore` to `@ts-expect-error`
+> (many of those suppress errors that only appear on some type-narrowing paths) and splitting a
+> default `React` import into `import type`. Format only your own files:
+> `yarn biome format --write <paths>`. `LINTING.md` lists the rules currently downgraded to
+> `warn` and why.
+
+## Tests
+
+Vitest 5 with happy-dom, and the real Jolt WASM module running in Node — the tests are not
+mocked. Component tests use `@react-three/test-renderer`.
+
+If you touch anything that allocates Jolt objects, write an **allocation-counting** test:
+`test/jolt-alloc.ts` exposes `installAllocTracker(Raw)`, which wraps the module's constructors
+and `destroy` so a test can assert the live-object count is flat across many iterations. It
+catches leaks (count grows) and double frees (count drifts negative) — neither of which throws on
+its own. Note that the tracker swaps `Raw.module`'s identity, which rebuilds the `joltScratch`
+singletons once, so warm them before you start counting.
+
+## Commits and changesets
+
+Conventional commits (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`).
+
+Every change that affects a published package needs a changeset:
+
+```sh
+yarn change
+```
+
+Pick the packages, pick `patch` for fixes and `minor` for features, and describe **what changed
+for a user** — the existing changesets in `.changeset/` are long on purpose and are the
+repository's real changelog. A GitHub Action opens the version-bump PR from them.
+
+Docs-only and example-only changes don't need one.
+
+## CI
+
+Every pull request runs `.github/workflows/ci.yml` on Node 22: `yarn install --immutable`,
+`yarn lint`, `yarn build`, `yarn test`. Run all four locally before opening a PR. Dependabot
+handles grouped weekly dependency bumps, excluding majors of `three`, `react` and
+`@react-three/*` — those are deliberate, hand-verified upgrades.
+
+## Working on the physics layer
+
+Three things to read before your first PR into `systems/`:
+
+1. [Memory & lifecycle](/advanced/memory) — ownership, by-value static temporaries, and the
+   helpers that keep you out of trouble.
+2. `packages/react-three-jolt/docs/Memory.md` — the original engine-level notes.
+3. [The Jolt docs](https://jrouwe.github.io/JoltPhysics/) — the JS API mirrors the C++ one, and
+   [`JoltJS.idl`](https://github.com/jrouwe/JoltPhysics.js/blob/main/JoltJS.idl) is the
+   authoritative list of what is exposed to JavaScript.

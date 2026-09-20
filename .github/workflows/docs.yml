@@ -28,7 +28,9 @@ jobs:
       libname_short: 'r3/jolt'
       home_redirect: '/getting-started/introduction'
       icon: '⚡'
-      logo: '/logo.png'
+      # a full URL rather than `/logo.png`: it is used as the social preview image, which is
+      # resolved against the published site, and the MDX folder's assets aren't copied there
+      logo: 'https://github.com/pmndrs/react-three-jolt/raw/main/docs/logo.png'
       github: 'https://github.com/pmndrs/react-three-jolt'
       discord: 'https://discord.gg/ZZjjNvJ'
 

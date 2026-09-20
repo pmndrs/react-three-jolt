@@ -1,0 +1,356 @@
+---
+title: RigidBody
+description: The RigidBody component, its props, and the BodyState object you get from its ref.
+nav: 3
+---
+
+`<RigidBody>` wraps three.js objects, builds a Jolt shape from their geometry, creates the body,
+and keeps the two in sync every frame.
+
+```tsx
+import { RigidBody } from '@react-three/jolt';
+
+<RigidBody position={[0, 1, 0]}>
+    <mesh>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="green" />
+    </mesh>
+</RigidBody>;
+```
+
+Children render inside an `<object3D>` the body drives. Anything non-visual (lights, groups,
+your own components) can live in there too; only meshes contribute to the collision shape.
+
+## Props
+
+| prop | type | notes |
+| --- | --- | --- |
+| `type` | `'dynamic' \| 'static' \| 'kinematic' \| 'rig'` | motion type. Defaults to dynamic |
+| `shape` | [`AutoShape`](/api/shapes#autoshape) | overrides shape autodetection for this body |
+| `position` | `number[]` | setting it after creation **teleports** the body |
+| `rotation` | `number[]` | Euler angles, radians. Also a teleport |
+| `scale` | `number[]` | scales the collision shape as well as the object |
+| `quaternion` | `number[]` | accepted, currently only stored on the context |
+| `mass` | `number` | |
+| `friction` | `number` | **declared but not wired up** — set `body.friction` on the [`BodyState`](#material-and-mass) instead |
+| `linearDamping` | `number` | |
+| `angularDamping` | `number` | |
+| `isSensor` | `boolean` | fires contacts, causes no collision response |
+| `group` / `subGroup` | `number` | [collision filtering](/api/collision-groups). **Must be present at creation** to be usable later |
+| `dof` | `{ x?, y?, z?, rotX?, rotY?, rotZ? }` | per-axis degrees of freedom |
+| `lockRotations` | `boolean` | shorthand for all three rotations off |
+| `lockTranslations` | `boolean` | shorthand for all three translations off |
+| `allowObstruction` | `boolean` | used by the [camera rig](/api/controllers#camerarig) to let the camera see through this body |
+| `obstructionTimelimit` | `number` | ms; switches obstruction to `'temporal'` |
+| `onlyInitialize` | `boolean` | apply `position`/`rotation` at creation only, then stop watching them |
+| `debug` | `boolean` | draw this body's collision shape |
+| `onContactAdded` | `(body1: number, body2: number) => void` | handles, not bodies — see [Events](#events) |
+| `onContactRemoved` | `(body1: number, body2: number) => void` | |
+| `onContactPersisted` | `(body1: number, body2: number) => void` | |
+| `ref` | `Ref<BodyState>` | see [the ref caveat](#the-ref-caveat) |
+
+```tsx
+<RigidBody
+    type="dynamic"
+    shape="box"
+    position={[0, 5, 0]}
+    rotation={[0, Math.PI / 4, 0]}
+    mass={10}
+    linearDamping={0.05}
+    angularDamping={0.05}
+    group={0}
+    subGroup={1}
+    dof={{ x: true, y: true, z: true, rotX: false, rotY: true, rotZ: false }}
+    onContactAdded={(body1, body2) => console.log(body1, body2)}
+>
+    <mesh>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="teal" />
+    </mesh>
+</RigidBody>
+```
+
+> [!NOTE]
+> Writing `position` or `rotation` moves the body *instantly* — it does not push it there. For
+> kinematic motion use `body.moveKinematic(position, rotation, deltaTime)`, and for dynamic
+> bodies use forces and impulses.
+
+## The ref
+
+`<RigidBody ref>` gives you the [`BodyState`](#bodystate) for that body, once it exists.
+
+```tsx
+import { BodyState, RigidBody } from '@react-three/jolt';
+import { useEffect, useRef } from 'react';
+import * as THREE from 'three';
+
+export function Ball() {
+    const body = useRef<BodyState>(null);
+
+    useEffect(() => {
+        body.current?.addImpulse(new THREE.Vector3(0, 40, 0));
+    }, []);
+
+    return (
+        <RigidBody ref={body} position={[0, 10, 0]} shape="sphere">
+            <mesh>
+                <sphereGeometry args={[1, 32, 32]} />
+                <meshStandardMaterial color="orange" />
+            </mesh>
+        </RigidBody>
+    );
+}
+```
+
+### The ref caveat
+
+The `ref` prop is currently typed `any`, so **TypeScript does not check it**:
+`useRef<BodyState>(null)` compiles, but so does `useRef<HTMLDivElement>(null)`. You are
+annotating, not verifying. The ref is also `null` until the body is created — which happens in an
+effect, and waits for child `<Shape>` components if there are any — so always guard with `?.`.
+
+Tracked in [#160](https://github.com/pmndrs/react-three-jolt/issues/160), along with doc comments
+for every `BodyState` member.
+
+### Without a ref
+
+Every body is also reachable through the body system:
+
+```tsx
+import { BodyState, useJolt } from '@react-three/jolt';
+import { useEffect } from 'react';
+import * as THREE from 'three';
+
+function Nudge({ handle }: { handle: number }) {
+    const { bodySystem } = useJolt();
+
+    useEffect(() => {
+        const body = bodySystem.getBody(handle);
+        if (body) body.position = new THREE.Vector3(0, 3, 2);
+
+        bodySystem.dynamicBodies.forEach((state: BodyState) => {
+            state.addImpulse(new THREE.Vector3(0, 2, 1));
+        });
+    }, [bodySystem, handle]);
+
+    return null;
+}
+```
+
+`bodySystem` holds `dynamicBodies`, `staticBodies` and `kinematicBodies` as `Map<number, BodyState>`,
+keyed by handle; `getBody(handle)` searches all three. A handle is Jolt's
+`BodyID.GetIndexAndSequenceNumber()`, and **Jolt recycles them** — don't hold one across a body's
+lifetime.
+
+## `BodyState`
+
+One object per body. Everything on it speaks three.js types; the Jolt side is an implementation
+detail.
+
+### Pose
+
+| member | |
+| --- | --- |
+| `position` | `THREE.Vector3`, get/set (setting teleports) |
+| `rotation` | `THREE.Quaternion`, get/set |
+| `scale` | `THREE.Vector3 \| number[] \| number`, get/set — rebuilds the scaled shape |
+| `setPositionAndRotation(position, rotation)` | both at once |
+| `getPosition(asJolt?)` | `asJolt` returns a `Jolt.RVec3` — see [ownership](/advanced/memory) |
+| `getMatrix(matrix)` / `setMatrix(matrix)` | `THREE.Matrix4` in/out |
+| `readPose(outPosition, outRotation)` | allocation-free live pose |
+| `getInterpolatedPose(alpha, outPosition, outRotation)` | allocation-free blend of the last two steps |
+| `resetPoseCache()` | drop the pose history, e.g. after a teleport, so the next frame doesn't lerp across it |
+| `moveKinematic(position, rotation, deltaTime?)` | drive a kinematic body |
+
+```tsx
+const position = useRef(new THREE.Vector3());
+const rotation = useRef(new THREE.Quaternion());
+
+useFrame(() => {
+    body.current?.readPose(position.current, rotation.current);
+});
+```
+
+The `position`/`rotation` getters allocate a new three.js object each read — fine for effects,
+avoid in a per-frame loop, where `readPose` exists.
+
+### Motion
+
+| member | |
+| --- | --- |
+| `velocity` | `THREE.Vector3`, get/set |
+| `angularVelocity` | `THREE.Vector3`, get/set |
+| `applyForce(force)` | |
+| `applyTorque(torque)` | |
+| `addImpulse(impulse)` | |
+| `isSleeping` | read-only |
+
+### Material and mass
+
+`friction`, `restitution`, `mass`, `gravityFactor`, `linearDamping`, `angularDamping`,
+`isSensor` — all plain get/set number/boolean properties. `color` gets/sets the three.js material
+colour (and the per-instance colour on instanced bodies).
+
+### Degrees of freedom
+
+| member | |
+| --- | --- |
+| `dof` | `{ x, y, z, rotX, rotY, rotZ }` booleans, read |
+| `setDof(dof)` | write some or all of them |
+| `setEnabledTranslations(x, y, z)` / `setEnabledRotations(x, y, z)` | |
+| `lockTranslations()` / `lockRotations()` | |
+| `rawDOF` | the Jolt bitfield, if you want it |
+
+### Filtering and identity
+
+`handle`, `body` (the raw `Jolt.Body`), `BodyID`, `object` (the three.js object), `meshType`,
+`isInstance`, and `group` / `subGroup` — see [Collision groups & layers](/api/collision-groups).
+
+### Contacts
+
+| member | |
+| --- | --- |
+| `addContactListener(fn, 'added' \| 'removed' \| 'persisted')` | |
+| `removeContactListener(fn)` | |
+| `addActivationListener(fn)` / `removeActivationListener(fn)` | sleep/wake |
+| `isContacting(handle)` | is this body currently touching that one |
+| `contacts` | `Map<handle, count>` |
+
+### Motion sources
+
+A motion source is a body that pushes *other* bodies when they touch it — conveyors, bounce pads,
+force fields, teleporters. These are Jolt patterns the library packages up rather than Jolt
+objects.
+
+```tsx
+const conveyor = useRef<BodyState>(null);
+
+useMount(() => {
+    // local-space vector: rotate the pad and the push rotates with it
+    conveyor.current?.activateMotionSource(new THREE.Vector3(-2.4, 0, 0));
+    conveyor.current!.motionAsSurfaceVelocity = true; // belt-like, instead of an impulse
+});
+```
+
+| member | |
+| --- | --- |
+| `activateMotionSource(linearVector, angularVector?)` | turn the body into a motion source |
+| `motionType` | `'linear'` (impulse toward a vector) or `'angular'` (torque) |
+| `motionAsSurfaceVelocity` | apply Jolt's surface velocity instead of an impulse — more realistic while contact lasts |
+| `useRotation` | `false` puts the vector in **world** space (what force fields usually want) |
+| `isTeleporter` | move the contacting body to the linear vector's position on the next step |
+| `isConveyor`, `isMotionSource`, `motionActive` | state flags |
+| `allowObstruction`, `obstructionType`, `obstructionTimelimit` | camera obstruction behaviour |
+
+Combine with `isSensor` for a force field: contacts still fire, but nothing is blocked.
+
+### Lifecycle
+
+`destroy(ignoreThree?)` tears the body down, but you rarely call it — `<RigidBody>` unmounting
+calls `bodySystem.removeBody(handle)` for you, which also removes any constraints attached to
+the body first. See [Memory & lifecycle](/advanced/memory).
+
+## Constraints
+
+`useConstraint` joins two bodies and keeps the constraint alive for the lifetime of the
+component. It is removed on unmount and re-created when the type, bodies or option *values*
+change.
+
+```tsx
+import { BodyState, RigidBody, useConstraint } from '@react-three/jolt';
+import { useRef } from 'react';
+
+export function Swing() {
+    const anchor = useRef<BodyState>(null);
+    const weight = useRef<BodyState>(null);
+
+    useConstraint('distance', anchor, weight, { point1: [0, 5, 0], min: 1, max: 4 });
+
+    return (
+        <>
+            <RigidBody ref={anchor} type="static" position={[0, 5, 0]}>
+                <mesh>
+                    <boxGeometry args={[0.5, 0.5, 0.5]} />
+                </mesh>
+            </RigidBody>
+            <RigidBody ref={weight} position={[0, 1, 0]}>
+                <mesh>
+                    <sphereGeometry args={[0.5]} />
+                </mesh>
+            </RigidBody>
+        </>
+    );
+}
+```
+
+Types: `fixed`, `point`, `distance`, `hinge` (alias `revolute`), `slider` (alias `prismatic`),
+`cone`, `swingTwist`, `sixDOF`. Options cover anchors (`point1`, `point2`, `position`), axes
+(`axis`, `normal`, `twistAxis`, `planeAxis`), limits (`min`, `max`, `angle`, `twistMin`,
+`twistMax`), friction, `space`, and `spring` / `motor` sub-objects. The hook returns a ref to the
+typed Jolt constraint (`ConstraintTypeMap[T]`), so a `'hinge'` gives you a `Jolt.HingeConstraint`
+with `SetTargetAngularVelocity` and friends.
+
+> [!CAUTION]
+> A constraint must be removed **before** either of its bodies. The library does this for you
+> (`bodySystem.removeBody` removes the body's constraints first), but if you reach for
+> `constraintSystem` directly, keep the order. Never call `Raw.module.destroy()` on a constraint:
+> they are reference counted, and that is a double free.
+
+## Instanced bodies
+
+`<InstancedRigidBodyMesh>` replaces `<instancedMesh>`: the child mesh describes the shape and
+material, `count` says how many, and every instance gets its own body. The ref gives you an array
+of `BodyState`.
+
+```tsx
+import { BodyState, InstancedRigidBodyMesh } from '@react-three/jolt';
+import { useRef } from 'react';
+
+export function Confetti() {
+    const bodies = useRef<BodyState[]>(null);
+
+    return (
+        <InstancedRigidBodyMesh
+            ref={bodies}
+            count={200}
+            color="#D9594C"
+            position={[0, 10, 0]}
+            rotation={[0, 0, 0]}
+        >
+            <mesh>
+                <boxGeometry args={[0.5, 0.5, 0.5]} />
+                <meshStandardMaterial />
+            </mesh>
+        </InstancedRigidBodyMesh>
+    );
+}
+```
+
+> [!NOTE]
+> `count`, `color`, `position` and `rotation` are all currently **required** by the type, and
+> changing `count` rebuilds every body. Instances with no explicit position all start at roughly
+> the same place (with a small jitter) and push each other apart — which is either a bug or a
+> shape fountain, depending on what you wanted.
+
+## Events
+
+Today `<RigidBody>` exposes three contact props, and each hands you two body **handles**:
+
+```tsx
+<RigidBody
+    onContactAdded={(body1, body2) => {}}
+    onContactRemoved={(body1, body2) => {}}
+    onContactPersisted={(body1, body2) => {}}
+/>
+```
+
+Look bodies up with `bodySystem.getBody(handle)`. Contacts on heightfields are unreliable — they
+fire per triangle and confuse the contact bookkeeping.
+
+> [!IMPORTANT]
+> **Coming in the next release.** The event system is being rewritten: rapier-style
+> `onCollisionEnter` / `onCollisionExit` / `onSensorEnter` / `onSensorExit` / `onSleep` / `onWake`
+> props carrying a payload object (`target`, `other`, `normal`, `points`, …) instead of bare
+> handles, world-level events on `<Physics>`, and one `on(type, fn) => off` subscription API for
+> every system. The props above will keep working for at least one release. Nothing in this
+> section describes shipped code beyond the three props listed.

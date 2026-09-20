@@ -1,0 +1,177 @@
+---
+title: Controllers
+description: CharacterController, CameraRig and VehicleFourWheel from @react-three/jolt-controllers.
+nav: 7
+---
+
+```bash
+npm install @react-three/jolt-controllers
+```
+
+Characters, cameras and vehicles are things Jolt does well and physics wrappers usually don't.
+They live in their own package because they are opinionated, they bring input handling with them
+(via [`@react-three/jolt-addons`](/api/addons)), and they are the least settled part of the
+library.
+
+> [!WARNING]
+> These components work, but they are the roughest corner of the API: several props are not
+> wired up yet, and the components are thin wrappers over systems that are much more capable
+> than the props suggest. Where a prop is missing, reach for the system.
+
+## CharacterController
+
+A Jolt `CharacterVirtual` — a capsule that walks, runs, crouches, jumps, climbs stairs and
+slides — driven by keyboard/gamepad commands out of the box.
+
+```tsx
+import { Physics } from '@react-three/jolt';
+import { CameraRig, CharacterController } from '@react-three/jolt-controllers';
+
+export function Player() {
+    return (
+        <Physics>
+            <CharacterController radius={0.5} height={2}>
+                <mesh>
+                    <capsuleGeometry args={[0.5, 1]} />
+                    <meshStandardMaterial color="white" />
+                </mesh>
+            </CharacterController>
+            <CameraRig />
+        </Physics>
+    );
+}
+```
+
+| prop | type | default | |
+| --- | --- | --- | --- |
+| `radius` | `number` | `1` | **not applied yet** — the capsule is rebuilt from the system |
+| `height` | `number` | `2` | same |
+| `debug` | `boolean` | `true` | draws the capsule. Note the default is *on* |
+| `position` | — | | accepted, not yet applied |
+| `anchor` | — | | accepted, not yet applied |
+
+Default bindings (from the [commander](/api/addons)): `WASD`/left stick to move, `Space` to
+jump, `Shift` to run, `C` to crouch. The move direction is rotated by the camera's horizontal
+rotation, so "forward" means forward on screen.
+
+> [!NOTE]
+> `<CharacterController>` does **not** accept a `ref` in its prop types today (it is typed as a
+> plain FC). To reach the system, read it from the context it provides.
+
+### `CharacterControllerSystem`
+
+The component creates one and shares it through `CharacterControllerContext`:
+
+```tsx
+import {
+    CharacterControllerContext,
+    type CharacterControllerSystem
+} from '@react-three/jolt-controllers';
+import { useContext } from 'react';
+
+function Stamina() {
+    // the context is untyped today, so annotate it yourself
+    const { characterSystem } = useContext(CharacterControllerContext) as {
+        characterSystem?: CharacterControllerSystem;
+    };
+
+    // characterSystem?.isRunning, .isExhausted, .hangtime, ...
+    return null;
+}
+```
+
+Movement and state:
+
+| member | |
+| --- | --- |
+| `move(direction)` | world-space direction; length is ignored, speed comes from the settings |
+| `jump()` | respects `jumpLimit`, `allowJumpWhileFalling` and exhaustion |
+| `startRunning(speed?)` / `stopRunning()` | |
+| `setCrouched(crouched, forceUpdate?)` | swaps to the crouching capsule |
+| `position`, `rotation`, `linearVelocity` | three.js types, get/set |
+| `isMoving`, `isRunning`, `isCrouched`, `isSliding`, `isExhausted`, `isRotating`, `hangtime` | state |
+| `anchor` | the `BodyState` other things (like the camera rig) attach to |
+| `on(action, callback)` | subscribe to an action, returns an unsubscribe function |
+| `destroy()` | called for you when the component unmounts |
+
+Tuning (all plain properties with sensible defaults):
+
+`characterSpeed` (6), `characterSpeedCrouched` (3), `characterSpeedExhausted` (2), `jumpSpeed`
+(15), `jumpLimit` (2), `jumpDegradeFactor` (0.5), `characterHeightStanding` (2),
+`characterRadiusStanding` (1), `characterHeightCrouching` (1), `characterRadiusCrouching` (0.8),
+`allowAirbornControl`, `enableCharacterInertia`, `enableCharacterRotation`, `enableWalkStairs`,
+`enableStickToFloor`, `allowSliding`, `allowRunning`, `enableExhaustion`, `runningTimeLimit`
+(5000 ms), `exauhstionTimeLimit` (7000 ms), `maxRotationSpeed`, `lerpFactor`.
+
+Stair and floor behaviour maps onto Jolt's own settings: `walkStairsStepUp`,
+`walkStairsMinStepForward`, `walkStairsStepForwardTest`, `walkStairsStepDownExtra`,
+`stickToFloorStepDown`.
+
+The character uses `Layer.RIG`, so it does not collide with other rigs — see
+[layers](/api/collision-groups#preset-layers).
+
+## CameraRig
+
+A physics-aware third-person camera: a boom arm on a chain of spaces (`base` → `collar` →
+`camera`) that collides with the world instead of clipping through it, and follows an anchor.
+
+```tsx
+<CharacterController>
+    <mesh>
+        <capsuleGeometry args={[0.5, 1]} />
+    </mesh>
+</CharacterController>
+<CameraRig />
+```
+
+Inside a `<CharacterController>`, `<CameraRig>` finds the character through context and attaches
+itself automatically. Otherwise pass a body:
+
+```tsx
+<CameraRig anchor={body.current ?? undefined} />
+```
+
+Mouse/stick look and zoom are bound through
+[`useLookCommand`](/api/addons#uselookcommand); `R` resets the camera behind the anchor.
+
+`useCameraRig()` gives you the `CameraRigManager` directly (it also takes over r3f's default
+camera — and restores it on unmount):
+
+| member | |
+| --- | --- |
+| `attach(body, offset?)` / `detach()` / `reAttach()` | follow a `BodyState` |
+| `anchorOffset` | where on the body the boom hangs (default `[0, 2, 0]`) |
+| `moveBoom(lookVector)` / `zoom(level)` | what the look command drives |
+| `createCamera(name, options?)` / `addCamera(name, camera, space?)` / `setActiveCamera(name)` / `getCamera(name)` / `removeCamera(name)` | multiple cameras, positioned in rig space |
+| `onCamera(fn)` | subscribe to camera changes; returns an unsubscribe function |
+| `controls` | the `CameraBoom`: collision and obstruction handling |
+| `debug` | draw the rig's spaces |
+
+Bodies marked [`allowObstruction`](/api/rigid-body#props) let the boom pull the camera in (or
+see through them) rather than getting stuck behind them.
+
+## VehicleFourWheel
+
+A Jolt wheeled-vehicle constraint with engine, transmission, differentials and suspension.
+
+```tsx
+import { VehicleFourWheel } from '@react-three/jolt-controllers';
+
+<VehicleFourWheel position={[0, 2, 0]} name="car" />;
+```
+
+| prop | type | |
+| --- | --- | --- |
+| `position` | `THREE.Vector3 \| number[]` | reactive |
+| `type` | `string` | `'twoWheel'` switches to the two-wheeled manager |
+| `name` | `string` | defaults to `'car'` (or `'bike'`) |
+
+Driving is bound to the `move` command (stick/WASD); the component also moves the r3f camera to
+follow the vehicle. The underlying `VehicleSystem` / `VehicleFourWheelManager` expose
+`addVehicle(name, settings?)`, `getVehicle(name)`, `setPosition(name, position)`, `move(direction)`
+and the step hooks `onPreStep`, `onPostCollide`, `onPostStep`, plus `onAction(type, fn)`.
+
+> [!WARNING]
+> The vehicle components assume the default r3f `controls` are present and drive the camera
+> themselves. Expect friction if you also manage the camera — that, and configurable vehicle
+> settings through props, are known gaps.

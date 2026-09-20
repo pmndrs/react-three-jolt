@@ -1,0 +1,186 @@
+---
+title: Memory & lifecycle
+description: Who owns what in the WASM heap, and the rules that keep Jolt from corrupting itself.
+nav: 9
+---
+
+Jolt is a C++ library reached through Emscripten's WebIDL binder. Nothing on the WASM side is
+garbage collected: every object you create there lives until something frees it, and freeing the
+wrong thing corrupts memory **silently**, usually surfacing as a crash somewhere unrelated.
+
+If you only use `<Physics>`, `<RigidBody>`, `<Shape>` and the hooks, you can skip this page —
+the library owns that memory and frees it when components unmount. Read on before you touch a
+`Jolt.*` object directly, which mostly means `useJolt().jolt`, `body.body`, a caster you created
+yourself, or anything reached through `Raw.module`.
+
+## The three rules
+
+1. **If you created it, you free it.** `new Raw.module.Vec3(...)` is a heap allocation; only
+   `Raw.module.destroy(v)` releases it. Losing the reference leaks it forever.
+2. **If Jolt gave it to you, don't free it.** Anything returned from a Jolt call — a property, a
+   collector's hit, a "by value" return — belongs to Jolt. Copy the numbers out and let go.
+3. **Free it exactly once.** `Raw.module.destroy()` on an already-destroyed object does **not**
+   throw. It double-frees, and the allocator hands that address straight back out to the next
+   allocation.
+
+## By-value returns are shared temporaries
+
+This is the rule that catches everyone, and it has no equivalent in JavaScript.
+
+Any C++ function returning **by value** — `Vec3::Normalized()`, `Quat::sIdentity()`,
+`RMat44::sRotationTranslation()`, `Shape::GetCenterOfMass()`, `ShapeSettings::Create()`,
+`Body::GetWorldSpaceSurfaceNormal()`, `RRayCast::GetPointOnRay()`, `AABox::sBiggest()`, … —
+comes back through the binder as a pointer to **one static temporary per function**, shared by
+every caller.
+
+That means:
+
+```ts
+import { BodyState, Raw, vec3 } from '@react-three/jolt';
+
+function centerOfMass(body: BodyState) {
+    const joltPosition = body.body.GetCenterOfMassPosition(); // by value: shared temporary
+
+    Raw.module.destroy(joltPosition); // ❌ frees memory the binder owns. Corruption, elsewhere.
+    const kept = joltPosition;        // ❌ the next call overwrites it
+
+    return vec3.three(joltPosition).clone(); // ✅ copy the components out immediately
+}
+```
+
+`ShapeSettings::Create()` is the one that bites hardest, because its `ShapeResult` is also a
+static temporary — [`createShapeFromSettings`](/api/shapes#building-shapes-yourself) exists so
+you never have to get that sequence (check error → `Get()` → `AddRef()` → `Clear()` → destroy
+settings) right by hand.
+
+## Arguments are copied
+
+Property assignment and by-value arguments **copy**:
+
+```ts
+settings.mPosition = v;   // copies v
+bodyInterface.SetPosition(id, v, activation); // copies v
+list.push_back(v);        // copies v
+```
+
+So the temporary you built is yours to destroy immediately afterwards — and a single scratch
+object can be re-`Set()` for every element of a loop instead of allocating one per element.
+
+## The helpers
+
+### Conversions
+
+`vec3.jolt()`, `vec3.rjolt()` and `quat.jolt()` **always return a new object the caller owns**,
+even when given another Jolt object (they clone it). They never hand back their argument, so
+destroying the result can never free something Jolt still holds.
+
+```ts
+const position = vec3.rjolt([0, 10, 0]); // I own this
+bodyInterface.SetPosition(body.BodyID, position, Raw.module.EActivation_Activate);
+Raw.module.destroy(position); // ...so I free it
+```
+
+`vec3.three()` / `quat.three()` never allocate WASM memory and never destroy their input. A
+`THREE.Vector3` argument is passed through unchanged — pass an `out` target or `.clone()` if you
+intend to keep it.
+
+> **World-space positions are `RVec3`.** In jolt-physics ≥ 1.0 every world-space position
+> argument takes `Jolt.RVec3`, not `Jolt.Vec3` — that's `vec3.rjolt()`. They are interchangeable
+> at runtime in the single-precision builds, but not in the types.
+
+### `withJolt` — scoped
+
+Construct, call, destroy, even if the callback throws. The shape most code wants:
+
+```ts
+import { Raw, withJolt, withRJolt } from '@react-three/jolt';
+
+const length = withJolt([0, 1, 0], (v) => v.Length());
+
+withRJolt([0, 10, 0], (position) =>
+    bodyInterface.SetPosition(body.BodyID, position, Raw.module.EActivation_Activate)
+);
+```
+
+`withQuat()` does the same for quaternions.
+
+### `joltScratch` — shared, allocation-free
+
+For per-frame code, one shared object per flavour, reused forever:
+
+```ts
+import { joltScratch } from '@react-three/jolt';
+
+// SetLinearVelocity copies its argument, so one shared vector is enough
+bodyInterface.SetLinearVelocity(body.BodyID, joltScratch.vec3(0, 5, 0));
+```
+
+> [!CAUTION]
+> Scratch rules: **never** `destroy()` the result, **never** store it (it is valid only until the
+> next call to the same accessor), and **never** pass it to an API that keeps a pointer to its
+> argument rather than copying it. When in doubt, use `vec3.jolt()` or `withJolt()`.
+>
+> `joltScratch.release()` exists for tearing the module down in tests and HMR; the next accessor
+> call rebuilds the objects.
+
+## Bodies, shapes and constraints
+
+These have their own lifetimes and their own rules:
+
+- **Bodies** are never `destroy()`ed. A body is removed *and then* destroyed through the body
+  interface (`RemoveBody(id)` then `DestroyBody(id)`), in that order — destroying an added body
+  corrupts the world with no error. `bodySystem.removeBody(handle)` does all of it, and
+  `<RigidBody>` calls that on unmount.
+- **Shapes are reference counted.** `createShapeFromSettings()` takes a reference,
+  `releaseShape()` drops it, and the shape is freed when the last holder lets go. A body owns
+  its shape and releases it when removed.
+- **Constraints are reference counted too**, and must be removed *before* either of their
+  bodies. `Raw.module.destroy()` on a constraint is a double free that traps in WASM — use
+  `constraintSystem.removeConstraint()` (which `useConstraint` does on unmount). Removing a
+  constrained body removes its constraints first.
+- **Query objects** (`Raycaster`, `Shapecaster`, `ShapeCollider`, `Multicaster`) own filters, a
+  collector and settings. Call `destroy()` — see [Queries: lifetime](/api/queries#lifetime).
+- **Collector hits** (`mHits[i]`, `mBodyID`, `mSubShapeID2`, …) are references into the
+  collector's own storage. Read them; never destroy them.
+
+## Component lifecycle
+
+React tears a parent down before its children, so `<Physics>` frees the Jolt interface *before*
+the bodies inside it unmount. Everything that world owned — bodies, constraints, shapes — goes
+with the interface, and the systems check `physicsSystem.destroyed` before touching Jolt
+afterwards. This is why unmounting a world is safe even though the children clean up "too late".
+
+Practical consequences:
+
+- Changing `<Physics key>` is a clean, complete reset.
+- A caster you created from `physicsSystem` outlives nothing: destroy it in your own cleanup,
+  and don't cast after the world is gone.
+- Keeping a `BodyState` (or a handle) past its `<RigidBody>`'s lifetime is a use-after-free
+  waiting to happen. Handles are recycled by Jolt, so a stale one may silently name a *different*
+  body.
+
+## Debug output
+
+The library's internal `console` output is off by default — a bundled library can't rely on
+`NODE_ENV`. Turn it on while you are debugging:
+
+```ts
+import { setDebug } from '@react-three/jolt';
+
+setDebug(true);
+```
+
+That enables the internal warnings (`devWarn`) for things like dropped simulation time, excess
+Jolt interfaces and failed heightmap loads. It is separate from
+[`<Physics debug>`](/api/physics#debug), which draws collision shapes in the scene.
+
+For Jolt's own assertions and its debug renderer, use a debug build of the engine —
+[`jolt-physics/debug-wasm-compat`](/getting-started/installation#choosing-a-jolt-build).
+
+## Checking your own code
+
+The repository tests allocation balance by wrapping the module's constructors and asserting the
+live-object count is flat across many iterations (`test/jolt-alloc.ts`,
+`installAllocTracker(Raw)`). If you write a system that touches Jolt directly, the same trick is
+the only reliable way to catch a leak: a leak that grows by one object per frame is invisible
+until it isn't, and a double free shows up as the count drifting *negative*.
