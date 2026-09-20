@@ -9,7 +9,7 @@ export const useImperativeInstance = <InstanceType>(
     destroyFn: (instance: InstanceType) => void,
     dependencyList: DependencyList
 ) => {
-    const ref = useRef<InstanceType>();
+    const ref = useRef<InstanceType | undefined>(undefined);
 
     const getInstance = useCallback(() => {
         if (!ref.current) {

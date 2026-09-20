@@ -117,8 +117,13 @@ export class Raycaster {
 		return this.doCullBackFaces;
 	}
 	set cullBackFaces(value) {
-		if (value) this.raySettings.mBackFaceMode = Raw.module.EBackFaceMode_IgnoreBackFaces;
-		else this.raySettings.mBackFaceMode = Raw.module.EBackFaceMode_CollideWithBackFaces;
+		// jolt split RayCastSettings.mBackFaceMode into mBackFaceModeTriangles and
+		// mBackFaceModeConvex; SetBackFaceMode sets both, which is what the single field did.
+		this.raySettings.SetBackFaceMode(
+			value
+				? Raw.module.EBackFaceMode_IgnoreBackFaces
+				: Raw.module.EBackFaceMode_CollideWithBackFaces
+		);
 	}
 
 	//* Methods ---------------------------------------
@@ -478,7 +483,7 @@ export class RaycastHit {
 	get impactNormal(): THREE.Vector3 {
 		const bodyID = new Raw.module.BodyID(this.bodyHandle);
 		const shapeID = new Raw.module.SubShapeID();
-		const position = vec3.jolt(this.position);
+		const position = vec3.rjolt(this.position);
 		let toReturn = new THREE.Vector3();
 		shapeID.SetValue(this.shapeIdValue);
 		const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);

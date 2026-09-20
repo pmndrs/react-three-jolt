@@ -58,7 +58,7 @@ export function createMeshFloor(
     // Create body
     let creationSettings = new jolt.BodyCreationSettings(
         shape,
-        new jolt.Vec3(posX, posY, posZ),
+        new jolt.RVec3(posX, posY, posZ),
         new jolt.Quat(0, 0, 0, 1),
         jolt.EMotionType_Static,
         0

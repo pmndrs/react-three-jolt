@@ -4,6 +4,7 @@ import { CameraControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import { vec3 } from "@react-three/jolt";
 import { Perf } from "r3f-perf";
+import type { JSX } from "react";
 import {
 	//ReactNode,
 	//StrictMode,
@@ -15,7 +16,7 @@ import {
 	//useEffect,
 	useState
 } from "react";
-import { NavLink, NavLinkProps, Route, Routes, useLocation } from "react-router-dom";
+import { NavLink, NavLinkProps, Route, Routes, useLocation } from "react-router";
 
 //* All the examples ------------------------------
 import { RaycastManyDemo } from "./examples/RaycastManyDemo";

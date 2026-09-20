@@ -1,4 +1,22 @@
 {
+    "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+    "vcs": {
+        "enabled": true,
+        "clientKind": "git",
+        "useIgnoreFile": true
+    },
+    "files": {
+        "includes": [
+            "**",
+            "!**/dist/**",
+            "!**/node_modules/**",
+            "!**/coverage/**",
+            "!apps/examples/src/jolt/**",
+            "!apps/examples/public/**",
+            "!.yarn/**",
+            "!yarn.lock"
+        ]
+    },
     "linter": {
         "enabled": true,
         "rules": {
@@ -19,7 +37,7 @@
     },
     "javascript": {
         "formatter": {
-            "trailingComma": "none",
+            "trailingCommas": "none",
             "bracketSameLine": false
         }
     }

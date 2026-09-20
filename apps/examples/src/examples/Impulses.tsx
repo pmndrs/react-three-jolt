@@ -119,7 +119,7 @@ export function Impulses() {
 }
 
 function Sphere({ accent = false, color = "white", ...props }) {
-	const bodyRef = useRef();
+	const bodyRef = useRef<any>(null);
 	const meshRef = useRef<THREE.Mesh>(null);
 	const pos = useMemo(() => [r(10), r(10), r(10)], []);
 	useFrame((_state: any, inDelta: number) => {

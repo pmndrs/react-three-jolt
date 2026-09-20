@@ -4,7 +4,7 @@ import { useRef, useEffect } from "react";
 
 export function Tunnel(props: any) {
 	const { position = [0, 0, 0], rotation = [0, 0, 0], color = "#151E3F" } = props;
-	const rigidBodyRef = useRef();
+	const rigidBodyRef = useRef<any>(null);
 	useEffect(() => {
 		if (!rigidBodyRef.current) return;
 		const body = rigidBodyRef.current as BodyState;

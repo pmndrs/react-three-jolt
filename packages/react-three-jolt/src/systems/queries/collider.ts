@@ -45,7 +45,7 @@ export class ShapeCollider {
     // required jolt props
     shapeScale = new Raw.module.Vec3(1, 1, 1);
     centerOfMassTransform = new Raw.module.RMat44();
-    baseOffset = new Raw.module.Vec3(0, 0, 0);
+    baseOffset = new Raw.module.RVec3(0, 0, 0);
 
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         this.joltPhysicsSystem = joltPhysicsSystem;

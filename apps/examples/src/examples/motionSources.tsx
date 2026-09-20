@@ -39,14 +39,14 @@ export function MotionSources() {
 }
 
 function Inner() {
-	const rearConveyor = useRef<BodyState>();
-	const leftConveyor = useRef<BodyState>();
-	const angledBouncer = useRef<BodyState>();
-	const forcefield = useRef<BodyState>();
-	const randomBouncer = useRef<BodyState>();
-	const teleporter = useRef<BodyState>();
-	const susan = useRef<BodyState>();
-	const blender = useRef<BodyState>();
+	const rearConveyor = useRef<BodyState | undefined>(undefined);
+	const leftConveyor = useRef<BodyState | undefined>(undefined);
+	const angledBouncer = useRef<BodyState | undefined>(undefined);
+	const forcefield = useRef<BodyState | undefined>(undefined);
+	const randomBouncer = useRef<BodyState | undefined>(undefined);
+	const teleporter = useRef<BodyState | undefined>(undefined);
+	const susan = useRef<BodyState | undefined>(undefined);
+	const blender = useRef<BodyState | undefined>(undefined);
 
 	const intervals = useSetInterval();
 

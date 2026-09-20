@@ -160,7 +160,9 @@ export const getShapeSettingsFromGeometry = (
 		}
 		case "capsule": {
 			// values set by parameters
-			const { radius, length: height } = (geometry as CapsuleGeometry).parameters;
+			// three renamed CapsuleGeometry.parameters.length to .height in r168 (same value:
+			// the height of the middle section, excluding the caps)
+			const { radius, height } = (geometry as CapsuleGeometry).parameters;
 			shapeSettings = new jolt.CapsuleShapeSettings(height / 2, radius);
 			offset = new Vector3(0, height / 2, 0);
 			break;

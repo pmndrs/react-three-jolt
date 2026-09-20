@@ -263,7 +263,7 @@ export class CharacterControllerSystem {
 		return vec3.three(this.character.GetPosition());
 	}
 	set position(value: THREE.Vector3) {
-		const newVec = vec3.jolt(value);
+		const newVec = vec3.rjolt(value);
 		this.character.SetPosition(newVec);
 		Raw.module.destroy(newVec);
 	}
@@ -466,6 +466,19 @@ export class CharacterControllerSystem {
 				newCharacterVelocity.SetZ(0);
 			}
 		};
+
+		// jolt-physics 0.32 grew the CharacterContactListener interface (persisted/removed
+		// contacts, and the character-vs-character variants). Emscripten's JSImplementation
+		// binding throws "a JSImplementation must implement all functions" the moment Jolt calls
+		// one that JavaScript has not assigned, so every remaining callback gets the no-op /
+		// accept-everything behaviour this listener had before those functions existed.
+		this.characterContactListener.OnContactPersisted = () => {};
+		this.characterContactListener.OnContactRemoved = () => {};
+		this.characterContactListener.OnCharacterContactValidate = () => true;
+		this.characterContactListener.OnCharacterContactAdded = () => {};
+		this.characterContactListener.OnCharacterContactPersisted = () => {};
+		this.characterContactListener.OnCharacterContactRemoved = () => {};
+		this.characterContactListener.OnCharacterContactSolve = () => {};
 	}
 	// create the core character
 	initCharacter() {

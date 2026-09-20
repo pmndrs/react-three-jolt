@@ -197,7 +197,7 @@ export class PhysicsSystem {
 			// Get new position
 			_matrix4
 				.compose(
-					vec3.joltToThree(pos as Jolt.Vec3, _vector3),
+					vec3.joltToThree(pos, _vector3),
 					quat.joltToThree(rot, _quaternion),
 					vec3.three(state.scale)
 				)
@@ -270,7 +270,7 @@ export class PhysicsSystem {
 						this.steppingState.previousState.set(state.handle, previousState);
 					}
 
-					vec3.joltToThree(state.body.GetPosition() as Jolt.Vec3, previousState.position);
+					vec3.joltToThree(state.body.GetPosition(), previousState.position);
 					quat.joltToThree(state.body.GetRotation(), previousState.quaternion);
 				});
 				this.bodySystem.kinematicBodies.forEach((state) => {
@@ -284,7 +284,7 @@ export class PhysicsSystem {
 						this.steppingState.previousState.set(state.handle, previousState);
 					}
 
-					vec3.joltToThree(state.body.GetPosition() as Jolt.Vec3, previousState.position);
+					vec3.joltToThree(state.body.GetPosition(), previousState.position);
 					quat.joltToThree(state.body.GetRotation(), previousState.quaternion);
 				});
 			}
