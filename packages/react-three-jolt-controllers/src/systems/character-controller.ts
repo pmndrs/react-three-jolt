@@ -167,7 +167,6 @@ export class CharacterControllerSystem {
     }
     // cleanup
     destroy() {
-        console.log('Character wants to destroy...');
         // remove itself from the scene
         this.removeFromScene();
         //todo: destroy the character
@@ -579,7 +578,6 @@ export class CharacterControllerSystem {
         this.crouchingMesh = this.createDebugMesh(radius, height * 0.5, '#00ff00');
 
         // finally set the shape
-        console.log('Setting Standing Shape');
         this.shape = this.standingShape;
 
         // cleanup

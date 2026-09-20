@@ -178,7 +178,6 @@ export class VehicleManager {
         }
 
         this.constraint = new Raw.module.VehicleConstraint(this.carBody, vehicle);
-        console.log('constraint active', this.constraint.IsActive());
         //NOW we can create the wheelStates
         // TODO this process seems dirty....
         //@ts-ignore

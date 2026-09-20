@@ -53,7 +53,6 @@ export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, re
         return () => cameraRig.detach();
     }, [characterSystem]);
     useCommand('z', () => {
-        console.log('Zooming out');
         //const cast = cameraRig.controls.castObstructionShape();
     });
     useCommand('c', () => {
@@ -61,7 +60,6 @@ export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, re
     });
     // reset to follow cam
     useCommand('r', () => {
-        console.log('Resetting to follow cam');
         cameraRig.controls.setRotation(cameraRig.anchor.rotation.y, true);
     });
 

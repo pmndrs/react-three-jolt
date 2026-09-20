@@ -11,7 +11,7 @@ import {
 } from 'three';
 import { Layer } from '../constants';
 import { Raw } from '../raw';
-import { quat, vec3 } from '../utils';
+import { devWarn, quat, vec3 } from '../utils';
 import { BodyState } from './body-state';
 import {
     AutoShape,
@@ -185,7 +185,7 @@ export class BodySystem {
         const bodyID = bodyState.body.GetID();
         const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
         if (!body) {
-            console.warn('body getter failed during delete', bodyHandle);
+            devWarn('body getter failed during delete', bodyHandle);
             return;
         }
 

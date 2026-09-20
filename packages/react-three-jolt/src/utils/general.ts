@@ -3,6 +3,29 @@ import * as THREE from 'three';
 import { Raw } from '../raw';
 import type { Vector3Tuple, Vector4Tuple } from '../types';
 
+// ---------------------------------------------------------------------------
+// Debug logging
+// ---------------------------------------------------------------------------
+// The library is bundled by rollup with no NODE_ENV replacement, so we can't
+// gate console output on `process.env.NODE_ENV === 'production'` the way an
+// app bundler would let us. Instead we expose one module-level switch: all
+// internal console output stays silent until a consumer opts in.
+let debug = false;
+
+// Enable or disable react-three-jolt's internal console output (off by
+// default). Intended for library development/debugging, not for consumers
+// to leave on in production.
+export function setDebug(flag: boolean): void {
+    debug = flag;
+}
+
+// console.warn for conditions that indicate misuse or a real limitation
+// (not a routine trace). Still gated behind `setDebug` so consumers who
+// haven't opted in don't see library-internal chatter.
+export function devWarn(...args: unknown[]): void {
+    if (debug) console.warn(...args);
+}
+
 // Get the distance between two jolt vector3s
 // jolt-physics >=1.0 declares RVec3 (the "real"/world space vector every position argument takes)
 // as its own class. In the single precision builds we use it is the same layout as Vec3 and the

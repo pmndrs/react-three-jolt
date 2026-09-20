@@ -11,11 +11,11 @@
             "!**/dist",
             "!**/node_modules",
             "!**/coverage",
-            "!apps/examples/src/jolt",
             "!apps/examples/public",
             "!.yarn",
             "!yarn.lock",
-            "!**/*.glsl"
+            "!**/*.glsl",
+            "!README.md"
         ]
     },
     "linter": {

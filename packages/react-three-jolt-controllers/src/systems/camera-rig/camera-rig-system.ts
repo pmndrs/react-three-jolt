@@ -87,7 +87,6 @@ export class CameraRigManager {
     }
     // cleanup
     destroy() {
-        console.log('Destroying CameraRig...');
         this.detachFromLoop();
         // remove the cameras
         this.cameras.forEach((camera) => this.scene.remove(camera));

@@ -15,7 +15,7 @@ import { MathUtils, Quaternion, Vector3 } from 'three';
 import { Layer, NUM_OBJECT_LAYERS } from '../constants';
 import { Raw } from '../raw';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
-import { anyVec3, quat, vec3 } from '../utils';
+import { anyVec3, devWarn, quat, vec3 } from '../utils';
 import { BodyState } from './body-state';
 import { BodySystem } from './body-system';
 import { ConstraintSystem } from './constraint-system';
@@ -62,7 +62,6 @@ export class PhysicsSystem {
     constructor(pid = '0') {
         const jolt = Raw.module;
 
-        console.log('*** R3/Jolt PhysicsSystem Initialized ***');
         /* setup collisions and broadphase */
         const objectFilter = new jolt.ObjectLayerPairFilterTable(NUM_OBJECT_LAYERS);
         objectFilter.EnableCollision(Layer.NON_MOVING, Layer.MOVING);
@@ -99,8 +98,9 @@ export class PhysicsSystem {
             // we need to check ourselves and limit interfaces for memory reasons
             if (Raw.joltInterfaces.size > this.maxInterfaces - 1) {
                 // throw a warning about excess
-                console.warn('*** WARNING: Excess Jolt Interfaces Attempted ***');
-                console.log('Using first initialized interface');
+                devWarn(
+                    '*** WARNING: Excess Jolt Interfaces Attempted, using first initialized interface ***'
+                );
                 const interfaces = Raw.joltInterfaces.values();
                 this.joltInterface = interfaces.next().value;
             } else {
