@@ -21,12 +21,17 @@ import { RigidBody } from '@react-three/jolt';
 Children render inside an `<object3D>` the body drives. Anything non-visual (lights, groups,
 your own components) can live in there too; only meshes contribute to the collision shape.
 
+To place the collision shape yourself — a trigger volume with no mesh, a cheap primitive standing
+in for a detailed model, several pieces making up one body — use the named collider components
+and `<RigidBody colliders>`. See [Colliders](/api/colliders).
+
 ## Props
 
 | prop | type | notes |
 | --- | --- | --- |
 | `type` | `'dynamic' \| 'static' \| 'kinematic' \| 'rig'` | motion type. Defaults to dynamic |
 | `shape` | [`AutoShape`](/api/shapes#autoshape) | overrides shape autodetection for this body |
+| `colliders` | `false \| 'cuboid' \| 'ball' \| 'hull' \| 'trimesh'` | what to do about the meshes inside the body — see [Colliders](/api/colliders#<rigidbody-colliders>) |
 | `position` | `number[]` | setting it after creation **teleports** the body |
 | `rotation` | `number[]` | Euler angles, radians. Also a teleport |
 | `scale` | `number[]` | scales the collision shape as well as the object. Applied **while the body is created**, not a frame later |

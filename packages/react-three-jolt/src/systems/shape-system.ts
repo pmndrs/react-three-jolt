@@ -264,6 +264,21 @@ export type ShapeOptions = {
     mesh?: THREE.Mesh;
     blockSize?: number;
     children?: ShapeDescriptor[];
+
+    //* heightfield, described from raw samples rather than a mesh (issue #155) ---
+    /** `sampleCount * sampleCount` height samples, row major. */
+    heights?: NumberArray;
+    /** Samples per edge. Must be `blockSize * 2^n`. */
+    sampleCount?: number;
+    /**
+     * Distance between samples on x/z and the height multiplier on y. Named apart from `scale`,
+     * which wraps the finished shape in a `ScaledShape`.
+     */
+    heightScale?: anyVec3;
+    /** Per-surface friction/restitution, see {@link HeightfieldShapeDescriptor.materials}. */
+    materials?: SurfaceMaterialTable | SurfaceMaterial[];
+    /** One material index per quad, see {@link HeightfieldShapeDescriptor.materialIndices}. */
+    materialIndices?: NumberArray;
 };
 
 /* ============================================================================
@@ -734,11 +749,30 @@ export function describeShapeFromOptions(
                 indices: flattenIndices(options.indices ?? options.indexes ?? [])
             };
         case 'heightfield': {
+            // #155: <HeightfieldCollider args={[samples, sampleCount, scale]}> hands over the
+            // samples directly; the mesh path below is what <Shape mesh={...}> has always done.
+            if (options.heights) {
+                const blockSize = options.blockSize ?? 2;
+                const sampleCount =
+                    options.sampleCount ??
+                    getValidatedHeightfieldSampleCount(options.heights.length, blockSize);
+                const descriptor: HeightfieldShapeDescriptor = {
+                    type: 'heightfield',
+                    heights: options.heights,
+                    sampleCount,
+                    scale: toTuple(vec3.three(options.heightScale ?? [1, 1, 1])),
+                    blockSize
+                };
+                if (options.materials) descriptor.materials = options.materials;
+                if (options.materialIndices) descriptor.materialIndices = options.materialIndices;
+                return descriptor;
+            }
             const mesh =
                 options.mesh ?? (options.geometry ? new THREE.Mesh(options.geometry) : undefined);
             if (!mesh)
                 throw new Error(
-                    'react-three-jolt: a heightfield needs a `mesh` (or `geometry`) to sample'
+                    'react-three-jolt: a heightfield needs `heights` (with `sampleCount`), or a ' +
+                        '`mesh`/`geometry` to sample'
                 );
             return describeHeightfieldMesh(mesh, options.blockSize);
         }
