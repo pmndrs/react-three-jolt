@@ -106,6 +106,24 @@ interface RigidBodyProps {
     mass?: number;
     // remove
     quaternion?: number[];
+
+    /**
+     * Whether `position`/`rotation`/`velocity`/`angularVelocity`/`scale`/`group`/`subGroup`
+     * writes are allowed to wake this body (issue #167). Default `true`, matching every setter's
+     * behavior before this prop existed. Turn it off to bulk-reposition sleeping bodies (e.g.
+     * re-laying out scenery) without waking them - see `bodyState.activateOnChange` for the
+     * per-call `{ activate }` override.
+     */
+    activateOnChange?: boolean;
+    /**
+     * Opt-in perf optimisation (issue #168): when `false`, the physics frame sync writes this
+     * body's pose straight into `object.matrix` instead of `object.position`/`object.quaternion`,
+     * and turns off three's own per-object `Object3D.matrixAutoUpdate`, skipping its automatic
+     * matrix recompute entirely. Only correct when this `<RigidBody>`'s parent transform never
+     * changes (the scene root, or a group that never moves/rotates/scales) - see
+     * `bodyState.matrixAutoUpdate`. Default `true` (three's normal behavior, unchanged).
+     */
+    matrixAutoUpdate?: boolean;
 }
 export interface RigidBodyContext {
     body: BodyState | undefined;
@@ -148,6 +166,8 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             gravityFactor,
             group,
             subGroup,
+            activateOnChange,
+            matrixAutoUpdate,
 
             // obstruction
             allowObstruction,
@@ -240,6 +260,10 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                 // for cycle reasons some stuff might have gotten missed
                 // try setting the debug
                 if (debug) body.debug = debug;
+                // #167 / #168: set before `position`/`rotation`/`scale` below so their initial
+                // writes already respect whatever activation/matrix behavior was asked for.
+                if (activateOnChange !== undefined) body.activateOnChange = activateOnChange;
+                if (matrixAutoUpdate !== undefined) body.matrixAutoUpdate = matrixAutoUpdate;
                 if (position) body.position = vec3.three(position);
                 if (rotation)
                     body.rotation = new THREE.Quaternion().setFromEuler(
@@ -265,6 +289,14 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         useEffect(() => {
             if (rigidBodyRef.current) (rigidBodyRef.current as BodyState).debug = debug;
         }, [debug, rigidBodyRef]);
+
+        //* Activation & matrix sync opt-ins (issues #167, #168) ----------
+        useEffect(() => {
+            if (!rigidBodyRef.current) return;
+            const body = rigidBodyRef.current as BodyState;
+            if (activateOnChange !== undefined) body.activateOnChange = activateOnChange;
+            if (matrixAutoUpdate !== undefined) body.matrixAutoUpdate = matrixAutoUpdate;
+        }, [activateOnChange, matrixAutoUpdate, rigidBodyRef]);
 
         //* Shape Updates -------------------------------------
         // Shape update

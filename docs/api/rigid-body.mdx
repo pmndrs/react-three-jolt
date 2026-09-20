@@ -46,6 +46,8 @@ your own components) can live in there too; only meshes contribute to the collis
 | `obstructionTimelimit` | `number` | ms; switches obstruction to `'temporal'` |
 | `onlyInitialize` | `boolean` | apply `position`/`rotation` at creation only, then stop watching them |
 | `debug` | `boolean` | draw this body's collision shape |
+| `activateOnChange` | `boolean` | default `true`. `false` stops `position`/`rotation`/`velocity`/`angularVelocity`/`scale`/`group`/`subGroup` writes from waking a sleeping body — see [Activation](#activation) |
+| `matrixAutoUpdate` | `boolean` | default `true`. `false` skips three's per-object matrix recompute in the physics sync — see [matrixAutoUpdate](#matrixautoupdate) |
 | `onContactAdded` | `(body1: number, body2: number) => void` | handles, not bodies — see [Events](#events) |
 | `onContactRemoved` | `(body1: number, body2: number) => void` | |
 | `onContactPersisted` | `(body1: number, body2: number) => void` | |
@@ -153,10 +155,13 @@ detail.
 
 | member | |
 | --- | --- |
-| `position` | `THREE.Vector3`, get/set (setting teleports) |
-| `rotation` | `THREE.Quaternion`, get/set |
-| `scale` | `THREE.Vector3 \| number[] \| number`, get/set — rebuilds the scaled shape |
-| `setPositionAndRotation(position, rotation)` | both at once |
+| `position` | `THREE.Vector3`, get/set (setting teleports) — activation per [`activateOnChange`](#activation) |
+| `rotation` | `THREE.Quaternion`, get/set — same activation rules as `position` |
+| `scale` | `THREE.Vector3 \| number[] \| number`, get/set — rebuilds the scaled shape; same activation rules |
+| `setPosition(position, { activate? })` | method form of `position`, with a one-call activation override (#167) |
+| `setRotation(rotation, { activate? })` | method form of `rotation` |
+| `setScale(scale, { activate? })` | method form of `scale` |
+| `setPositionAndRotation(position, rotation, { activate? })` | both at once |
 | `getPosition(asJolt?)` | `asJolt` returns a `Jolt.RVec3` — see [ownership](/advanced/memory) |
 | `getMatrix(matrix)` / `setMatrix(matrix)` | `THREE.Matrix4` in/out |
 | `readPose(outPosition, outRotation)` | allocation-free live pose |
@@ -211,12 +216,77 @@ still worth tuning for a demo that has to feel solid:
   mid-air's worth of time and miss the next push. `<Physics defaultBodySettings={{ mAllowSleeping:
   false }}>` removes the question at the cost of never letting the scene idle.
 
+### Activation
+
+Setters that can move a body (`position`, `rotation`, `velocity`, `angularVelocity`, `scale`,
+`group`, `subGroup`) used to wake a sleeping body unconditionally (issue #167). `activateOnChange`
+controls that per body:
+
+```tsx
+const crate = useRef<BodyState>(null);
+
+useMount(() => {
+    // repositioning sleeping scenery shouldn't wake it just to move it and let it fall back
+    // asleep a moment later
+    crate.current!.activateOnChange = false;
+    crate.current!.position = new THREE.Vector3(3, 0.5, -2);
+});
+```
+
+- Default `true` — every setter's behavior before this flag existed. Nothing changes for
+  existing code.
+- `<RigidBody activateOnChange={false}>` sets it at the component level.
+- Each setter's method form (`setPosition`, `setRotation`, `setVelocity`, `setAngularVelocity`,
+  `setScale`, `setGroup`, `setSubGroup`) takes a one-call `{ activate }` override that wins over
+  the flag, e.g. `body.setPosition(v, { activate: true })` even while `activateOnChange` is
+  `false`.
+- A **static** body never activates, regardless of either flag — activating one asserts inside
+  Jolt and means nothing, since a static is never simulated.
+- Turn `activateOnChange` off for bulk repositioning of sleeping bodies: re-laying out a level's
+  sleeping props, snapping a stack of crates back to a saved layout, and similar "instant, no one
+  needs to notice" moves where waking every body just to move it — and having it fall back asleep
+  a step later — is wasted broadphase/island work.
+
+### `matrixAutoUpdate`
+
+Opt-in perf optimisation (issue #168). By default, the physics frame sync writes each body's pose
+into `object.position`/`object.quaternion`, and three.js recomposes `object.matrix` from those
+every frame on its own. With `bodyState.matrixAutoUpdate = false` (or
+`<RigidBody matrixAutoUpdate={false}>`), the sync instead composes the pose straight into
+`object.matrix` and flags `matrixWorldNeedsUpdate`, and turns off three's own
+`Object3D.matrixAutoUpdate` so nothing recomposes it a second time. `object.position` and
+`object.quaternion` are left exactly as they were at creation — reading them no longer tells you
+where the object is; use `bodyState.position` / `readPose` instead.
+
+```tsx
+<RigidBody matrixAutoUpdate={false} position={[0, 5, 0]}>
+    <mesh>
+        <boxGeometry args={[1, 1, 1]} />
+    </mesh>
+</RigidBody>
+```
+
+> [!CAUTION]
+> Only correct when this body's three.js parent transform is stable between physics steps — the
+> scene root, or a group that never moves, rotates or scales. The composed matrix is relative to
+> the parent space captured once in `invertedWorldMatrix` at body creation, exactly like every
+> other synced pose (this constraint already existed; `matrixAutoUpdate` does not add it, it
+> inherits it) — a moving parent was never supported by the sync loop.
+
+Measured with 1000 dynamic bodies stepped for 120 frames
+(`packages/react-three-jolt/test/matrix-auto-update.test.ts`): roughly a 4–6% reduction in
+sync-loop time, from skipping three's `Object3D.updateMatrix()` and an extra `Matrix4.decompose()`
+per body. Worth it for scenes with hundreds to thousands of always-visible dynamic bodies; not
+worth the readability cost for a handful.
+
 ### Motion
 
 | member | |
 | --- | --- |
-| `velocity` | `THREE.Vector3`, get/set |
-| `angularVelocity` | `THREE.Vector3`, get/set |
+| `velocity` | `THREE.Vector3`, get/set — activation per [`activateOnChange`](#activation) |
+| `angularVelocity` | `THREE.Vector3`, get/set — same activation rules |
+| `setVelocity(velocity, { activate? })` | method form of `velocity`, with a one-call override |
+| `setAngularVelocity(angularVelocity, { activate? })` | method form of `angularVelocity` |
 | `applyForce(force)` | |
 | `applyTorque(torque)` | |
 | `addImpulse(impulse)` | |
@@ -248,6 +318,8 @@ untouched.
 
 `handle`, `body` (the raw `Jolt.Body`), `BodyID`, `object` (the three.js object), `meshType`,
 `isInstance`, and `group` / `subGroup` — see [Collision groups & layers](/api/collision-groups).
+`setGroup(group, { activate? })` / `setSubGroup(subGroup, { activate? })` are the method forms
+with a one-call [activation](#activation) override (#167).
 
 ### Contacts
 
