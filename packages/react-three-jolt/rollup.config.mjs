@@ -40,7 +40,7 @@ export default [
             filesize()
         ],
         // disable three-stdlib eval warning for now
-        onwarn: function (warning, warn) {
+        onwarn: (warning, warn) => {
             if (warning.code === 'EVAL') return;
             warn(warning);
         }

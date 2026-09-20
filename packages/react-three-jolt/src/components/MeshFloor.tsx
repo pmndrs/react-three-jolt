@@ -8,11 +8,11 @@ However, it is a good example of how to create/use jolt directly so I'm using it
 if You really wanted a body like this, probably use the heigtfield instead
 */
 //import { RigidBody } from './RidgedBody';
-import { createMeshFloor, createMeshFromShape } from '../utils/meshTools';
-import { useEffect, useRef } from 'react';
-import { useJolt } from '../hooks';
+
+import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import React from 'react';
+import { useJolt } from '../hooks';
+import { createMeshFloor, createMeshFromShape } from '../utils/meshTools';
 
 export const MeshFloor = ({ size = 20, position = [0, 0, 0], ...rest }) => {
     const meshRef = useRef<THREE.Mesh>(null);

@@ -8,13 +8,14 @@
     "files": {
         "includes": [
             "**",
-            "!**/dist/**",
-            "!**/node_modules/**",
-            "!**/coverage/**",
-            "!apps/examples/src/jolt/**",
-            "!apps/examples/public/**",
-            "!.yarn/**",
-            "!yarn.lock"
+            "!**/dist",
+            "!**/node_modules",
+            "!**/coverage",
+            "!apps/examples/src/jolt",
+            "!apps/examples/public",
+            "!.yarn",
+            "!yarn.lock",
+            "!**/*.glsl"
         ]
     },
     "linter": {
@@ -31,14 +32,23 @@
             }
         }
     },
+    "assist": {
+        "actions": {
+            "source": {
+                "organizeImports": "on"
+            }
+        }
+    },
     "formatter": {
+        "indentStyle": "space",
         "indentWidth": 4,
         "lineWidth": 100
     },
     "javascript": {
         "formatter": {
             "trailingCommas": "none",
-            "bracketSameLine": false
+            "bracketSameLine": false,
+            "quoteStyle": "single"
         }
     }
 }

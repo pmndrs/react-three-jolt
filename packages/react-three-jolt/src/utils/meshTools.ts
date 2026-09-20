@@ -1,8 +1,9 @@
 //various Jolt/Three tools for meshes
 // I HATE we need to import this raw module
-import { Raw } from '../raw';
+
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
+import { Raw } from '../raw';
 
 // create a heightfeild type floor
 // from the jolt js example
@@ -16,23 +17,21 @@ export function createMeshFloor(
 ) {
     const jolt = Raw.module;
     // Create regular grid of triangles
-    const height = function (x: number, y: number) {
-        return Math.sin(x / 2) * Math.cos(y / 3);
-    };
+    const height = (x: number, y: number) => Math.sin(x / 2) * Math.cos(y / 3);
     const triangles = new jolt.TriangleList();
     triangles.resize(n * n * 2);
     for (let x = 0; x < n; ++x)
         for (let z = 0; z < n; ++z) {
-            let center = (n * cellSize) / 2;
+            const center = (n * cellSize) / 2;
 
-            let x1 = cellSize * x - center;
-            let z1 = cellSize * z - center;
-            let x2 = x1 + cellSize;
-            let z2 = z1 + cellSize;
+            const x1 = cellSize * x - center;
+            const z1 = cellSize * z - center;
+            const x2 = x1 + cellSize;
+            const z2 = z1 + cellSize;
 
             {
-                let t = triangles.at((x * n + z) * 2);
-                let v1 = t.get_mV(0),
+                const t = triangles.at((x * n + z) * 2);
+                const v1 = t.get_mV(0),
                     v2 = t.get_mV(1),
                     v3 = t.get_mV(2);
                 (v1.x = x1), (v1.y = height(x, z)), (v1.z = z1);
@@ -41,8 +40,8 @@ export function createMeshFloor(
             }
 
             {
-                let t = triangles.at((x * n + z) * 2 + 1);
-                let v1 = t.get_mV(0),
+                const t = triangles.at((x * n + z) * 2 + 1);
+                const v1 = t.get_mV(0),
                     v2 = t.get_mV(1),
                     v3 = t.get_mV(2);
                 (v1.x = x1), (v1.y = height(x, z)), (v1.z = z1);
@@ -50,13 +49,13 @@ export function createMeshFloor(
                 (v3.x = x2), (v3.y = height(x + 1, z)), (v3.z = z1);
             }
         }
-    let materials = new jolt.PhysicsMaterialList();
-    let shape = new jolt.MeshShapeSettings(triangles, materials).Create().Get();
+    const materials = new jolt.PhysicsMaterialList();
+    const shape = new jolt.MeshShapeSettings(triangles, materials).Create().Get();
     jolt.destroy(triangles);
     jolt.destroy(materials);
 
     // Create body
-    let creationSettings = new jolt.BodyCreationSettings(
+    const creationSettings = new jolt.BodyCreationSettings(
         shape,
         new jolt.RVec3(posX, posY, posZ),
         new jolt.Quat(0, 0, 0, 1),

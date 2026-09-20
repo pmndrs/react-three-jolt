@@ -1,11 +1,11 @@
 /* use command is a hook to handle user inputs and map them
 to commands rather than specifically to keystrokes or gamepad inputs */
 
-import { useEffect, useSyncExternalStore } from 'react';
-import { Commander, CommandCallback } from './Commander';
 import { CameraControls } from '@react-three/drei';
-import type { Vector2Like } from 'three';
 import { useFrame } from '@react-three/fiber';
+import { useEffect, useSyncExternalStore } from 'react';
+import type { Vector2Like } from 'three';
+import { CommandCallback, Commander } from './Commander';
 
 // Puts a singleton into global space
 //TODO: Not sure this the right way to do a global singleton
@@ -34,7 +34,7 @@ export function useCommand(
     options?: any
 ) {
     const commander = useCommander();
-    let command =
+    const command =
         commander.getCommand(commandString) || commander.addCommand(commandString, options);
 
     // attach the listeners in a useEffect and the return will remove them

@@ -21,7 +21,7 @@ let camera: THREE.OrthographicCamera;
 // TODO: move scene initialization HERE
 
 // read a message from the main thread
-self.onmessage = function (event) {
+self.onmessage = (event) => {
     handleMessage(event.data);
 };
 
@@ -76,5 +76,3 @@ function testRender() {
     console.log('WORKER: rendered', newBitmap);
     self.postMessage({ type: 'newBitmap', bitmap: newBitmap }, [newBitmap]);
 }
-
-export {};

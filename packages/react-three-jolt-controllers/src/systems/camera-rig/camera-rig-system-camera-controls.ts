@@ -1,14 +1,12 @@
 // main items of the camera rigs
 //import { Raw } from '@react-three/jolt';
 //import type Jolt from 'jolt-physics';
-import * as THREE from 'three';
-import CameraControls from 'camera-controls';
-// mostly for the types
-import { PhysicsSystem, vec3 } from '@react-three/jolt';
-import { ConstraintSystem } from '@react-three/jolt';
 
+// mostly for the types
 //import { vec3, quat, convertNegativeRadians } from '@react-three/jolt';
-import { BodyState } from '@react-three/jolt';
+import { BodyState, ConstraintSystem, PhysicsSystem, vec3 } from '@react-three/jolt';
+import CameraControls from 'camera-controls';
+import * as THREE from 'three';
 
 //activate camera controls
 CameraControls.install({ THREE: THREE });

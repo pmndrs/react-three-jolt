@@ -2,8 +2,9 @@
 // API surface (embind hands back numbers), so these exercise the paths that actually changed
 // between jolt-physics 0.22 and 1.1: RVec3 positions, RShapeCast / RMat44 queries, the split
 // RayCastSettings back face mode, heightfields and constraints.
-import { assert, beforeAll, test } from 'vitest';
+
 import * as THREE from 'three';
+import { assert, beforeAll, test } from 'vitest';
 import { initJolt } from '../src/raw';
 import { PhysicsSystem } from '../src/systems/physics-system';
 import { ShapeCollider } from '../src/systems/queries/collider';

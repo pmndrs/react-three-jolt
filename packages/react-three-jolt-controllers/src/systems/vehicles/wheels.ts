@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 //import type Jolt from 'jolt-physics';
 
-import { Raw, vec3, quat, joltPropName } from '@react-three/jolt';
+import { joltPropName, quat, Raw, vec3 } from '@react-three/jolt';
 
 //* Types ====================================
 export type VehicleFourWheelSettings = {

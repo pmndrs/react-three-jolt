@@ -1,5 +1,5 @@
-import { Commander } from './Commander';
 import { Command } from './Command';
+import { Commander } from './Commander';
 import { VectorPreset, vectorPresets } from './commonCommands';
 
 type VectorOptions = {
