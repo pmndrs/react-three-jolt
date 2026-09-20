@@ -16,10 +16,15 @@ import { BodyState } from './body-state';
 import type { ConstraintSystem } from './constraint-system';
 import {
     AutoShape,
+    checkDynamicMeshStrategy,
+    convexHullFromShape,
     createMeshForShape,
     createShapeFromSettings,
+    createShapeSettings,
+    type DynamicMeshStrategy,
+    describeObject,
     generateHeightfieldShapeFromThree,
-    getShapeSettingsFromObject,
+    makeDescriptorDynamicSafe,
     releaseShape,
     ShapeSystem
 } from './shape-system';
@@ -38,10 +43,21 @@ export interface GenerateBodyOptions {
     activation?: 'activate' | 'deactivate';
     jitter?: THREE.Vector3;
     mass?: number;
+    /** @deprecated only used by the old dynamic-trimesh mass fallback; the shape's own mass properties are used now (#112) */
     size?: THREE.Vector3;
     group?: number;
     subGroup?: number;
     shape?: Jolt.Shape;
+    /**
+     * What to do with a trimesh shape on a **dynamic** body (issue #112). Jolt cannot simulate
+     * one: mesh vs mesh has no collision, so the body falls through the world and ends up with a
+     * NaN position.
+     *
+     * - `'convex'` (default): warn and use a convex hull of the same points instead.
+     * - `'error'`: throw, so the mistake is loud.
+     * - `'decompose'`: reserved for a convex decomposition; currently throws with an explanation.
+     */
+    dynamicMeshStrategy?: DynamicMeshStrategy;
 }
 
 // ================================================
@@ -571,15 +587,8 @@ export function generateBodySettings(
 ): Jolt.BodyCreationSettings {
     const jolt = Raw.module;
     const isObject = object instanceof Object3D;
-    let shape = object as Jolt.Shape;
-    if (isObject) {
-        const shapeSettings = getShapeSettingsFromObject(object, options.shapeType);
-        if (!shapeSettings) throw new Error('No shape settings found');
-        // takes ownership of the settings (and of any sub-settings they reference) and gives us
-        // a shape we hold one reference on - released below, once the BodyCreationSettings has
-        // taken its own.
-        shape = createShapeFromSettings(shapeSettings);
-    }
+    // whether the shape below is one we created (and therefore have to release again)
+    let ownsShape = isObject;
 
     // create position and quaternion from three to jolt
     let position: any = new THREE.Vector3();
@@ -654,19 +663,56 @@ export function generateBodySettings(
                 layer = Layer.MOVING;
         }
     }
+    const isDynamic = motionType === jolt.EMotionType_Dynamic;
+    // #112: jolt cannot simulate a dynamic body with a MeshShape - mesh vs mesh has no collision,
+    // so the body falls through the world and its position goes NaN. Convert the mesh away here,
+    // while we still know the motion type. https://jrouwe.github.io/JoltPhysics/#dynamic-mesh-shapes
+    const meshStrategy = options.dynamicMeshStrategy ?? 'convex';
+    let shape: Jolt.Shape;
+    let convertedFromMesh = false;
+    if (isObject) {
+        // one place decides what this object is; when the body is dynamic, any trimesh in that
+        // description becomes a convex hull before anything is allocated
+        const described = describeObject(object, { type: options.shapeType });
+        const descriptor = isDynamic
+            ? makeDescriptorDynamicSafe(described, meshStrategy)
+            : described;
+        convertedFromMesh = descriptor !== described;
+        // takes ownership of the settings (and of any sub-settings they reference) and gives us
+        // a shape we hold one reference on - released below, once the BodyCreationSettings has
+        // taken its own.
+        shape = createShapeFromSettings(createShapeSettings(descriptor));
+    } else {
+        shape = object as Jolt.Shape;
+        // a caller who handed us a ready made shape (a <Shape> child, say) gets the same
+        // treatment, from the shape's own triangles
+        if (isDynamic && shape.GetSubType() === jolt.EShapeSubType_Mesh) {
+            // same policy (and the same messages) as the descriptor path above
+            checkDynamicMeshStrategy(meshStrategy);
+            shape = convexHullFromShape(shape);
+            ownsShape = true;
+            convertedFromMesh = true;
+        }
+    }
+
     // create the settings
     const settings = mergeBodyCreationSettings(
         new jolt.BodyCreationSettings(shape, position, quaternion, motionType, layer),
         options.bodySettings
     );
-    // if we passed in a shape the options shapeType wont be set. we need to detect trimesh from the shape
-    const isMesh = shape.GetSubType() === jolt.EShapeSubType_Mesh;
-    // Trimesh override to add mass and inertia
-    // see: https://jrouwe.github.io/JoltPhysics/#dynamic-mesh-shapes
-    if (isMesh && motionType === jolt.EMotionType_Dynamic) {
-        settings.mOverrideMassProperties =
-            Raw.module.EOverrideMassProperties_MassAndInertiaProvided;
-        // if the object is an object we need to get the size from it
+    if (convertedFromMesh && options.mass !== undefined) {
+        // #112: the shape is a real convex hull now, so its own mass properties are meaningful -
+        // scale those to the requested mass instead of pretending the body is a solid box.
+        // `GetMassProperties()` hands back a static temporary: read it, never destroy it.
+        const massProperties = shape.GetMassProperties();
+        settings.mOverrideMassProperties = jolt.EOverrideMassProperties_MassAndInertiaProvided;
+        settings.mMassPropertiesOverride.mMass = massProperties.mMass;
+        settings.mMassPropertiesOverride.mInertia = massProperties.mInertia;
+        settings.mMassPropertiesOverride.ScaleToMass(options.mass);
+    } else if (isDynamic && shape.GetSubType() === jolt.EShapeSubType_Mesh) {
+        // belt and braces: a strategy that somehow left a mesh in place still needs *some* mass
+        // and inertia, or the body has none at all
+        settings.mOverrideMassProperties = jolt.EOverrideMassProperties_MassAndInertiaProvided;
         let size: any = options?.size || new THREE.Vector3(1, 1, 1);
         const mass = options?.mass || 200;
         if (isObject) size = new THREE.Box3().setFromObject(object).getSize(new Vector3());
@@ -680,7 +726,7 @@ export function generateBodySettings(
     jolt.destroy(position);
     jolt.destroy(quaternion);
     // the settings hold their own reference to a shape we created here
-    if (isObject) releaseShape(shape);
+    if (ownsShape) releaseShape(shape);
 
     return settings;
 }

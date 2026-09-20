@@ -134,6 +134,21 @@ If the system can’t determine the shape, it will unwrap the mesh and build a c
 
 To get a Trimesh shape you must specify trimesh. We do this because trimesh is actually the most difficult shape and most likely to not work correctly. For example Jolt docs say Dynamic & Kinematic Trimeshes cannot collide with each other or heightmaps, doing so will throw errors.
 
+**Dynamic bodies cannot use a trimesh.** A Jolt mesh shape is a one sided triangle soup with no
+inside, so mesh vs mesh does not collide at all and a dynamic mesh body sinks through the world
+and ends up with a `NaN` position ([issue #112](https://github.com/pmndrs/react-three-jolt/issues/112),
+[Jolt docs](https://jrouwe.github.io/JoltPhysics/#dynamic-mesh-shapes)). Asking for one now warns
+and builds a convex hull of the same points instead. Pick a different behaviour with
+`dynamicMeshStrategy`:
+
+| value | behaviour |
+| --- | --- |
+| `'convex'` (default) | warn and use a convex hull of the mesh's points |
+| `'error'` | throw, so the mistake is loud |
+| `'decompose'` | reserved for a convex decomposition; throws with an explanation for now |
+
+Static (and kinematic) bodies keep a real mesh shape.
+
 #### Compound Shapes:
 
 To get a compound shape simply add multiple meshes and position them as if they are inside a group ( in local space).

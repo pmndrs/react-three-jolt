@@ -17,6 +17,8 @@ import { initJolt, Raw } from '../src/raw';
 import {
     type AutoShape,
     addSubShape,
+    containsMeshShape,
+    convexHullFromShape,
     createMeshForShape,
     createMeshFromShape,
     createShapeFromSettings,
@@ -31,6 +33,7 @@ import {
     getShapeSettingsFromObject,
     getSubShapeTransform,
     isMutableCompoundShape,
+    makeDescriptorDynamicSafe,
     modifySubShape,
     readCenterOfMass,
     releaseShape,
@@ -40,6 +43,7 @@ import {
     subShapeCount,
     validScaleFor
 } from '../src/systems/shape-system';
+import { setDebug } from '../src/utils';
 import { createMeshFloor } from '../src/utils/meshTools';
 import { installAllocTracker } from './jolt-alloc';
 
@@ -1289,6 +1293,207 @@ describe('BodyState.scale goes through the pipeline', () => {
         assert.strictEqual(body.body.GetShape(), wrapped, 'the shape was re-wrapped for nothing');
 
         body.destroy(true);
+    });
+});
+
+//* Dynamic trimeshes (issue #112) ==========================
+// Jolt cannot simulate a dynamic body with a MeshShape: mesh vs mesh has no collision, so the
+// body sinks through everything and its position goes NaN (the issue's report). The library
+// converts to a convex hull instead, loudly.
+describe('dynamic trimesh bodies', () => {
+    const withWarnings = <T>(run: () => T): { result: T; warnings: string[] } => {
+        const warnings: string[] = [];
+        const original = console.warn;
+        console.warn = (...args: unknown[]) => warnings.push(String(args[0]));
+        setDebug(true);
+        try {
+            return { result: run(), warnings };
+        } finally {
+            setDebug(false);
+            console.warn = original;
+        }
+    };
+
+    test('makeDescriptorDynamicSafe turns a trimesh into a hull over the same points', () => {
+        const descriptor = describeShape(new THREE.IcosahedronGeometry(1, 1), {
+            type: 'trimesh'
+        }) as any;
+        assert.equal(descriptor.type, 'trimesh');
+
+        const { result: safe, warnings } = withWarnings(() =>
+            makeDescriptorDynamicSafe(descriptor)
+        );
+        assert.equal((safe as any).type, 'convex');
+        assert.deepEqual((safe as any).points, descriptor.vertices);
+        assert.isTrue(warnings.some((w) => w.includes('cannot use a trimesh shape')));
+
+        const shape = generateShape(safe);
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_ConvexHull);
+        releaseShape(shape);
+    });
+
+    test('it converts a trimesh nested in a compound and leaves other shapes alone', () => {
+        const descriptor: ShapeDescriptor = {
+            type: 'staticCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                {
+                    type: 'scaled',
+                    scale: [2, 2, 2],
+                    position: [0, 3, 0],
+                    child: describeShape(new THREE.BoxGeometry(1, 1, 1), { type: 'trimesh' })
+                }
+            ]
+        };
+        assert.isTrue(containsMeshShape(descriptor));
+
+        const safe = makeDescriptorDynamicSafe(descriptor) as any;
+        assert.equal(safe.children[0].type, 'box', 'an unrelated child was rewritten');
+        assert.equal(safe.children[1].type, 'scaled');
+        assert.equal(safe.children[1].child.type, 'convex');
+        assert.deepEqual(safe.children[1].position, [0, 3, 0], 'the placement was lost');
+        // the original is untouched
+        assert.equal((descriptor as any).children[1].child.type, 'trimesh');
+        assert.isFalse(containsMeshShape(safe));
+
+        // a descriptor with no mesh in it is handed straight back
+        const plain: ShapeDescriptor = { type: 'box', size: [1, 1, 1] };
+        assert.strictEqual(makeDescriptorDynamicSafe(plain), plain);
+    });
+
+    test("the 'error' and 'decompose' strategies explain themselves", () => {
+        const trimesh = describeShape(new THREE.BoxGeometry(1, 1, 1), { type: 'trimesh' });
+        expect(() => makeDescriptorDynamicSafe(trimesh, 'error')).toThrow(
+            /cannot simulate a dynamic body with a trimesh/
+        );
+        expect(() => makeDescriptorDynamicSafe(trimesh, 'decompose')).toThrow(
+            /reserved and not implemented yet/
+        );
+    });
+
+    test('convexHullFromShape hulls an existing MeshShape without touching it', () => {
+        const mesh = generateShape(
+            describeShape(new THREE.BoxGeometry(2, 2, 2), { type: 'trimesh' })
+        );
+        const hull = convexHullFromShape(mesh);
+
+        assert.equal(hull.GetSubType(), Raw.module.EShapeSubType_ConvexHull);
+        assert.equal(hull.GetRefCount(), 1);
+        // the hull of a box is the same box, in the same place
+        expectBounds(hull, { min: [-1, -1, -1], max: [1, 1, 1] }, 0.02);
+        assert.equal(mesh.GetRefCount(), 1, 'the source shape was not left alone');
+
+        releaseShape(hull);
+        releaseShape(mesh);
+    });
+
+    test('a dynamic trimesh body becomes convex, falls under gravity and rests on a box', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('dynamic-trimesh-test');
+
+        // a static floor
+        const floor = new THREE.Mesh(new THREE.BoxGeometry(40, 1, 40));
+        floor.position.set(0, -0.5, 0);
+        system.bodySystem.addBody(floor, { bodyType: 'static' });
+
+        // ...and a dynamic body whose shape is asked for as a trimesh, the #112 case
+        const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1));
+        mesh.position.set(0, 8, 0);
+        const { result: body, warnings } = withWarnings(
+            () =>
+                system.bodySystem.getBody(
+                    system.bodySystem.addBody(mesh, { shapeType: 'trimesh', bodyType: 'dynamic' })
+                )!
+        );
+
+        assert.isTrue(
+            warnings.some((w) => w.includes('cannot use a trimesh shape')),
+            'a dynamic trimesh must warn'
+        );
+        assert.equal(
+            body.body.GetShape().GetSubType(),
+            Raw.module.EShapeSubType_ConvexHull,
+            'the mesh shape was not converted'
+        );
+        // a MeshShape has no volume, so a dynamic mesh body has no usable mass either
+        assert.isAbove(body.mass, 0, 'the converted shape has no mass');
+
+        for (let i = 0; i < 120; i++) system.onUpdate(1 / 60);
+
+        const resting = body.position;
+        assert.isFalse(Number.isNaN(resting.y), 'the body ended up at NaN - issue #112');
+        assert.isBelow(resting.y, 8, 'the body never fell');
+        // an icosahedron of radius 1 resting on a floor whose top is y = 0
+        assert.isAbove(resting.y, 0.2, 'the body fell through the floor');
+        assert.isBelow(resting.y, 1.2, 'the body is not resting on the floor');
+
+        body.destroy(true);
+    });
+
+    test('a static trimesh body is still a real MeshShape', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('static-trimesh-test');
+        const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1));
+        const body = system.bodySystem.getBody(
+            system.bodySystem.addBody(mesh, { shapeType: 'trimesh', bodyType: 'static' })
+        )!;
+        assert.equal(body.body.GetShape().GetSubType(), Raw.module.EShapeSubType_Mesh);
+        body.destroy(true);
+    });
+
+    test("dynamicMeshStrategy: 'error' refuses to create the body", async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('dynamic-trimesh-error-test');
+        const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1));
+        expect(() =>
+            system.bodySystem.addBody(mesh, {
+                shapeType: 'trimesh',
+                bodyType: 'dynamic',
+                dynamicMeshStrategy: 'error'
+            })
+        ).toThrow(/cannot simulate a dynamic body with a trimesh/);
+    });
+
+    test('a ready made MeshShape handed to a dynamic body is converted too', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('dynamic-trimesh-shape-test');
+        const shape = generateShape(
+            describeShape(new THREE.BoxGeometry(2, 2, 2), { type: 'trimesh' })
+        );
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2));
+        const { result: body } = withWarnings(
+            () =>
+                system.bodySystem.getBody(
+                    // `mass` makes generateBodySettings read the hull's real mass properties
+                    system.bodySystem.addBody(mesh, { shape, bodyType: 'dynamic', mass: 12 })
+                )!
+        );
+
+        assert.equal(body.body.GetShape().GetSubType(), Raw.module.EShapeSubType_ConvexHull);
+        // the *body's* mass comes from the override (BodyState.mass reads the shape's density
+        // based mass properties instead, which the override deliberately replaces)
+        const simulatedMass = 1 / body.body.GetMotionProperties().GetInverseMass();
+        assert.closeTo(simulatedMass, 12, 1e-3, 'the requested mass was not applied');
+        // the hull we made for the body is owned by the body; the caller's mesh shape is not
+        assert.equal(shape.GetRefCount(), 1, 'the caller`s shape was not left alone');
+
+        body.destroy(true);
+        releaseShape(shape);
+    });
+
+    test('converting a dynamic trimesh body leaks nothing', () => {
+        const tracker = installAllocTracker(Raw);
+        try {
+            const before = tracker.live();
+            const descriptor = describeShape(new THREE.IcosahedronGeometry(1, 1), {
+                type: 'trimesh'
+            });
+            const shape = generateShape(makeDescriptorDynamicSafe(descriptor));
+            releaseShape(shape);
+            assert.equal(tracker.live(), before, JSON.stringify(tracker.liveByType()));
+        } finally {
+            tracker.uninstall();
+        }
     });
 });
 

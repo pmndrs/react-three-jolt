@@ -1046,6 +1046,119 @@ export function generateShape(descriptor: ShapeDescriptor): Jolt.Shape {
 }
 
 /* ============================================================================
+ * Dynamic mesh shapes (issue #112)
+ *
+ * Jolt does not support a dynamic body with a `MeshShape`. A mesh is a one sided triangle soup
+ * with no inside, so mesh-vs-mesh does not collide at all and mesh-vs-convex only works from the
+ * outside; a dynamic mesh body has no usable mass properties, sinks through everything and ends
+ * up with a NaN position - which is exactly what issue #112 reported.
+ * See https://jrouwe.github.io/JoltPhysics/#dynamic-mesh-shapes
+ *
+ * So a `trimesh` on a dynamic body is converted to something Jolt can simulate. The default is a
+ * convex hull of the same points, which is right for most props; `'error'` refuses instead, and
+ * `'decompose'` (a convex decomposition into several hulls) is reserved.
+ * ========================================================================== */
+
+/** What to do with a `trimesh` descriptor on a dynamic body. See `makeDescriptorDynamicSafe`. */
+export type DynamicMeshStrategy = 'convex' | 'decompose' | 'error';
+
+/** True when `descriptor` is, or contains, a `trimesh`. */
+export const containsMeshShape = (descriptor: ShapeDescriptor): boolean => {
+    switch (descriptor.type) {
+        case 'trimesh':
+            return true;
+        case 'staticCompound':
+        case 'mutableCompound':
+            return descriptor.children.some(containsMeshShape);
+        case 'scaled':
+        case 'offsetCenterOfMass':
+            return containsMeshShape(descriptor.child);
+        default:
+            return false;
+    }
+};
+
+/**
+ * Apply the #112 policy to one trimesh: throw for `'error'`/`'decompose'`, warn for `'convex'`.
+ * Exported so callers that already hold a `MeshShape` (rather than a descriptor) give the same
+ * answers as the descriptor path.
+ */
+export const checkDynamicMeshStrategy = (strategy: DynamicMeshStrategy = 'convex'): void => {
+    if (strategy === 'error')
+        throw new Error(
+            'react-three-jolt: jolt cannot simulate a dynamic body with a trimesh shape (mesh vs ' +
+                'mesh does not collide and the body falls through the world). Use a static body, ' +
+                "or `dynamicMeshStrategy: 'convex'`."
+        );
+    if (strategy === 'decompose')
+        throw new Error(
+            "react-three-jolt: `dynamicMeshStrategy: 'decompose'` (convex decomposition) is " +
+                'reserved and not implemented yet. Use a compound of `convex` shapes you ' +
+                "decomposed yourself, or `'convex'` for a single hull."
+        );
+    devWarn(
+        'react-three-jolt: a dynamic body cannot use a trimesh shape - jolt has no collision for ' +
+            'mesh vs mesh and the body would fall through the world. Using a convex hull of the ' +
+            'same points instead (issue #112); make the body static, or pass ' +
+            "`dynamicMeshStrategy: 'error'`, to opt out."
+    );
+};
+
+/**
+ * Replace every `trimesh` in a descriptor with something a dynamic body can use (issue #112).
+ * Returns the descriptor unchanged when there is no mesh in it.
+ *
+ * @param strategy `'convex'` (default) takes the convex hull of the mesh's own vertices,
+ * `'error'` throws, `'decompose'` is reserved for a future convex decomposition.
+ */
+export function makeDescriptorDynamicSafe(
+    descriptor: ShapeDescriptor,
+    strategy: DynamicMeshStrategy = 'convex'
+): ShapeDescriptor {
+    switch (descriptor.type) {
+        case 'trimesh': {
+            checkDynamicMeshStrategy(strategy);
+            const { type: _type, vertices, indices: _indices, ...rest } = descriptor;
+            return { ...rest, type: 'convex', points: vertices };
+        }
+        case 'staticCompound':
+        case 'mutableCompound': {
+            if (!containsMeshShape(descriptor)) return descriptor;
+            return {
+                ...descriptor,
+                children: descriptor.children.map((child) =>
+                    makeDescriptorDynamicSafe(child, strategy)
+                )
+            };
+        }
+        case 'scaled':
+        case 'offsetCenterOfMass': {
+            if (!containsMeshShape(descriptor)) return descriptor;
+            return { ...descriptor, child: makeDescriptorDynamicSafe(descriptor.child, strategy) };
+        }
+        default:
+            return descriptor;
+    }
+}
+
+/**
+ * Build a convex hull around an existing shape, for the case where the caller handed us a
+ * `MeshShape` rather than a descriptor (issue #112).
+ *
+ * The triangles come back in the shape's own local space (a `MeshShape`'s centre of mass is the
+ * origin), so the hull sits exactly where the mesh did. The returned shape is owned by the caller
+ * with one reference, like `generateShape`; the input shape is not touched.
+ */
+export function convexHullFromShape(shape: Jolt.Shape): Jolt.Shape {
+    const geometry = createMeshFromShape(shape);
+    try {
+        return generateShape(describeConvexGeometry(geometry));
+    } finally {
+        geometry.dispose();
+    }
+}
+
+/* ============================================================================
  * Mutable compounds - editing a compound at runtime (issue #108)
  *
  * A `{ type: 'mutableCompound' }` descriptor builds a `MutableCompoundShape`: the same thing as
