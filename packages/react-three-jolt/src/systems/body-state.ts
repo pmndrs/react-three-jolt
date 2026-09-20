@@ -13,6 +13,7 @@ import { Raw } from '../raw';
 
 import { anyVec3, joltScratch, quat, vec3 } from '../utils';
 import { type BodySystem, getThreeObjectForBody } from './body-system';
+import { releaseShape, scaleShape } from './shape-system';
 
 // Initital body object copied from r3/rapier's state object
 export class BodyState {
@@ -375,18 +376,15 @@ export class BodyState {
 
             baseShape = existingShape.GetInnerShape();
         }
-        // create the new scaled shape
-        // `vec3.jolt` always allocates, `ScaledShape` copies the scale into the shape, so this
-        // one is destroyed below.
-        const joltScale = vec3.jolt(scale);
+        // create the new scaled shape. `scaleShape` wraps the base shape in a `ScaledShape` that
+        // takes its own reference on it, and hands back a shape we own exactly one reference on.
         const newShape = Raw.module.castObject(
-            new Raw.module.ScaledShape(baseShape, joltScale),
+            scaleShape(baseShape, scale),
             Raw.module.ScaledShape
         );
-        // set the new shape
+        // set the new shape - the body takes its own reference, and drops the one it held on the
+        // shape we are replacing (which frees the superseded ScaledShape)
         this.bodyInterface.SetShape(this.BodyID, newShape, true, Raw.module.EActivation_Activate);
-        //cleanup the scale
-        Raw.module.destroy(joltScale);
 
         // if we are a regular shape we can get an accurate actualScale
         let actualScale = scale;
@@ -395,6 +393,8 @@ export class BodyState {
         if (newShape.GetSubType() === Raw.module.EShapeSubType_Scaled) {
             actualScale = vec3.three(newShape.GetScale());
         }
+        // the body owns it now
+        releaseShape(newShape);
         this.activeScale = actualScale;
         // if not an instance update the object
         if (!this.isInstance) {
