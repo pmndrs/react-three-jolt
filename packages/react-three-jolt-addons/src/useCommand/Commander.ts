@@ -1,6 +1,3 @@
-//@ts-expect-error -- gamepad.js ships no type declarations; `GamepadListenerLike` below is the
-// surface we depend on.
-import { GamepadListener } from 'gamepad.js';
 import {
     Command,
     type CommandEvent,
@@ -9,6 +6,7 @@ import {
     type GamepadInputEvent
 } from './Command';
 import { type CommonCommand, commonCommands } from './commonCommands';
+import { GamepadPoller, type GamepadPollerOptions } from './gamepad';
 import { VectorCommand } from './VectorCommand';
 
 // im not sure yet if I'll include other libraries
@@ -36,13 +34,10 @@ export type CommandCallback = (info: CommandInfo) => void;
 export type CommandState = Record<string, CommandValue>;
 export type CommandStateListener = (state: CommandState) => void;
 
-/** The slice of gamepad.js' `GamepadListener` we depend on. */
-type GamepadListenerLike = {
-    on(event: string, listener: (event: GamepadInputEvent) => void): void;
-    off(event: string, listener: (event: GamepadInputEvent) => void): void;
-    start(): void;
-    /** bound in gamepad.js' constructor, so the property is a stable reference */
-    stop: () => void;
+export type CommanderOptions = {
+    debug?: boolean;
+    /** deadzone/thresholds for the built in gamepad poller */
+    gamepad?: GamepadPollerOptions;
 };
 
 export class Commander {
@@ -60,9 +55,20 @@ export class Commander {
     // The commander owns window listeners and a gamepad polling loop, so it is not allowed to
     // attach anything until someone retains it, and it must let go of everything when the last
     // consumer releases it. Constructing one is side effect free.
-    private gamepadListener: GamepadListenerLike | null = null;
+    private gamepadPoller: GamepadPoller | null = null;
+    private gamepadOptions: GamepadPollerOptions;
     private connected = false;
     private refCount = 0;
+
+    constructor(options?: CommanderOptions) {
+        this.debug = options?.debug ?? false;
+        this.gamepadOptions = options?.gamepad ?? {};
+    }
+
+    /** true while the gamepad poll loop is running (false without a Gamepad API) */
+    get isPollingGamepads() {
+        return this.gamepadPoller?.isRunning ?? false;
+    }
 
     /** true while the window/gamepad listeners are attached */
     get isConnected() {
@@ -128,34 +134,31 @@ export class Commander {
     };
 
     private connectGamepad() {
-        if (this.gamepadListener) return;
-        // gamepad.js throws outright when the browser has no gamepad API (and happy-dom/node
-        // don't), so check before constructing it.
-        if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') {
-            if (this.debug) console.warn('Commander: no gamepad API, skipping gamepad input');
-            return;
-        }
-        const listener: GamepadListenerLike = new GamepadListener();
-        listener.on('gamepad:connected', (event) => {
-            if (this.debug) console.log('gamepad connected', event);
-        });
-        listener.on('gamepad:button', this.onButtonChange);
-        listener.on('gamepad:axis', this.onAxisChange);
-        listener.start();
-        this.gamepadListener = listener;
+        if (this.gamepadPoller) return;
+        const poller = new GamepadPoller(
+            {
+                onButton: this.onButtonChange,
+                onAxis: this.onAxisChange,
+                onConnected: (event) => {
+                    if (this.debug) console.log('gamepad connected', event);
+                },
+                onDisconnected: (event) => {
+                    if (this.debug) console.log('gamepad disconnected', event);
+                }
+            },
+            { debug: this.debug, ...this.gamepadOptions }
+        );
+        // a no-op where there is no Gamepad API; nothing was attached, so nothing to hold on to
+        poller.start();
+        if (poller.isRunning) this.gamepadPoller = poller;
     }
 
     private disconnectGamepad() {
-        const listener = this.gamepadListener;
-        if (!listener) return;
-        this.gamepadListener = null;
-        // stops the requestAnimationFrame poll loop
-        listener.stop();
-        listener.off('gamepad:button', this.onButtonChange);
-        listener.off('gamepad:axis', this.onAxisChange);
-        // gamepad.js adds a window 'error' listener in its constructor and never removes it.
-        // `stop` is bound there, so this is the same reference it registered.
-        if (typeof window !== 'undefined') window.removeEventListener('error', listener.stop);
+        const poller = this.gamepadPoller;
+        if (!poller) return;
+        this.gamepadPoller = null;
+        // stops the requestAnimationFrame poll loop and removes its window listeners
+        poller.stop();
     }
 
     // Primary Listeners ==========================
@@ -276,6 +279,10 @@ export class Commander {
         this.commands.forEach((command) => {
             if (command.active) {
                 this.state[command.label] = command.value;
+            } else if (command.label in this.state) {
+                // a command that went inactive used to keep its last value in the state forever,
+                // so consumers of `useCommandState` kept acting on an input nobody is giving
+                delete this.state[command.label];
             }
         });
     }

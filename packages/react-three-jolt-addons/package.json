@@ -61,8 +61,7 @@
         }
     },
     "dependencies": {
-        "@react-three/jolt": "0.0.1",
-        "gamepad.js": "^2.1.0"
+        "@react-three/jolt": "0.0.1"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.14",

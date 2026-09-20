@@ -15,6 +15,7 @@ export * from './Commander';
 export type { CommanderProviderProps } from './CommanderContext';
 export { CommanderContext, CommanderProvider } from './CommanderContext';
 export * from './commonCommands';
+export * from './gamepad';
 export * from './lookCommand';
 export * from './VectorCommand';
 
