@@ -166,7 +166,7 @@ function Pointer() {
         );
         //apply the camera space to the vector
         pointerVector.applyMatrix4(camera.matrixWorld);
-        //@ts-ignore move the pointer with kinematic force
+        // move the pointer with kinematic force; rotation is optional (#194)
         body.moveKinematic(pointerVector, undefined, deltaTime);
     });
     return (

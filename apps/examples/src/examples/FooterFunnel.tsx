@@ -287,13 +287,13 @@ function FunnelPiece({ spec }: { spec: Spec }) {
 function FunnelCursor() {
     const bodyRef = useRef<BodyState | null>(null);
 
-    useFrame((state, delta) => {
+    useFrame((state) => {
         if (!bodyRef.current) return;
         const { pointer, viewport } = state;
         const x = (pointer.x * viewport.width) / 2;
         const y = (pointer.y * viewport.height) / 2;
-        //@ts-expect-error rotation is unused when moving a purely-2D kinematic cursor
-        bodyRef.current.moveKinematic(new THREE.Vector3(x, y, 0), undefined, delta);
+        // rotation is optional (#194); the cursor is a sphere and never turns
+        bodyRef.current.setKinematicTarget(new THREE.Vector3(x, y, 0));
     });
 
     return (

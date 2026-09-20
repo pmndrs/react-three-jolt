@@ -75,9 +75,26 @@ interface RigidBodyProps {
     subGroup?: number;
 
     //physics props
+    /** Velocity lost per second to drag. Jolt's default is `0.05`. */
     linearDamping?: number;
+    /** Angular velocity lost per second. Jolt's default is `0.05`. */
     angularDamping?: number;
+    /**
+     * How much this body resists sliding against another, `0` (ice) to `1` (glue). Jolt's
+     * default is `0.2`, which is slippery - raise it for things that have to carry or be
+     * carried. Reactive: changing it updates the existing body.
+     */
     friction?: number;
+    /**
+     * How bouncy this body is, `0` (no bounce) to `1` (no energy lost). Jolt's default is `0`.
+     * Reactive, like {@link friction}.
+     */
+    restitution?: number;
+    /**
+     * Multiplier on world gravity for this body: `0` floats, `2` falls twice as hard. Default
+     * `1`. Only meaningful on a dynamic body.
+     */
+    gravityFactor?: number;
     scale?: number[];
 
     // dof
@@ -126,6 +143,9 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             isSensor,
             angularDamping,
             linearDamping,
+            friction,
+            restitution,
+            gravityFactor,
             group,
             subGroup,
 
@@ -303,14 +323,21 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         useBodyEvent(body, 'wake', onWake);
         useBodyEvent(body, 'contactValidate', onContactValidate);
 
-        //not sure these should be set as useEffects or directly in the body
+        // Physics material and mass properties. Keyed on `body` (the state, not the ref) so this
+        // runs on the pass that creates the body - a body with <Shape> children does not exist on
+        // the first pass, and a ref read in a dep array is not reactive, which is how `friction`
+        // and friends used to be dropped entirely (#198).
+        //
+        // `!== undefined` throughout, not truthiness: `friction={0}` (ice) and
+        // `gravityFactor={0}` (floats) are perfectly good values.
         useEffect(() => {
-            if (!rigidBodyRef.current) return;
-            const body = rigidBodyRef.current as BodyState;
-            //@ts-ignore
-            if (mass) bodySystem.setMass(body.handle, mass);
-            if (linearDamping) body.linearDamping = linearDamping;
-            if (angularDamping) body.angularDamping = angularDamping;
+            if (!body) return;
+            if (mass !== undefined) body.mass = mass;
+            if (linearDamping !== undefined) body.linearDamping = linearDamping;
+            if (angularDamping !== undefined) body.angularDamping = angularDamping;
+            if (friction !== undefined) body.friction = friction;
+            if (restitution !== undefined) body.restitution = restitution;
+            if (gravityFactor !== undefined) body.gravityFactor = gravityFactor;
 
             // check if the body is allowing obstruction
             const isAllowing = body.allowObstruction;
@@ -325,12 +352,15 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             }
             if (isSensor !== undefined) body.body.SetIsSensor(isSensor);
         }, [
+            body,
             mass,
             allowObstruction,
             obstructionTimelimit,
             linearDamping,
             angularDamping,
-            rigidBodyRef,
+            friction,
+            restitution,
+            gravityFactor,
             isSensor
         ]);
 

@@ -1,6 +1,7 @@
-// Demo: kinematic platforms (vertical lifts, horizontal conveyors, a rotating disc) driven each
-// frame from useFrame via `bodyState.moveKinematic(position, rotation, delta)`, plus a pile of
-// dynamic boxes and a ball spawner so riders can be picked up, carried, and dropped off.
+// Demo: kinematic platforms (vertical lifts, horizontal conveyors, a rotating disc) aimed each
+// frame from useFrame via `bodyState.setKinematicTarget(position, rotation?)` - the step loop
+// then drives them with the real substep dt - plus a pile of dynamic boxes and a ball spawner so
+// riders can be picked up, carried, and dropped off.
 import { Environment } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { type BodyState, InstancedRigidBodyMesh, Physics, RigidBody } from '@react-three/jolt';
@@ -16,8 +17,10 @@ const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 export function FloatingPlatforms() {
     const { debug, paused, interpolate, physicsKey, module } = useDemo();
-    // keep riders awake and grippy so kinematic platforms actually carry them instead of
-    // letting them sleep through the ride or slide straight off - see report for details.
+    // Riders are woken by the platforms on their own now (a driven kinematic body has a real
+    // velocity, and Jolt wakes what it touches), so `mAllowSleeping: false` is belt and braces
+    // for the bumpier rides. The friction is not optional though: at Jolt's default of 0.2 a
+    // rider lags behind a fast platform and slides off the back.
     const defaultBodySettings = {
         mRestitution: 0.1,
         mFriction: 0.9,
@@ -94,30 +97,33 @@ function FloatingPlatformsInner() {
         previousBallCount.current = ballCount;
     }, [ballCount]);
 
-    useFrame((state, delta) => {
+    useFrame((state) => {
         // r3f v10's useFrame state carries timing directly (`elapsed`/`delta`) instead of a
         // THREE.Clock - see @pmndrs/scheduler's FrameTimingState.
         const t = state.elapsed * speed;
 
+        // `setKinematicTarget` only records where the platform should be; the fixed step loop
+        // re-aims it every substep with that substep's own dt, which is both smoother than
+        // passing a frame delta and correct when one frame runs several steps.
         if (liftA.current) {
             liftAPos.current.set(-16, 10 + Math.sin(t) * amplitude, -4);
-            liftA.current.moveKinematic(liftAPos.current, IDENTITY_QUAT, delta);
+            liftA.current.setKinematicTarget(liftAPos.current, IDENTITY_QUAT);
         }
         if (liftB.current) {
             liftBPos.current.set(16, 10 + Math.sin(t + Math.PI) * amplitude, 4);
-            liftB.current.moveKinematic(liftBPos.current, IDENTITY_QUAT, delta);
+            liftB.current.setKinematicTarget(liftBPos.current, IDENTITY_QUAT);
         }
         if (conveyorA.current) {
             conveyorAPos.current.set(Math.sin(t) * amplitude, 1.5, -16);
-            conveyorA.current.moveKinematic(conveyorAPos.current, IDENTITY_QUAT, delta);
+            conveyorA.current.setKinematicTarget(conveyorAPos.current, IDENTITY_QUAT);
         }
         if (conveyorB.current) {
             conveyorBPos.current.set(Math.sin(t + Math.PI / 2) * amplitude, 1.5, 16);
-            conveyorB.current.moveKinematic(conveyorBPos.current, IDENTITY_QUAT, delta);
+            conveyorB.current.setKinematicTarget(conveyorBPos.current, IDENTITY_QUAT);
         }
         if (disc.current) {
             discRotation.current.setFromAxisAngle(Y_AXIS, t);
-            disc.current.moveKinematic(discPos.current, discRotation.current, delta);
+            disc.current.setKinematicTarget(discPos.current, discRotation.current);
         }
     });
 
@@ -171,21 +177,19 @@ function FloatingPlatformsInner() {
                 <meshStandardMaterial color="#F2CC8F" />
             </InstancedRigidBodyMesh>
 
-            {/* Ball spawner, grown 20 at a time from the leva panel. InstancedRigidBodyMesh
-                assumes at least one instance (it unconditionally touches instanceColor), so it
-                only mounts once the first "spawn 20" click has happened. */}
-            {ballCount > 0 && (
-                <InstancedRigidBodyMesh
-                    ref={ballsRef}
-                    count={ballCount}
-                    position={[0, 24, 0]}
-                    color="#FF0000"
-                    rotation={[0, 0, 0]}
-                >
-                    <sphereGeometry args={[0.6, 16, 16]} />
-                    <meshStandardMaterial color="#FF0000" />
-                </InstancedRigidBodyMesh>
-            )}
+            {/* Ball spawner, grown 20 at a time from the leva panel. Mounted at count 0 and
+                grown in place (#194) - it used to be held back until the first click, because
+                InstancedRigidBodyMesh threw with no instances. */}
+            <InstancedRigidBodyMesh
+                ref={ballsRef}
+                count={ballCount}
+                position={[0, 24, 0]}
+                color="#FF0000"
+                rotation={[0, 0, 0]}
+            >
+                <sphereGeometry args={[0.6, 16, 16]} />
+                <meshStandardMaterial color="#FF0000" />
+            </InstancedRigidBodyMesh>
 
             <Floor position={[0, -1, 0]} size={90}>
                 <meshStandardMaterial />

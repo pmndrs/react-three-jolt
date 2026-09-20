@@ -31,10 +31,12 @@ your own components) can live in there too; only meshes contribute to the collis
 | `rotation` | `number[]` | Euler angles, radians. Also a teleport |
 | `scale` | `number[]` | scales the collision shape as well as the object |
 | `quaternion` | `number[]` | accepted, currently only stored on the context |
-| `mass` | `number` | |
-| `friction` | `number` | **declared but not wired up** — set `body.friction` on the [`BodyState`](#material-and-mass) instead |
-| `linearDamping` | `number` | |
-| `angularDamping` | `number` | |
+| `mass` | `number` | kilograms. Ignored on static/kinematic bodies, which have infinite mass |
+| `friction` | `number` | `0` (ice) to `1` (glue). Jolt's default is `0.2` |
+| `restitution` | `number` | bounciness, `0`–`1`. Default `0` |
+| `gravityFactor` | `number` | multiplier on world gravity for this body. Default `1` |
+| `linearDamping` | `number` | Jolt's default is `0.05` |
+| `angularDamping` | `number` | Jolt's default is `0.05` |
 | `isSensor` | `boolean` | fires contacts, causes no collision response |
 | `group` / `subGroup` | `number` | [collision filtering](/api/collision-groups). **Must be present at creation** to be usable later |
 | `dof` | `{ x?, y?, z?, rotX?, rotY?, rotZ? }` | per-axis degrees of freedom |
@@ -72,8 +74,8 @@ your own components) can live in there too; only meshes contribute to the collis
 
 > [!NOTE]
 > Writing `position` or `rotation` moves the body *instantly* — it does not push it there. For
-> kinematic motion use `body.moveKinematic(position, rotation, deltaTime)`, and for dynamic
-> bodies use forces and impulses.
+> kinematic motion use [`setKinematicTarget`](#kinematic-platforms), and for dynamic bodies use
+> forces and impulses.
 
 ## The ref
 
@@ -160,7 +162,10 @@ detail.
 | `readPose(outPosition, outRotation)` | allocation-free live pose |
 | `getInterpolatedPose(alpha, outPosition, outRotation)` | allocation-free blend of the last two steps |
 | `resetPoseCache()` | drop the pose history, e.g. after a teleport, so the next frame doesn't lerp across it |
-| `moveKinematic(position, rotation, deltaTime?)` | drive a kinematic body |
+| `moveKinematic(position, rotation?, deltaTime?)` | drive a kinematic body for one step |
+| `setKinematicTarget(position, rotation?)` | aim a kinematic body; the step loop drives it |
+| `clearKinematicTarget()` | stop driving it |
+| `isStatic` | read-only |
 
 ```tsx
 const position = useRef(new THREE.Vector3());
@@ -173,6 +178,38 @@ useFrame(() => {
 
 The `position`/`rotation` getters allocate a new three.js object each read — fine for effects,
 avoid in a per-frame loop, where `readPose` exists.
+
+### Kinematic platforms
+
+A kinematic body is moved by you and pushes everything it touches. Drive it with a target pose,
+never by writing `position` — that teleports, and a teleport carries nothing with it.
+
+```tsx
+const platform = useRef<BodyState>(null);
+
+useFrame((state) => {
+    // the step loop re-aims this every substep with that substep's real dt
+    platform.current?.setKinematicTarget([Math.sin(state.elapsed) * 5, 2, 0]);
+});
+```
+
+`setKinematicTarget` is the one to reach for: the target is sticky and re-applied at the top of
+every substep, so the body converges on it whatever the frame rate, and a body that has arrived
+simply parks there. `moveKinematic(position, rotation?, deltaTime?)` is the one-shot version —
+it applies once, with `deltaTime` defaulting to the world's step length
+(`physicsSystem.timeStep`, or the last frame delta when the world steps with `timeStep="vary"`).
+
+Leaving `rotation` out keeps the body's current rotation in both.
+
+Riders are carried because `MoveKinematic` gives the platform a real velocity, which is what
+wakes the sleeping bodies resting on it — this works with stock body settings. Two things are
+still worth tuning for a demo that has to feel solid:
+
+- **friction**: the default is `0.2`, which is slippery. A rider on a fast platform will lag
+  behind it and can slide off. Raise `friction` on the platform and/or the riders (`0.8`–`1`).
+- **sleeping**: a rider that is out of contact for a moment (a bumpy ride) can fall asleep in
+  mid-air's worth of time and miss the next push. `<Physics defaultBodySettings={{ mAllowSleeping:
+  false }}>` removes the question at the cost of never letting the scene idle.
 
 ### Motion
 
@@ -190,6 +227,12 @@ avoid in a per-frame loop, where `readPose` exists.
 `friction`, `restitution`, `mass`, `gravityFactor`, `linearDamping`, `angularDamping`,
 `isSensor` — all plain get/set number/boolean properties. `color` gets/sets the three.js material
 colour (and the per-instance colour on instanced bodies).
+
+`mass` is the body's *simulated* mass in kilograms, read from its motion properties rather than
+from the shape's density, so it reflects a `mass` prop or a later write. Static and kinematic
+bodies have infinite mass in Jolt and report `0`; setting it on one does nothing. Setting it
+scales the inertia tensor with it and leaves the body's [degrees of freedom](#degrees-of-freedom)
+untouched.
 
 ### Degrees of freedom
 
