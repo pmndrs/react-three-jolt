@@ -13,18 +13,21 @@ const _axis = new THREE.Vector3();
 
 import { Environment } from '@react-three/drei';
 import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 // we have to wrap the demo so we can provide the physics component
 export function RaycastManyDemo() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
 
     return (
         <Physics
+            module={module}
             paused={paused}
             key={physicsKey}
             interpolate={interpolate}
             debug={debug}
             gravity={0}
         >
+            <JoltMemoryRegistrar />
             <RaycastMany />
         </Physics>
     );

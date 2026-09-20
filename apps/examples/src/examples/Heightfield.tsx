@@ -1,9 +1,10 @@
 import { Environment } from '@react-three/drei';
 import { Heightfield, Physics, RigidBody } from '@react-three/jolt';
 import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 
 export function HeightfieldDemo() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
 
     // contact listeners
     const onContactAdded = (
@@ -105,6 +106,7 @@ export function HeightfieldDemo() {
     ];
     return (
         <Physics
+            module={module}
             paused={paused}
             key={physicsKey}
             interpolate={interpolate}
@@ -112,6 +114,7 @@ export function HeightfieldDemo() {
             gravity={22}
             defaultBodySettings={defaultBodySettings}
         >
+            <JoltMemoryRegistrar />
             {ballPositions.map((position, index) => (
                 <RigidBody
                     key={index}

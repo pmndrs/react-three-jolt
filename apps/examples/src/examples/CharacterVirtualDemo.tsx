@@ -3,7 +3,8 @@ import { useThree } from '@react-three/fiber';
 import { Physics, RigidBody } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt-addons';
 import { CameraRig, CharacterController } from '@react-three/jolt-controllers';
-import InitJolt from 'jolt-physics';
+import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 import { Arch } from './Bodies/Arch';
 import { Conveyor } from './Bodies/Conveyor';
 import { Stairs } from './Bodies/Stairs';
@@ -23,6 +24,9 @@ export function CharacterVirtualDemo() {
     //const options = useConst({ inverted: { y: true } });
     //useGamepadForCameraControls('look', controls, options);
     const { gl } = useThree();
+    // Used to hardcode `module={InitJolt}` via its own `import InitJolt from 'jolt-physics'` -
+    // now follows the app-wide build-variant selector like every other demo (joltModules.ts).
+    const { module } = useDemo();
     // body settings so shapes bounce
     const defaultBodySettings = {
         mRestitution: 0
@@ -42,7 +46,8 @@ export function CharacterVirtualDemo() {
                 shadow-normalBias={0.04}
             />
             <ambientLight intensity={1.5} />
-            <Physics module={InitJolt} gravity={25} defaultBodySettings={defaultBodySettings}>
+            <Physics module={module} gravity={25} defaultBodySettings={defaultBodySettings}>
+                <JoltMemoryRegistrar />
                 <Arch position={[0, 0, -15]} />
                 <Arch position={[0, -2, -20]} />
                 <Arch position={[0, -3, -25]} />

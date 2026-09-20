@@ -5,6 +5,7 @@ import { easing } from 'maath';
 import { useEffect, useMemo, useReducer, useRef } from 'react';
 import * as THREE from 'three';
 import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 
 // for random
 const r = THREE.MathUtils.randFloatSpread;
@@ -31,7 +32,7 @@ const shuffle = (accent = 0) => [
 ];
 
 export function Impulses() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
     const [accent, click] = useReducer((state) => ++state % accents.length, 0);
     const connectors = useMemo(() => shuffle(accent), [accent]);
     const { gl } = useThree();
@@ -47,6 +48,7 @@ export function Impulses() {
     return (
         <>
             <Physics
+                module={module}
                 paused={paused}
                 key={physicsKey}
                 interpolate={interpolate}
@@ -54,6 +56,7 @@ export function Impulses() {
                 gravity={0}
                 defaultBodySettings={defaultBodySettings}
             >
+                <JoltMemoryRegistrar />
                 <Pointer />
                 {connectors.map(
                     (
