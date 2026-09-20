@@ -31,10 +31,12 @@ your own components) can live in there too; only meshes contribute to the collis
 | `rotation` | `number[]` | Euler angles, radians. Also a teleport |
 | `scale` | `number[]` | scales the collision shape as well as the object |
 | `quaternion` | `number[]` | accepted, currently only stored on the context |
-| `mass` | `number` | |
-| `friction` | `number` | **declared but not wired up** — set `body.friction` on the [`BodyState`](#material-and-mass) instead |
-| `linearDamping` | `number` | |
-| `angularDamping` | `number` | |
+| `mass` | `number` | kilograms. Ignored on static/kinematic bodies, which have infinite mass |
+| `friction` | `number` | `0` (ice) to `1` (glue). Jolt's default is `0.2` |
+| `restitution` | `number` | bounciness, `0`–`1`. Default `0` |
+| `gravityFactor` | `number` | multiplier on world gravity for this body. Default `1` |
+| `linearDamping` | `number` | Jolt's default is `0.05` |
+| `angularDamping` | `number` | Jolt's default is `0.05` |
 | `isSensor` | `boolean` | fires contacts, causes no collision response |
 | `group` / `subGroup` | `number` | [collision filtering](/api/collision-groups). **Must be present at creation** to be usable later |
 | `dof` | `{ x?, y?, z?, rotX?, rotY?, rotZ? }` | per-axis degrees of freedom |
