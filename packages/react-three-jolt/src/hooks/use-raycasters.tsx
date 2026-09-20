@@ -15,14 +15,20 @@ export const useRaycaster = (
     type?: string
 ) => {
     const { physicsSystem } = useJolt();
+    // Tears down the previous raycaster (freeing its jolt allocations) whenever a memo dep
+    // changes, not just at unmount - a bare `useMemo` would otherwise leak every raycaster it
+    // replaces, since only the LAST instance would ever reach the useUnmount below. Mirrors
+    // useMouseRaycaster (issue #192).
+    const previous = useRef<Raycaster | null>(null);
     const raycaster: Raycaster = useMemo(() => {
+        previous.current?.destroy();
         const caster: Raycaster = physicsSystem.getRaycaster();
         //@ts-ignore
         if (origin) caster.origin = origin;
         //@ts-ignore
         if (direction) caster.direction = direction;
         if (type) caster.setCollector(type);
-
+        previous.current = caster;
         return caster;
     }, [origin, direction, type, physicsSystem]);
     /* lets try with a memo first
@@ -51,14 +57,21 @@ export const useAdvancedRaycaster = (
     type?: string
 ) => {
     const { physicsSystem } = useJolt();
+    // see useRaycaster above - without this, every dep change leaked the previous instance
+    // instead of only the very last one being freed on unmount (issue #192).
+    const previous = useRef<AdvancedRaycaster | null>(null);
     const raycaster: AdvancedRaycaster = useMemo(() => {
+        previous.current?.destroy();
         const caster = physicsSystem.getAdvancedRaycaster();
         if (origin) caster.origin = origin;
         if (direction) caster.direction = direction;
         if (type) caster.setCollector(type);
-
+        previous.current = caster;
         return caster;
     }, [origin, direction, type, physicsSystem]);
+    useUnmount(() => {
+        raycaster.destroy();
+    });
     return raycaster;
 };
 
@@ -68,16 +81,21 @@ export const useMulticaster = (
     type?: string
 ) => {
     const { physicsSystem } = useJolt();
+    // see useRaycaster above - Multicaster owns a Raycaster (and its jolt allocations), so the
+    // same leak-on-dep-change applies to it (issue #192).
+    const previous = useRef<Multicaster | null>(null);
     const raycaster: Multicaster = useMemo(() => {
+        previous.current?.destroy();
         const caster = physicsSystem.getMulticaster();
         if (origin) caster.origin = origin;
         if (direction) caster.direction = direction;
         if (type) caster.setCollector(type);
+        previous.current = caster;
         return caster;
     }, [origin, direction, type, physicsSystem]);
 
     useUnmount(() => {
-        raycaster.raycaster.destroy();
+        raycaster.destroy();
     });
     return raycaster;
 };

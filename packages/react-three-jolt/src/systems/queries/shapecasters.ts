@@ -8,6 +8,11 @@ import { type anyVec3, generateJoltMatrix, vec3 } from '../../utils';
 
 type Callback = (hit?: ShapecastHit | ShapecastHit[]) => void;
 
+// `drawMarker()` orients its marker's local +Y axis (this vector) onto the hit's surface normal
+// via `Quaternion.setFromUnitVectors`. Shared/never mutated - `setFromUnitVectors` only reads it.
+// Mirrors the constant of the same name in raycasters.ts.
+const MARKER_UP = new THREE.Vector3(0, 1, 0);
+
 type CastShapeCollector =
     | Jolt.CastShapeAllHitCollisionCollector
     | Jolt.CastShapeClosestHitCollisionCollector
@@ -33,7 +38,7 @@ export class Shapecaster {
     activeRotation = new THREE.Quaternion();
     activeDirection = new THREE.Vector3();
     activeScale = new THREE.Vector3(1, 1, 1);
-    activeShape = new Raw.module.SphereShape(0.5);
+    activeShape: Jolt.Shape = new Raw.module.SphereShape(0.5);
 
     //important
     type = 'closest';
@@ -59,9 +64,41 @@ export class Shapecaster {
     // @ts-ignore
     debugObject: THREE.Object3D;
 
+    // Debug drawing resource pools -------------------------------------
+    // drawDebuggingLine/Points/Marker used to build a brand new THREE.BufferGeometry, Material
+    // and Object3D on every single call, and cast() calls them on every cast while isDebugging is
+    // on - so a shapecaster that draws its debug view every physics step leaked one full set of
+    // three.js resources (and grew `debugObject.children`/the scene graph) per cast, the same bug
+    // #173 fixed for raycasters.ts (issue #192). Everything below is created lazily on first use,
+    // then updated in place; destroy()/clearDebugging() dispose it all.
+    private _debugLine?: THREE.Line;
+    private _debugLineGeometry?: THREE.BufferGeometry;
+    private _debugLineMaterial?: THREE.LineBasicMaterial;
+
+    private _debugPoints?: THREE.Points;
+    private _debugPointsGeometry?: THREE.BufferGeometry;
+    private _debugPointsMaterial?: THREE.PointsMaterial;
+
+    // Markers are pooled one-per-hit-index (drawDebuggingMarkers assigns hits[i] -> pool[i]), so
+    // an "all" collector reuses exactly as many marker groups as it has hits across casts instead
+    // of accumulating a new set every time. The ring + normal-line geometry/material are shared
+    // by every pooled entry - only each entry's own THREE.Group transform (position/quaternion)
+    // differs - so once a pool slot exists, updating it allocates nothing.
+    private _markerPool: THREE.Group[] = [];
+    private _markerRingGeometry?: THREE.BufferGeometry;
+    private _markerRingMaterial?: THREE.LineBasicMaterial;
+    private _markerNormalGeometry?: THREE.BufferGeometry;
+    private _markerNormalMaterial?: THREE.LineBasicMaterial;
+
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         this.joltPhysicsSystem = joltPhysicsSystem;
         this.joltInterface = joltInterface;
+        // `activeShape` is a Jolt reference counted object (RefTarget) and starts life with a
+        // refcount of 0 (see the jolt-physics README's "Reference counting objects" section).
+        // AddRef() here means the `shape` setter/destroy() below can always treat `activeShape`
+        // uniformly with Release(), regardless of whether it's this default shape or one a caller
+        // handed us. Mirrors `ShapeCollider` (#174/issue #142).
+        this.activeShape.AddRef();
         // these two filters mean the ray will cast as if its a dynamic object
         this.bpFilter = new Raw.module.DefaultBroadPhaseLayerFilter(
             joltInterface.GetObjectVsBroadPhaseLayerFilter(),
@@ -81,6 +118,17 @@ export class Shapecaster {
     destroy() {
         this.active = false;
         this.stopDebugging();
+        this._disposeDebugResources();
+
+        // `activeShape` is reference counted - see the `shape` setter and the constructor. We
+        // AddRef()'d whatever shape we're holding, so give that reference back with Release()
+        // rather than a hard destroy(), which would free memory a caller (or another owner) might
+        // still be using (issue #192, mirrors ShapeCollider from #174).
+        if (this.activeShape) {
+            this.activeShape.Release();
+            this.activeShape = null as unknown as Jolt.Shape;
+        }
+
         Raw.module.destroy(this.shapecast);
         Raw.module.destroy(this.shapecastSettings);
         Raw.module.destroy(this.bpFilter);
@@ -89,6 +137,32 @@ export class Shapecaster {
         Raw.module.destroy(this.shapeFilter);
         Raw.module.destroy(this.collector);
         Raw.module.destroy(this.baseOffset);
+    }
+
+    // Dispose every pooled debug-drawing geometry/material and forget the pooled objects so a
+    // later draw call rebuilds them from scratch (used by both destroy() and clearDebugging()).
+    private _disposeDebugResources() {
+        this._debugLineGeometry?.dispose();
+        this._debugLineMaterial?.dispose();
+        this._debugLine = undefined;
+        this._debugLineGeometry = undefined;
+        this._debugLineMaterial = undefined;
+
+        this._debugPointsGeometry?.dispose();
+        this._debugPointsMaterial?.dispose();
+        this._debugPoints = undefined;
+        this._debugPointsGeometry = undefined;
+        this._debugPointsMaterial = undefined;
+
+        this._markerRingGeometry?.dispose();
+        this._markerRingMaterial?.dispose();
+        this._markerNormalGeometry?.dispose();
+        this._markerNormalMaterial?.dispose();
+        this._markerRingGeometry = undefined;
+        this._markerRingMaterial = undefined;
+        this._markerNormalGeometry = undefined;
+        this._markerNormalMaterial = undefined;
+        this._markerPool = [];
     }
 
     // this shouldnt be needed but changing the origin doesn't seem to work correctly
@@ -160,11 +234,31 @@ export class Shapecaster {
     }
     //shape
     get shape() {
-        return this.shapecast.mShape;
+        return this.activeShape;
     }
-    set shape(value) {
-        // remove the old one
-        this.shapecast.set_mShape(value);
+    set shape(value: Jolt.Shape) {
+        if (value === this.activeShape) return;
+        // Shape is reference counted (RefTarget) and starts life with a refcount of 0. AddRef()
+        // here means a caller that later Release()s (or reassigns) its own reference to `value`
+        // doesn't leave us holding a dangling pointer once they're done with theirs, and
+        // Release() (rather than a hard destroy()) on whichever shape we're replacing means it's
+        // only actually freed once every owner - us included - is done with it. Mirrors
+        // `ShapeCollider.shape` (#174/issue #142).
+        value.AddRef();
+        const previous = this.activeShape;
+        this.activeShape = value;
+        if (previous) previous.Release();
+        // `RShapeCast.mShape` is a read-only getter at runtime - there is no `set_mShape`
+        // despite the type declarations advertising one - so the only way to change it is to
+        // rebuild the RShapeCast, the same as setOrigin() does for position/rotation/scale.
+        // Capture + restore the current direction across the rebuild: initializeShapecast()
+        // otherwise reconstructs it from `activeDirection`, which the `direction` setter below
+        // never updates (it mutates the live shapecast in place instead), so a naive rebuild here
+        // would silently reset direction back to zero.
+        const direction = vec3.three(this.shapecast.mDirection);
+        Raw.module.destroy(this.shapecast);
+        this.initializeShapecast();
+        this.direction = direction;
     }
 
     //* Methods ---------------------------------------
@@ -319,32 +413,44 @@ export class Shapecaster {
         const parent = this.debugObject.parent;
         if (!parent) return;
         parent.remove(this.debugObject);
+        // the pooled line/points/marker objects below are children of the OLD debugObject we
+        // just detached, so their geometry/material must be disposed and forgotten here too -
+        // otherwise the next draw call would see a stale (now-orphaned, non-null) `_debugLine`
+        // etc. and skip re-adding it to the fresh debugObject, silently drawing nothing.
+        this._disposeDebugResources();
         this.debugObject = new THREE.Object3D();
         parent.add(this.debugObject);
     }
-    // draw the debugging line
+    // draw the debugging line - reuses a single pooled Line/geometry/material across casts
+    // instead of allocating a new THREE.Line every call (issue #192, mirrors #173's raycaster
+    // fix): the geometry is rewritten in place with setFromPoints and the material's color is
+    // just updated on the existing material.
     drawDebuggingLine(
         origin = this.origin,
         end = this.origin.clone().add(this.direction),
         color = this.lineColor
     ) {
-        const points = [origin, end];
-        const geometry = new THREE.BufferGeometry().setFromPoints(points);
-        const material = new THREE.LineBasicMaterial({ color: color });
-        const newLine = new THREE.Line(geometry, material);
-        this.debugObject.add(newLine);
-    }
-    // draw the debugging points
-    drawDebuggingPoints() {
-        // points
-        const geometry = new THREE.BufferGeometry();
+        if (!this._debugLineGeometry) this._debugLineGeometry = new THREE.BufferGeometry();
+        this._debugLineGeometry.setFromPoints([origin, end]);
 
-        // build new points geometry
+        if (!this._debugLineMaterial)
+            this._debugLineMaterial = new THREE.LineBasicMaterial({ color });
+        else this._debugLineMaterial.color.set(color);
+
+        if (!this._debugLine) {
+            this._debugLine = new THREE.Line(this._debugLineGeometry, this._debugLineMaterial);
+            this.debugObject.add(this._debugLine);
+        }
+        return this._debugLine;
+    }
+    // draw the debugging points - reuses a single pooled Points/geometry/material across casts.
+    // The position/color attributes are still rebuilt each call because the hit count (and so
+    // the point count) can change between casts, but the Points object, its geometry and its
+    // material are never recreated once they exist.
+    drawDebuggingPoints() {
+        // build the points array
         const numPoints = 2 + this.hits.length;
         const points: { position: THREE.Vector3; color: string }[] = [];
-        const positions = new Float32Array(numPoints * 3);
-        const colors = new Float32Array(numPoints * 3);
-        // build points array
         //start point
         points.push({ position: this.origin, color: this.startColor });
         //hits
@@ -357,6 +463,8 @@ export class Shapecaster {
             color: this.endColor
         });
         // set the positions and colors
+        const positions = new Float32Array(numPoints * 3);
+        const colors = new Float32Array(numPoints * 3);
         points.forEach((point, i) => {
             positions[i * 3] = point.position.x;
             positions[i * 3 + 1] = point.position.y;
@@ -366,46 +474,97 @@ export class Shapecaster {
             colors[i * 3 + 1] = color.g;
             colors[i * 3 + 2] = color.b;
         });
-        // set the geometry attributes
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        geometry.computeBoundingBox();
-        // copy the points object
-        const material = new THREE.PointsMaterial({
-            color: this.pointColor,
-            vertexColors: true,
-            size: 0.3
-        });
-        const newPoints = new THREE.Points(geometry, material);
 
-        // add the new points to the debugObject
-        this.debugObject.add(newPoints);
+        if (!this._debugPointsGeometry) this._debugPointsGeometry = new THREE.BufferGeometry();
+        this._debugPointsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        this._debugPointsGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        this._debugPointsGeometry.computeBoundingBox();
+
+        if (!this._debugPointsMaterial) {
+            this._debugPointsMaterial = new THREE.PointsMaterial({
+                color: this.pointColor,
+                vertexColors: true,
+                size: 0.3
+            });
+        }
+        if (!this._debugPoints) {
+            this._debugPoints = new THREE.Points(
+                this._debugPointsGeometry,
+                this._debugPointsMaterial
+            );
+            this.debugObject.add(this._debugPoints);
+        }
+        return this._debugPoints;
     }
+    // draw one marker per current hit, pooled by index so repeated casts (with the same or a
+    // smaller number of hits) reuse the same marker groups instead of accumulating new ones.
     drawDebuggingMarkers() {
-        this.hits.forEach((hit) => this.drawMarker(hit));
+        this.hits.forEach((hit, i) => this.drawMarker(hit, undefined, undefined, i));
+        // hide (never destroy - they stay pooled for reuse) any markers left over from a
+        // previous cast that returned more hits than this one, so an "all" collector going from
+        // e.g. 3 hits to 1 doesn't leave 2 stale markers visible.
+        for (let i = this.hits.length; i < this._markerPool.length; i++) {
+            this._markerPool[i].visible = false;
+        }
     }
-    drawMarker(hit: ShapecastHit, size = 0.5, color = '#C6D8D3') {
-        const center = hit.position;
-        const normal = hit.impactNormal;
-        // draw the normal and inverse normal
-        this.drawDebuggingLine(center, center.clone().add(normal), '#3CD048');
-        const markerSize = size;
-        const points: THREE.Vector3[] = [];
-        // TODO: Apply the normal to these to correctly rotate the axis
-        points.push(
-            new THREE.Vector3(center.x - markerSize, center.y, center.z),
-            new THREE.Vector3(center.x + markerSize, center.y, center.z),
-            // vertical
-            new THREE.Vector3(center.x, center.y - markerSize, center.z),
-            new THREE.Vector3(center.x, center.y + markerSize, center.z),
+    // Build (once) or fetch the pooled marker group at `poolIndex`. The ring and normal-line
+    // geometry/material are shared across every pooled entry - only each entry's own THREE.Group
+    // transform differs - so growing the pool allocates one Group plus its two static-geometry
+    // children, and nothing else.
+    private _getMarkerEntry(poolIndex: number, color: string): THREE.Group {
+        if (!this._markerRingGeometry) {
+            // a unit circle in the local XZ plane: after the group is oriented so local +Y maps
+            // onto the hit normal (see drawMarker), this ring lies in the surface's tangent plane
+            const segments = 24;
+            const ringPoints: THREE.Vector3[] = [];
+            for (let i = 0; i < segments; i++) {
+                const theta = (i / segments) * Math.PI * 2;
+                ringPoints.push(new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta)));
+            }
+            this._markerRingGeometry = new THREE.BufferGeometry().setFromPoints(ringPoints);
+        }
+        if (!this._markerRingMaterial)
+            this._markerRingMaterial = new THREE.LineBasicMaterial({ color });
+        else this._markerRingMaterial.color.set(color);
 
-            new THREE.Vector3(center.x, center.y, center.z - markerSize),
-            new THREE.Vector3(center.x, center.y, center.z + markerSize)
-        );
-        const markerGeometry = new THREE.BufferGeometry().setFromPoints(points);
-        const markerMaterial = new THREE.LineBasicMaterial({ color: color });
-        const marker = new THREE.LineSegments(markerGeometry, markerMaterial);
-        this.debugObject.add(marker);
+        if (!this._markerNormalGeometry) {
+            // a unit segment along local +Y - after orientation this points along the hit normal
+            this._markerNormalGeometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 1, 0)
+            ]);
+        }
+        if (!this._markerNormalMaterial) {
+            this._markerNormalMaterial = new THREE.LineBasicMaterial({ color: '#3CD048' });
+        }
+
+        let group = this._markerPool[poolIndex];
+        if (!group) {
+            group = new THREE.Group();
+            group.add(new THREE.LineLoop(this._markerRingGeometry, this._markerRingMaterial));
+            group.add(new THREE.Line(this._markerNormalGeometry, this._markerNormalMaterial));
+            this._markerPool[poolIndex] = group;
+            this.debugObject.add(group);
+        }
+        return group;
+    }
+    // Draw a single hit marker oriented along the hit's surface normal (issue #192, mirrors #48's
+    // raycaster fix - markers used to always be axis-aligned to world space no matter what they
+    // hit). `poolIndex` selects which pooled marker to update (drawDebuggingMarkers assigns one
+    // per hit, in hit order). Calling this repeatedly for the same index only ever updates that
+    // marker's transform - once its pool entry exists this allocates no new geometry, material or
+    // Object3D.
+    drawMarker(hit: ShapecastHit, size = 0.5, color = '#C6D8D3', poolIndex = 0): THREE.Group {
+        const group = this._getMarkerEntry(poolIndex, color);
+        const normal = hit.impactNormal;
+        // a degenerate (zero-length) normal has no valid rotation - fall back to "up" rather than
+        // feeding setFromUnitVectors a non-unit vector
+        const targetNormal = normal.lengthSq() > 1e-8 ? normal.normalize() : MARKER_UP;
+        group.position.copy(hit.position);
+        group.quaternion.setFromUnitVectors(MARKER_UP, targetNormal);
+        group.scale.setScalar(size);
+        group.visible = true;
+        return group;
     }
 }
 
