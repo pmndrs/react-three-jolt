@@ -31,6 +31,7 @@ import { HeightfieldDemo } from './examples/Heightfield';
 import { Impulses } from './examples/Impulses';
 import { JustBoxes } from './examples/JustBoxes';
 import { MotionSources } from './examples/motionSources';
+import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
@@ -150,6 +151,13 @@ const routes: Routes = {
         target: [0, 5, 0],
         background: '#264653',
         element: <FloatingPlatforms />
+    },
+    OneWayPlatform: {
+        label: 'One-Way Platform',
+        position: [0, 14, 34],
+        target: [0, 5, 0],
+        background: '#1d3557',
+        element: <OneWayPlatform />
     },
     Vehicle: {
         position: [2, 25, 51],

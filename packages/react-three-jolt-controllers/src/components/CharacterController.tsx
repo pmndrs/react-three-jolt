@@ -1,11 +1,35 @@
 import { useThree } from '@react-three/fiber';
-import { useForwardedRef, useJolt } from '@react-three/jolt';
+import { useEventCallback, useForwardedRef, useJolt } from '@react-three/jolt';
 import { useCommand } from '@react-three/jolt-addons';
 import React, { forwardRef, memo, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import type { CharacterEventMap } from '../systems/character-controller';
 import { CharacterControllerSystem } from '../systems/character-controller';
 // create a blank context
 export const CharacterControllerContext = React.createContext(undefined!);
+
+/**
+ * Subscribe `handler` to one of a controller's events for as long as both exist (issues #79,
+ * #80, #50).
+ *
+ * Same contract as core's `useBodyEvent`: the dependency is *whether* there is a handler rather
+ * than its identity, so an inline arrow does not resubscribe every render, and the cleanup is
+ * the unsubscribe handle rather than a removal by function identity - which could never match an
+ * inline arrow in the first place.
+ */
+export function useCharacterEvent<K extends keyof CharacterEventMap>(
+    system: CharacterControllerSystem | undefined,
+    type: K,
+    handler: CharacterEventMap[K] | undefined
+): void {
+    const callback = useEventCallback(handler);
+    const enabled = handler !== undefined;
+    useEffect(() => {
+        if (!system || !enabled) return;
+        return system.events.on(type, callback as CharacterEventMap[K]);
+    }, [system, enabled, type, callback]);
+}
+
 interface CControllerProps {
     children?: any;
     radius?: number;
@@ -14,6 +38,37 @@ interface CControllerProps {
     rest?: any;
     position?: any;
     anchor?: any;
+
+    //* Events (issues #79, #80, and the `onAction` half of #50) -------------
+    /** Started moving under its own power; the argument is the speed relative to the ground. */
+    onMove?: CharacterEventMap['move'];
+    /** Stopped moving under its own power. */
+    onStop?: CharacterEventMap['stop'];
+    /** Started sliding down something too steep to stand on. */
+    onSlide?: CharacterEventMap['slide'];
+    /** Stopped sliding. */
+    onSlideEnd?: CharacterEventMap['slideEnd'];
+    /** A jump was accepted; the argument says which jump of the sequence it was. */
+    onJump?: CharacterEventMap['jump'];
+    /** Touched down, with the time spent unsupported in seconds. */
+    onLand?: CharacterEventMap['land'];
+    /** Became supported by something. */
+    onGround?: CharacterEventMap['ground'];
+    /** Stopped being supported by anything. */
+    onAirborne?: CharacterEventMap['airborne'];
+    onCrouch?: CharacterEventMap['crouch'];
+    onStand?: CharacterEventMap['stand'];
+    /** A new contact with a body. The payload is pooled - read it, do not keep it. */
+    onContactAdded?: CharacterEventMap['contactAdded'];
+    onContactPersisted?: CharacterEventMap['contactPersisted'];
+    onContactRemoved?: CharacterEventMap['contactRemoved'];
+    /** Every action, as `(name, payload)`. The generic escape hatch. */
+    onAction?: CharacterEventMap['action'];
+
+    /** Relative speed (m/s) above which the character counts as moving. Default 0.5. */
+    moveThreshold?: number;
+    /** Speed (m/s) along a steep surface above which it counts as sliding. Default 0.5. */
+    slideThreshold?: number;
 }
 export const CharacterController: React.FC<CControllerProps> = memo(
     forwardRef((props, forwardedRef) => {
@@ -22,6 +77,22 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             radius = 1,
             height = 2,
             debug = true,
+            onMove,
+            onStop,
+            onSlide,
+            onSlideEnd,
+            onJump,
+            onLand,
+            onGround,
+            onAirborne,
+            onCrouch,
+            onStand,
+            onContactAdded,
+            onContactPersisted,
+            onContactRemoved,
+            onAction,
+            moveThreshold,
+            slideThreshold,
             //@ts-ignore
             ...objectProps
         } = props;
@@ -63,6 +134,31 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             if (!characterSystem) return;
             characterSystem.debug = debug;
         }, [characterSystem, debug]);
+
+        //* Events -------------------------------------------
+        // Each of these is an effect whose cleanup is the unsubscribe handle, keyed on the
+        // controller instance. Nothing subscribes for a prop that was not passed, so the mask
+        // behind the forwarded contact stream stays clear and costs nothing per contact.
+        useCharacterEvent(characterSystem, 'move', onMove);
+        useCharacterEvent(characterSystem, 'stop', onStop);
+        useCharacterEvent(characterSystem, 'slide', onSlide);
+        useCharacterEvent(characterSystem, 'slideEnd', onSlideEnd);
+        useCharacterEvent(characterSystem, 'jump', onJump);
+        useCharacterEvent(characterSystem, 'land', onLand);
+        useCharacterEvent(characterSystem, 'ground', onGround);
+        useCharacterEvent(characterSystem, 'airborne', onAirborne);
+        useCharacterEvent(characterSystem, 'crouch', onCrouch);
+        useCharacterEvent(characterSystem, 'stand', onStand);
+        useCharacterEvent(characterSystem, 'contactAdded', onContactAdded);
+        useCharacterEvent(characterSystem, 'contactPersisted', onContactPersisted);
+        useCharacterEvent(characterSystem, 'contactRemoved', onContactRemoved);
+        useCharacterEvent(characterSystem, 'action', onAction);
+
+        useEffect(() => {
+            if (!characterSystem) return;
+            if (moveThreshold !== undefined) characterSystem.moveThreshold = moveThreshold;
+            if (slideThreshold !== undefined) characterSystem.slideThreshold = slideThreshold;
+        }, [characterSystem, moveThreshold, slideThreshold]);
 
         // trigger commands
         useCommand(

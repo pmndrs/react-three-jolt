@@ -5,6 +5,7 @@
 
 import type { Object3D, Vector3 } from 'three';
 import type { BodyState } from './body-state';
+import type { ShapeDescriptor } from './shape-system';
 
 /**
  * One bit per event type. `Emitter.mask` ors these together, which is what lets the Jolt
@@ -73,6 +74,33 @@ export interface CollisionTarget {
     index?: number;
 }
 
+/**
+ * Which piece of a compound shape a contact happened on (issue #13).
+ *
+ * Resolved **lazily**: reading `payload.targetSubShape` is what walks the shape, so a handler
+ * that never asks costs nothing per contact. Like the payload itself, the object is pooled -
+ * read what you need inside the handler rather than keeping it.
+ */
+export interface SubShapeRef {
+    /** Raw `SubShapeID.GetValue()`. `-1` is Jolt's "empty" id. */
+    id: number;
+    /**
+     * Index of the top level compound child that was hit, or `-1` when the body's shape has no
+     * children (the whole shape is the contact).
+     */
+    index: number;
+    /**
+     * The `userData` stamped on the `<Shape>` / descriptor that produced this sub shape, at any
+     * nesting depth. `0` when nothing set one.
+     */
+    userData: number;
+    /**
+     * The descriptor the sub shape was built from, when the body kept one
+     * (`BodyState.shapeDescriptor`). A body built straight from a `Jolt.Shape` has none.
+     */
+    descriptor: ShapeDescriptor | undefined;
+}
+
 export interface CollisionPayload {
     /** The body the handler is registered on. World level handlers get the lower `handle`. */
     target: CollisionTarget;
@@ -81,6 +109,10 @@ export interface CollisionPayload {
     flipped: boolean;
     /** Sub-shape manifolds currently open between the two bodies. */
     contactCount: number;
+    /** Which piece of `target`'s shape was hit. Resolved on first read - see {@link SubShapeRef}. */
+    readonly targetSubShape: SubShapeRef;
+    /** Which piece of `other`'s shape was hit. Resolved on first read. */
+    readonly otherSubShape: SubShapeRef;
 }
 
 export interface CollisionEnterPayload extends CollisionPayload {

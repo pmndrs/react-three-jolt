@@ -101,6 +101,13 @@ export class BodyState {
      */
     contacts: Map<number, number> = new Map();
 
+    /**
+     * The description this body's shape was built from, when it was built from one (`<Shape>`
+     * and the `describeObject` path both set it; a body handed a ready made `Jolt.Shape` has
+     * none). Only used to answer `payload.targetSubShape.descriptor` - issue #13.
+     */
+    shapeDescriptor?: ShapeDescriptor;
+
     // Listeners ----------------------------------
     /**
      * This body's events. `on(type, fn)` returns the unsubscribe; the named helpers below are

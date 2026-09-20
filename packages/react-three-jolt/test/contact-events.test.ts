@@ -12,6 +12,7 @@ import { initJolt, Raw } from '../src/raw';
 import { ContactPairTracker } from '../src/systems/contact-events';
 import type { CollisionEnterPayload, CollisionPayload } from '../src/systems/events';
 import { PhysicsSystem } from '../src/systems/physics-system';
+import { generateShape, type ShapeDescriptor } from '../src/systems/shape-system';
 import { installAllocTracker } from './jolt-alloc';
 
 const STEP = 1 / 60;
@@ -143,6 +144,172 @@ describe('enter / persist / exit', () => {
             assert.equal(order[enterAt + 1], 'afterStep');
         } finally {
             ps.destroy('contacts-order');
+        }
+    });
+});
+
+describe('sub shape identity (#13)', () => {
+    /**
+     * A static floor made of two boxes side by side, as one compound: child 0 on the left,
+     * child 1 on the right. Dropping something onto one of them is the deterministic way to
+     * check that a contact resolves back to the right child.
+     */
+    function makeSplitFloor(ps: PhysicsSystem) {
+        const descriptor: ShapeDescriptor = {
+            type: 'staticCompound',
+            children: [
+                {
+                    type: 'box',
+                    size: [8, 1, 8],
+                    position: [-6, 0, 0],
+                    userData: 111,
+                    name: 'left'
+                },
+                {
+                    type: 'box',
+                    size: [8, 1, 8],
+                    position: [6, 0, 0],
+                    userData: 222,
+                    name: 'right'
+                }
+            ]
+        };
+        const shape = generateShape(descriptor);
+        const object = new THREE.Object3D();
+        object.position.set(0, -1, 0);
+        const handle = ps.bodySystem.addBody(object, {
+            bodyType: 'static',
+            shape,
+            shapeDescriptor: descriptor
+        });
+        return ps.bodySystem.getBody(handle)!;
+    }
+
+    test('a contact on child 1 resolves its index, user data and descriptor', () => {
+        const ps = new PhysicsSystem('contacts-subshape');
+        try {
+            const floor = makeSplitFloor(ps);
+            // straight down onto the right hand child
+            const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+            box.position.set(6, 2, 0);
+            const boxState = ps.bodySystem.getBody(ps.bodySystem.addBody(box))!;
+
+            let resolved:
+                | { index: number; userData: number; name?: string; id: number }
+                | undefined;
+            boxState.onCollisionEnter((e) => {
+                const sub = e.otherSubShape;
+                resolved = {
+                    index: sub.index,
+                    userData: sub.userData,
+                    name: sub.descriptor?.name,
+                    id: sub.id
+                };
+                // the box itself is a plain box: no children, so no sub shape
+                assert.equal(e.targetSubShape.index, -1, 'a leaf shape reported a child index');
+                assert.equal(e.targetSubShape.userData, 0);
+                assert.equal(e.targetSubShape.descriptor?.type, 'box');
+            });
+
+            for (let i = 0; i < 60 && !resolved; i++) ps.onUpdate(STEP);
+
+            assert.isDefined(resolved, 'the box never landed on the compound floor');
+            assert.equal(resolved!.index, 1, 'the contact resolved to the wrong compound child');
+            assert.equal(resolved!.userData, 222, 'the descriptor user data did not survive');
+            assert.equal(resolved!.name, 'right', 'the descriptor did not come back');
+            // and the other side of the same pair agrees
+            let fromFloor: number | undefined;
+            floor.onCollisionPersist((e) => {
+                fromFloor = e.targetSubShape.index;
+            });
+            ps.onUpdate(STEP);
+            assert.equal(fromFloor, 1);
+        } finally {
+            ps.destroy('contacts-subshape');
+        }
+    });
+
+    test('a contact on child 0 resolves to child 0', () => {
+        const ps = new PhysicsSystem('contacts-subshape0');
+        try {
+            makeSplitFloor(ps);
+            const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+            box.position.set(-6, 2, 0);
+            const boxState = ps.bodySystem.getBody(ps.bodySystem.addBody(box))!;
+
+            let index: number | undefined;
+            let userData: number | undefined;
+            boxState.onCollisionEnter((e) => {
+                index = e.otherSubShape.index;
+                userData = e.otherSubShape.userData;
+            });
+            for (let i = 0; i < 60 && index === undefined; i++) ps.onUpdate(STEP);
+            assert.equal(index, 0);
+            assert.equal(userData, 111);
+        } finally {
+            ps.destroy('contacts-subshape0');
+        }
+    });
+
+    test('resolution is lazy: a handler that never looks costs no shape walk', () => {
+        const ps = new PhysicsSystem('contacts-subshape-lazy');
+        try {
+            makeSplitFloor(ps);
+            const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+            box.position.set(6, 2, 0);
+            const boxState = ps.bodySystem.getBody(ps.bodySystem.addBody(box))!;
+
+            // The pool hands out the *same* SubShapeRef object every time; an unread one keeps
+            // whatever the last reader left in it rather than being refilled per contact.
+            const refs: unknown[] = [];
+            let read = 0;
+            boxState.onCollisionPersist((e) => {
+                refs.push(e.otherSubShape);
+                read = e.otherSubShape.userData;
+            });
+            for (let i = 0; i < 60; i++) ps.onUpdate(STEP);
+            assert.isAbove(refs.length, 1, 'nothing was dispatched');
+            assert.equal(refs[0], refs[1], 'the sub shape reference is not pooled');
+            assert.equal(read, 222);
+        } finally {
+            ps.destroy('contacts-subshape-lazy');
+        }
+    });
+
+    test('a one-way platform lets a body through from below and holds it from above', () => {
+        const ps = new PhysicsSystem('contacts-oneway');
+        try {
+            const platformMesh = new THREE.Mesh(new THREE.BoxGeometry(20, 0.5, 20));
+            platformMesh.position.set(0, 0, 0);
+            const platform = ps.bodySystem.getBody(
+                ps.bodySystem.addBody(platformMesh, { bodyType: 'static' })
+            )!;
+
+            // #13: reject any contact whose other body is moving upward - the classic one-way
+            // platform. `onContactValidate` runs synchronously inside the step, so it only reads.
+            platform.onContactValidate((e) => {
+                const other = e.other.body;
+                if (!other) return true;
+                return other.velocity.y <= 0;
+            });
+
+            const riser = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+            riser.position.set(0, -4, 0);
+            const risingBody = ps.bodySystem.getBody(ps.bodySystem.addBody(riser))!;
+            risingBody.velocity = new THREE.Vector3(0, 12, 0);
+
+            let contacts = 0;
+            risingBody.onCollisionEnter(() => contacts++);
+            for (let i = 0; i < 60; i++) ps.onUpdate(STEP);
+            assert.isAbove(risingBody.position.y, 0.5, 'the body did not pass through from below');
+            assert.equal(contacts, 0, 'a contact from below was not rejected');
+
+            // and coming back down it lands on it
+            for (let i = 0; i < 180 && contacts === 0; i++) ps.onUpdate(STEP);
+            assert.isAbove(contacts, 0, 'the platform rejected a contact from above as well');
+            assert.isAbove(risingBody.position.y, 0, 'the body fell through from above');
+        } finally {
+            ps.destroy('contacts-oneway');
         }
     });
 });
