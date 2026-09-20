@@ -17,7 +17,6 @@
         "noImplicitReturns": true,
         "skipLibCheck": true,
         "typeRoots": ["./types"],
-        "baseUrl": "./",
         "rootDir": "./src",
         "allowSyntheticDefaultImports": true,
         "outDir": "./dist",

@@ -1,40 +1,35 @@
 {
-  "name": "examples",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
-  },
-  "packageManager": "yarn@4.0.2",
-  "dependencies": {
-    "@react-three/drei": "^9.105.5",
-    "@react-three/jolt": "0.0.1",
-    "@react-three/jolt-addons": "0.0.1",
-    "@react-three/jolt-controllers": "0.0.1",
-    "leva": "^0.9.35",
-    "maath": "^0.10.7",
-    "postprocessing": "^6.35.3",
-    "r3f-perf": "^7.2.1",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.22.3",
-    "three": "^0.163.0"
-  },
-  "devDependencies": {
-    "@types/react": "^18.2.74",
-    "@types/react-dom": "^18.2.24",
-    "@types/three": "^0.163.0",
-    "@typescript-eslint/eslint-plugin": "^7.7.1",
-    "@typescript-eslint/parser": "^7.5.0",
-    "@vitejs/plugin-react": "^4.2.1",
-    "eslint": "^9.0.0",
-    "eslint-plugin-react-hooks": "^4.6.0",
-    "eslint-plugin-react-refresh": "^0.4.6",
-    "prettier": "^3.2.5",
-    "typescript": "^5.4.4",
-    "vite": "^5.2.8"
-  }
+    "name": "examples",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc && vite build",
+        "lint": "biome check .",
+        "preview": "vite preview",
+        "format": "biome format --write ."
+    },
+    "dependencies": {
+        "@react-three/drei": "^9.105.5",
+        "@react-three/jolt": "0.0.1",
+        "@react-three/jolt-addons": "0.0.1",
+        "@react-three/jolt-controllers": "0.0.1",
+        "leva": "^0.9.35",
+        "maath": "^0.10.7",
+        "postprocessing": "^6.35.3",
+        "r3f-perf": "^7.2.1",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "react-router-dom": "^6.22.3",
+        "three": "^0.163.0"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "^2.5.14",
+        "@types/react": "^18.2.74",
+        "@types/react-dom": "^18.2.24",
+        "@types/three": "^0.163.0",
+        "@vitejs/plugin-react": "^6.1.1",
+        "typescript": "^5.9.3",
+        "vite": "^8.3.0"
+    }
 }

@@ -6,7 +6,7 @@ You will find published packages inside `./packages`, and deployed applications 
 
 ## Node
 
-**This project uses node 20.**
+**This project uses node 22.**
 
 If you don't already use a node version manager. Give nvm a try:
 
@@ -53,3 +53,13 @@ This project uses `@changesets/cli` to manage versioning and releases.
 As changes are made, changesets should be added with `yarn change`. This will open an interactive prompt to help you describe the changes you've made.
 
 A github action will create a PR for bumping the version based on changesets.
+
+## Linting and formatting
+
+This project uses [Biome](https://biomejs.dev/) for both linting and formatting (it replaced
+ESLint + Prettier).
+
+```sh
+> yarn lint    # biome check .
+> yarn format  # biome format --write .
+```
