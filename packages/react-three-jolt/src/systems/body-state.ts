@@ -6,7 +6,7 @@ import {
     //MathUtils,
     Matrix4,
     Object3D,
-    // Quaternion,
+    Quaternion,
     Vector3
 } from 'three';
 import { Raw } from '../raw';
@@ -138,6 +138,64 @@ export class BodyState {
     isContacting(handle: number) {
         return this.contacts.get(handle) || 0;
     }
+    //* Interpolation pose cache ==============================
+    /*
+    These hold the two most recent *world space* physics poses of this body so the render frame
+    can interpolate between them (see PhysicsSystem.onUpdate). Everything here is preallocated
+    and written in place: the frame loop touches every awake body every frame, so it is not
+    allowed to allocate. Do not replace these objects, copy into them.
+    */
+    /** World space pose produced by the physics step before the most recent one. */
+    readonly previousPosition = new Vector3();
+    readonly previousRotation = new Quaternion();
+    /** World space pose produced by the most recent physics step. */
+    readonly currentPosition = new Vector3();
+    readonly currentRotation = new Quaternion();
+    /** False until `capturePose` has run at least once; until then there is nothing to lerp. */
+    poseCacheValid = false;
+    // scratch matrix for instanced writes, reused so `update` never allocates
+    private instanceMatrix = new Matrix4();
+
+    /**
+     * Snapshot the body's pose at the end of a physics step. Shifts the previous snapshot down
+     * so `previous*` / `current*` always bracket the last step. Allocation free.
+     */
+    capturePose() {
+        if (this.poseCacheValid) {
+            this.previousPosition.copy(this.currentPosition);
+            this.previousRotation.copy(this.currentRotation);
+        }
+        vec3.joltToThree(this.body.GetPosition(), this.currentPosition);
+        quat.joltToThree(this.body.GetRotation(), this.currentRotation);
+        // the first capture has no history, so start from a standstill instead of lerping in
+        // from the origin
+        if (!this.poseCacheValid) {
+            this.previousPosition.copy(this.currentPosition);
+            this.previousRotation.copy(this.currentRotation);
+            this.poseCacheValid = true;
+        }
+    }
+    /** Drop the pose history, e.g. after a teleport, so the next frame does not lerp across it. */
+    resetPoseCache() {
+        this.poseCacheValid = false;
+    }
+    /**
+     * Write the world pose `alpha` of the way between the last two physics steps into the
+     * supplied objects. Allocation free; the caller owns the output.
+     */
+    getInterpolatedPose(alpha: number, outPosition: Vector3, outRotation: Quaternion) {
+        outPosition.lerpVectors(this.previousPosition, this.currentPosition, alpha);
+        outRotation.copy(this.previousRotation).slerp(this.currentRotation, alpha);
+    }
+    /**
+     * Write the body's live world pose into the supplied objects. Allocation free; this is the
+     * hot loop equivalent of the `position` / `rotation` getters, which allocate.
+     */
+    readPose(outPosition: Vector3, outRotation: Quaternion) {
+        vec3.joltToThree(this.body.GetPosition(), outPosition);
+        quat.joltToThree(this.body.GetRotation(), outRotation);
+    }
+
     //* Updates ===============================================
     //this will be called in loop functions
     update(position: anyVec3, rotation: Jolt.Quat | THREE.Quaternion) {
@@ -148,7 +206,7 @@ export class BodyState {
             return;
         }
         // we are an instance. we have to build a matrix
-        const matrix = new Matrix4();
+        const matrix = this.instanceMatrix;
         matrix.compose(vec3.three(position), quat.three(rotation), vec3.three(this.scale));
         // update the matrix
         this.setMatrix(matrix);
