@@ -24,6 +24,7 @@ import type { WorldEventMap } from '../systems/events';
 import { PhysicsSystem } from '../systems/physics-system';
 import type { AutoShape } from '../systems/shape-system';
 // library imports
+import { Debug } from './Debug';
 import { FrameStepper } from './FrameStepper';
 
 // TODO: Move this to a better place
@@ -108,7 +109,13 @@ export type PhysicsProps = {
      */
     updateLoop?: 'follow' | 'independent';
 
-    /** Log lifecycle info and warn when simulation time is dropped. @default false */
+    /**
+     * Draw a wireframe of every collider in the world, coloured by motion type (#158), and log
+     * lifecycle info / warn when simulation time is dropped. Toggling it on for a running scene
+     * backfills the existing bodies; toggling it off removes every wireframe and all of the
+     * per-frame work with them. Mount `<Debug>` yourself for the overlay's own options.
+     * @default false
+     */
     debug?: boolean;
 
     /**
@@ -304,6 +311,10 @@ export const Physics: FC<PhysicsProps> = (props) => {
         <joltContext.Provider value={contextApi}>
             <FrameStepper type={updateLoop} onStep={step} updatePriority={updatePriority} />
             {children}
+            {/* The wireframe collider overlay (#158). Rendered after the stepper so its
+                `useFrame` subscription is made second and it draws the poses of the step that
+                just ran; mounting it is the only cost `debug` adds to the frame loop. */}
+            {debug && <Debug />}
         </joltContext.Provider>
     );
 };

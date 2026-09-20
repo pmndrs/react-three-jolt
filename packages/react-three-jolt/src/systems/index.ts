@@ -1,6 +1,7 @@
 export * from './body-state';
 export * from './body-system';
 export * from './constraint-system';
+export * from './debug-renderer';
 export * from './emitter';
 export * from './events';
 export * from './physics-system';

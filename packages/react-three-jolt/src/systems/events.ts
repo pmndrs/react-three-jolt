@@ -130,6 +130,25 @@ export type WorldEventMap = BodyEventMap & {
     /** Every dynamic body is asleep. Edge triggered. */
     settled: () => void;
     activityChange: (active: number, total: number) => void;
+
+    //* Registry events (issue #158) ---------------------------------------------------
+    // Not pooled and not dispatched from inside `Step()`: the `BodyState` handed over is the
+    // real one and stays valid for the duration of the call. They exist so a renderer (or any
+    // other observer) can mirror the contents of the world without polling `bodySystem.bodies`
+    // every frame.
+    /** A body finished being registered with the world and added to the simulation. */
+    bodyAdded: (body: BodyState) => void;
+    /**
+     * A body is on its way out. Fires *before* anything is torn down, so `body.object` and
+     * `body.body` are both still usable; do not retain either past the handler.
+     */
+    bodyRemoved: (body: BodyState) => void;
+    /**
+     * A body's shape was replaced or edited in place (`set shape`, `notifyShapeChanged`, and so
+     * every `addSubShape` / `removeSubShape` / `modifySubShape` on a mutable compound). Anything
+     * caching geometry per shape has to invalidate its entry for this body.
+     */
+    shapeChanged: (body: BodyState) => void;
 };
 
 /** Bit assignment handed to a `BodyState`'s `Emitter`. */
