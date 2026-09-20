@@ -14,6 +14,7 @@ import { Physics } from '../src/components/Physics';
 import { useJolt } from '../src/hooks';
 import { initJolt } from '../src/raw';
 import type { BodySystem } from '../src/systems/body-system';
+import { setDebug } from '../src/utils';
 
 vi.mock('@react-three/drei', () => ({
     useTexture: vi.fn(() => ({}))
@@ -140,7 +141,10 @@ test('rejected loads are reported once and never create a body', async () => {
     const captureBodySystem = (bs: BodySystem) => {
         bodySystem = bs;
     };
+    // <Heightfield> reports the failure through `devWarn`, which stays silent until a consumer
+    // opts in with `setDebug(true)` - so the spy only sees anything with debug output enabled.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setDebug(true);
 
     const failing = deferred<void>();
     mockApplyHeightmapToPlane.mockImplementationOnce(() => failing.promise);
@@ -159,6 +163,7 @@ test('rejected loads are reported once and never create a body', async () => {
     expect(totalBodyCount(bodySystem!)).toBe(0);
     expect(warnSpy).toHaveBeenCalledTimes(1);
 
+    setDebug(false);
     warnSpy.mockRestore();
     await renderer.unmount();
 });
@@ -168,7 +173,10 @@ test('unmounting mid-load creates no body and does not warn', async () => {
     const captureBodySystem = (bs: BodySystem) => {
         bodySystem = bs;
     };
+    // debug output ON, so "does not warn" means the abort guard really suppressed the report
+    // rather than `devWarn` simply being gated off.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setDebug(true);
 
     const pending = deferred<void>();
     mockApplyHeightmapToPlane.mockImplementationOnce(() => pending.promise);
@@ -190,5 +198,6 @@ test('unmounting mid-load creates no body and does not warn', async () => {
     expect(totalBodyCount(bodySystem!)).toBe(0);
     expect(warnSpy).not.toHaveBeenCalled();
 
+    setDebug(false);
     warnSpy.mockRestore();
 });

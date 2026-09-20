@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { applyHeightmapToPlane } from '../heightField/Generators';
 import { useJolt } from '../hooks';
 import type { Vector3Tuple } from '../types';
+import { devWarn } from '../utils';
 
 export type HeightfieldProps = {
     url?: string;
@@ -73,7 +74,7 @@ export function Heightfield({
             })
             .catch((error: unknown) => {
                 if (cancelled || controller.signal.aborted) return;
-                console.warn('Heightfield: failed to load height map', url, error);
+                devWarn('Heightfield: failed to load height map', url, error);
             });
 
         return () => {
