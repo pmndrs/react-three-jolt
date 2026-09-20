@@ -47,8 +47,7 @@
         "three": ">=0.185"
     },
     "dependencies": {
-        "@react-three/jolt": "0.0.1",
-        "camera-controls": "^3.1.2"
+        "@react-three/jolt": "0.0.1"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.14",

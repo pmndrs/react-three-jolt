@@ -13,7 +13,6 @@ import {
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { MathUtils } from 'three';
-import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
 
 interface CharacterFilters {
     objectVsBroadPhaseLayerFilter?: Jolt.ObjectVsBroadPhaseLayerFilter;
