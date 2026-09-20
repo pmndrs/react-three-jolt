@@ -52,6 +52,18 @@ export class CameraRigManager {
     // listeners for when the camera changes or updates
     private cameraChangeListeners = [];
 
+    /** true once `destroy()` has run */
+    private destroyed = false;
+
+    /**
+     * The *exact* function handed to `addPreStepListener`. `removeStepListener` matches by
+     * identity, and `detachFromLoop()` used to pass `this.handleUpdate` - a different function
+     * object than the inline arrow that was registered - so removal silently did nothing and the
+     * rig kept stepping after `destroy()` (issue #139).
+     */
+    private readonly handlePreStep = (deltaTime: number, subFrame: number) =>
+        this.handleUpdate(deltaTime, subFrame);
+
     //debugging
     private isDebugging = true;
     set debug(value: boolean) {
@@ -85,15 +97,42 @@ export class CameraRigManager {
         // put the camera into the control boom
         this.controls.camera = this.getCamera('main') as THREE.PerspectiveCamera;
     }
-    // cleanup
+    /**
+     * Tear the rig down: stop being stepped, free the boom's jolt queries and remove every body
+     * and three object the rig created (issue #139). Idempotent.
+     */
     destroy() {
+        if (this.destroyed) return;
+        this.destroyed = true;
+
         this.detachFromLoop();
+        // the boom owns a raycaster, a shapecaster and a shape collider - ~25 wasm objects
+        this.controls?.destroy();
+
+        // rig points are real bodies in the simulation
+        this.points.forEach((point) => {
+            const mesh = point?.object as THREE.Object3D | undefined;
+            this.physicsSystem.bodySystem.removeBody(point.handle);
+            disposeObject(mesh);
+        });
+        this.points.clear();
+        this.constraints.clear();
+
         // remove the cameras
-        this.cameras.forEach((camera) => this.scene.remove(camera));
-        // remove the rigs
-        this.scene.remove(this.anchor);
-        this.scene.remove(this.base);
-        this.scene.remove(this.collar);
+        this.cameras.forEach((camera) => camera.removeFromParent());
+        this.cameras.clear();
+        this.activeCamera = undefined;
+        this.cameraChangeListeners = [];
+
+        // remove the rigs (and any debug shapes parented to them)
+        for (const space of [this.anchor, this.base, this.collar]) {
+            this.scene.remove(space);
+            space.traverse(disposeMesh);
+            space.clear();
+        }
+        this.attachment = undefined;
+        this.mount = undefined;
+        this.isAttached = false;
     }
 
     // Temoporary debug shapes in spaces
@@ -236,18 +275,16 @@ export class CameraRigManager {
     // attach to the physics loop
     private attachToLoop() {
         //TODO: consider postStep as there's a slight delay in position even if fixed
-        this.physicsSystem.addPreStepListener((deltaTime: number, subFrame: number) =>
-            this.handleUpdate(deltaTime, subFrame)
-        );
+        this.physicsSystem.addPreStepListener(this.handlePreStep);
     }
     // detach from the physics loop
-    //@ts-ignore
     private detachFromLoop() {
-        this.physicsSystem.removeStepListener(this.handleUpdate);
+        this.physicsSystem.removeStepListener(this.handlePreStep);
     }
 
     // handler for when the frame updates
     private handleUpdate(_deltaTime: number, _subFrame: number) {
+        if (this.destroyed) return;
         this.updateSpaces();
         if (this.activeCamera && this.controls) this.controls.handleFrameUpdate();
     }
@@ -302,3 +339,20 @@ export class CameraRigManager {
         return point!;
     }
 }
+
+//* Three cleanup helpers ==================================
+// three geometries and materials hold GPU resources that are only released by dispose()
+const disposeMesh = (object: THREE.Object3D) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.geometry?.dispose();
+    const material = mesh.material;
+    if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
+    else material?.dispose();
+};
+
+const disposeObject = (object?: THREE.Object3D) => {
+    if (!object) return;
+    object.removeFromParent();
+    object.traverse(disposeMesh);
+};

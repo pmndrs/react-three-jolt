@@ -89,9 +89,37 @@ export class VehicleSystem {
 
     vehicles = new Map();
 
+    private destroyed = false;
+
+    // The *exact* functions handed to the physics system. `removeStepListener` matches by
+    // identity, so the inline arrows this used to register could never be removed (issue #140).
+    private readonly handlePreStep = (deltaTime: number) => this.prePhysicsUpdate(deltaTime);
+    private readonly handlePostStep = (deltaTime: number) => this.postPhysicsUpdate(deltaTime);
+
     constructor(physicSystem: PhysicsSystem) {
         this.physicsSystem = physicSystem;
         this.attachToLoop();
+    }
+
+    /**
+     * Detach from the loop and destroy every vehicle this system created (issue #140).
+     * Idempotent.
+     */
+    destroy() {
+        if (this.destroyed) return;
+        this.destroyed = true;
+        this.detachFromLoop();
+        this.vehicles.forEach((vehicle) => vehicle.destroy());
+        this.vehicles.clear();
+    }
+
+    /** Destroy a single vehicle and forget it. Returns true when there was one to remove. */
+    removeVehicle(name: string) {
+        const vehicle = this.vehicles.get(name);
+        if (!vehicle) return false;
+        vehicle.destroy();
+        this.vehicles.delete(name);
+        return true;
     }
 
     //creates a new settings object by taking the default and input
@@ -130,20 +158,23 @@ export class VehicleSystem {
     //* Physics Loop ====================================
 
     private attachToLoop() {
-        this.physicsSystem.addPreStepListener((deltaTime: number) =>
-            this.prePhysicsUpdate(deltaTime)
-        );
-        this.physicsSystem.addPostStepListener((deltaTime: number) =>
-            this.postPhysicsUpdate(deltaTime)
-        );
+        this.physicsSystem.addPreStepListener(this.handlePreStep);
+        this.physicsSystem.addPostStepListener(this.handlePostStep);
+    }
+
+    private detachFromLoop() {
+        this.physicsSystem.removeStepListener(this.handlePreStep);
+        this.physicsSystem.removeStepListener(this.handlePostStep);
     }
 
     prePhysicsUpdate(deltaTime: number) {
+        if (this.destroyed) return;
         this.vehicles.forEach((vehicle) => {
             vehicle.prePhysicsUpdate(deltaTime);
         });
     }
     postPhysicsUpdate(deltaTime: number) {
+        if (this.destroyed) return;
         this.vehicles.forEach((vehicle) => {
             vehicle.postPhysicsUpdate(deltaTime);
         });

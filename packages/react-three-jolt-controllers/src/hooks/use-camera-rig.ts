@@ -29,8 +29,11 @@ export function useCameraRig() {
             cameraListener();
             // reset the camera
             updateCamera(originalCamera.current);
+            // the rig owns a CameraBoom (a raycaster, a shapecaster and a shape collider), its
+            // rig-point bodies and a pre-step listener; nothing used to free any of it (#139)
+            cameraRig.destroy();
         };
-    }, []);
+    }, [cameraRig]);
 
     return cameraRig;
 }

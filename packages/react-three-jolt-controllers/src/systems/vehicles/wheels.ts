@@ -1,7 +1,6 @@
+import { joltPropName, quat, Raw, vec3, withJolt } from '@react-three/jolt';
+import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
-//import type Jolt from 'jolt-physics';
-
-import { joltPropName, quat, Raw, vec3 } from '@react-three/jolt';
 
 //* Types ====================================
 export type VehicleFourWheelSettings = {
@@ -97,12 +96,32 @@ export class WheelState {
     // Im not sure we need this but I'll leave it for now
     wheelSettings;
     joltWheel;
+    private destroyed = false;
     constructor(constraint: any, wheelIndex: number) {
         this.constraint = constraint;
         this.index = wheelIndex;
         this.joltWheel = constraint.GetWheel(wheelIndex);
         this.wheelSettings = this.joltWheel.GetSettings();
         this.createDebugWheel();
+    }
+    /**
+     * Free the two axis vectors and the debug geometry (issue #140). The material is shared
+     * between every wheel in the process, so it is deliberately not disposed here.
+     */
+    destroy() {
+        if (this.destroyed) return;
+        this.destroyed = true;
+        Raw.module.destroy(this.wheelRight);
+        Raw.module.destroy(this.wheelUp);
+        this.wheelRight = undefined as unknown as Jolt.Vec3;
+        this.wheelUp = undefined as unknown as Jolt.Vec3;
+        this.debugObject?.geometry.dispose();
+        this.threeObject.clear();
+        this.threeObject.removeFromParent();
+        // the constraint owns the wheel; both are freed by VehicleManager.destroy()
+        this.constraint = undefined;
+        this.joltWheel = undefined;
+        this.wheelSettings = undefined;
     }
     createDebugWheel() {
         const geometry = new THREE.CylinderGeometry(
@@ -122,15 +141,20 @@ export class WheelState {
     }
     // set the wheel position and rotation
     updateLocalTransform() {
-        if (!this.threeObject) return;
+        if (this.destroyed || !this.threeObject) return;
+        // `GetWheelLocalTransform` (and `GetTranslation`/`GetRotation`/`GetQuaternion` below)
+        // return by value, which the emscripten binder implements as a pointer to one static
+        // temporary per function: not allocations, and never to be destroyed. Reading straight
+        // into the three objects avoids the per frame THREE.Vector3/Quaternion garbage the old
+        // `copy(vec3.three(...))` produced for every wheel of every vehicle.
         const transform = this.constraint.GetWheelLocalTransform(
             this.index,
             this.wheelRight,
             this.wheelUp
         );
 
-        this.threeObject.position.copy(vec3.three(transform.GetTranslation()));
-        this.threeObject.quaternion.copy(quat.joltToThree(transform.GetRotation().GetQuaternion()));
+        vec3.three(transform.GetTranslation(), undefined, undefined, this.threeObject.position);
+        quat.joltToThree(transform.GetRotation().GetQuaternion(), this.threeObject.quaternion);
     }
 }
 // create a wheel from input settinsg
@@ -154,11 +178,17 @@ export function createWheelSettings(baseSettings: any, corner?: any, type = 'wv'
         ...defaultWheelSettings,
         ...baseSettings.wheels[corner]
     };
-    // set the position based on corner
-    wheel.mPosition = new Raw.module.Vec3(
-        isLeft ? halfVehicleWidth : -halfVehicleWidth,
-        -wheelSettings.wheelOffsetVertical,
-        isFront ? wheelSettings.wheelOffsetHorizontal : -wheelSettings.wheelOffsetHorizontal
+    // set the position based on corner. `mPosition` is a Vec3 by value, so the assignment copies
+    // and the temporary is ours to free - this used to leak one Vec3 per wheel.
+    withJolt(
+        [
+            isLeft ? halfVehicleWidth : -halfVehicleWidth,
+            -wheelSettings.wheelOffsetVertical,
+            isFront ? wheelSettings.wheelOffsetHorizontal : -wheelSettings.wheelOffsetHorizontal
+        ],
+        (position) => {
+            wheel.mPosition = position;
+        }
     );
     // loop over the settings and set them on the wheel with the jolt prop name
     // some settings don't exist. hopefully jolt ignores them
@@ -170,7 +200,16 @@ export function createWheelSettings(baseSettings: any, corner?: any, type = 'wv'
 }
 
 //creates basic crashtest style wheel texture
+// One loader, one texture and one material for the whole process: this used to build a fresh
+// TextureLoader, texture and material for every wheel of every vehicle (issue #140). Because it
+// is shared, `WheelState.destroy()` disposes only its own geometry.
+let sharedWheelMaterial: THREE.MeshPhongMaterial | undefined;
+/** the shared wheel material, if it has been built - callers use this to skip disposing it */
+export function getSharedWheelMaterial() {
+    return sharedWheelMaterial;
+}
 function getWheelMaterial() {
+    if (sharedWheelMaterial) return sharedWheelMaterial;
     // Create material for wheel
     const texLoader = new THREE.TextureLoader();
     const texture = texLoader.load(
@@ -182,5 +221,6 @@ function getWheelMaterial() {
     texture.magFilter = THREE.NearestFilter;
     const wheelMaterial = new THREE.MeshPhongMaterial({ color: 0x666666 });
     wheelMaterial.map = texture;
+    sharedWheelMaterial = wheelMaterial;
     return wheelMaterial;
 }

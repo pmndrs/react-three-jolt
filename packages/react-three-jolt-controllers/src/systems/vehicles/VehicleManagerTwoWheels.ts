@@ -1,4 +1,13 @@
-import { Layer, PhysicsSystem, quat, Raw, vec3, withJolt } from '@react-three/jolt';
+import {
+    createShapeFromSettings,
+    Layer,
+    PhysicsSystem,
+    quat,
+    Raw,
+    releaseShape,
+    vec3,
+    withJolt
+} from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { VehicleManager } from './VehicleManager';
@@ -49,29 +58,42 @@ export class VehicleManagerTwoWheels extends VehicleManager {
 
     // this createBody is different for motorcycles
     createBody(): Jolt.Body {
-        // from jolt example
+        // from jolt example.
+        // Ownership is the same as the four wheel version: the outer shape settings own the inner
+        // box settings, the vectors are copied on assignment, and `createShapeFromSettings` takes
+        // a real reference on the shape (`Create().Get()` only borrowed a static one).
+        const halfExtents = vec3.jolt([
+            this.settings.vehicleWidth! / 2,
+            this.settings.vehicleHeight! / 2,
+            this.settings.vehicleLength! / 2
+        ]);
+        const centerOfMassOffset = vec3.jolt([0, -this.settings.vehicleHeight! / 2, 0]);
         const motorcycleShapeSettings = new Raw.module.OffsetCenterOfMassShapeSettings(
-            new Raw.module.Vec3(0, -this.settings.vehicleHeight! / 2, 0),
-            new Raw.module.BoxShapeSettings(
-                new Raw.module.Vec3(
-                    this.settings.vehicleWidth! / 2,
-                    this.settings.vehicleHeight! / 2,
-                    this.settings.vehicleLength! / 2
-                )
-            )
+            centerOfMassOffset,
+            new Raw.module.BoxShapeSettings(halfExtents)
         );
-        const motorcycleShape = motorcycleShapeSettings.Create().Get();
+        Raw.module.destroy(halfExtents);
+        Raw.module.destroy(centerOfMassOffset);
+        const motorcycleShape = createShapeFromSettings(motorcycleShapeSettings);
+
+        const bodyPosition = vec3.rjolt(this.settings.bodyPosition);
+        const upAxis = vec3.jolt([0, 1, 0]);
         const motorcycleBodySettings = new Raw.module.BodyCreationSettings(
             motorcycleShape,
-            new Raw.module.RVec3(...this.settings.bodyPosition),
-            Raw.module.Quat.prototype.sRotation(new Raw.module.Vec3(0, 1, 0), Math.PI),
+            bodyPosition,
+            // sRotation returns a static temporary; the Vec3 handed to it is ours
+            Raw.module.Quat.prototype.sRotation(upAxis, Math.PI),
             Raw.module.EMotionType_Dynamic,
             Layer.MOVING
         );
+        Raw.module.destroy(bodyPosition);
+        Raw.module.destroy(upAxis);
         motorcycleBodySettings.mOverrideMassProperties =
             Raw.module.EOverrideMassProperties_CalculateInertia;
         motorcycleBodySettings.mMassPropertiesOverride.mMass = this.settings.vehicleMass! | 250;
         const motorcycleBody = this.physicsSystem.bodyInterface.CreateBody(motorcycleBodySettings);
+        Raw.module.destroy(motorcycleBodySettings);
+        releaseShape(motorcycleShape);
         // DONT FORGET TO ADD TO THE SIMULATION
         this.physicsSystem.bodyInterface.AddBody(
             motorcycleBody.GetID(),
@@ -111,16 +133,14 @@ export class VehicleManagerTwoWheels extends VehicleManager {
         });
         //@ts-ignore
         front.mMaxSteerAngle = this.settings.wheels.front.maxSteerAngle;
-        front.mSuspensionDirection = new Raw.module.Vec3(
-            0,
-            -1,
-            Math.tan(this.settings.casterAngle)
-        ).Normalized();
-        front.mSteeringAxis = new Raw.module.Vec3(
-            0,
-            1,
-            -Math.tan(this.settings.casterAngle)
-        ).Normalized();
+        // `Normalized()` returns a static temporary by value and the property assignment copies
+        // it, so only the vector built here needs freeing - it used to leak one per wheel.
+        withJolt([0, -1, Math.tan(this.settings.casterAngle)], (v) => {
+            front.mSuspensionDirection = v.Normalized();
+        });
+        withJolt([0, 1, -Math.tan(this.settings.casterAngle)], (v) => {
+            front.mSteeringAxis = v.Normalized();
+        });
 
         if (this.settings.wheels.radius) front.mRadius = this.settings.wheels.radius;
         if (this.settings.wheels.width) front.mWidth = this.settings.wheels.width;
@@ -137,11 +157,16 @@ export class VehicleManagerTwoWheels extends VehicleManager {
         vehicle.mWheels.push_back(front);
 
         const back = new Raw.module.WheelSettingsWV();
-        back.mPosition = new Raw.module.Vec3(
-            0.0,
-            (-0.9 * this.settings.vehicleHeight!) / 2,
-            //@ts-ignore
-            this.settings.wheels.back.posZ
+        withJolt(
+            [
+                0.0,
+                (-0.9 * this.settings.vehicleHeight!) / 2,
+                //@ts-ignore
+                this.settings.wheels.back.posZ
+            ],
+            (v) => {
+                back.mPosition = v;
+            }
         );
         back.mMaxSteerAngle = 0.0;
         if (this.settings.wheels.radius) back.mRadius = this.settings.wheels.radius;
@@ -173,12 +198,11 @@ export class VehicleManagerTwoWheels extends VehicleManager {
         differential.mLeftWheel = -1;
         differential.mRightWheel = 1;
         differential.mDifferentialRatio = (1.93 * 40.0) / 16.0;
+        // the array holds differentials by value, so push_back copies and this one is ours
         controllerSettings.mDifferentials.push_back(differential);
+        Raw.module.destroy(differential);
 
         this.constraint = new Raw.module.VehicleConstraint(this.carBody, vehicle);
-
-        const tester = new Raw.module.VehicleCollisionTesterCastCylinder(Layer.MOVING, 1);
-        this.constraint.SetVehicleCollisionTester(tester);
 
         // now we have the constraint we can set the wheelStates
         const frontState = new WheelState(this.constraint, 0);
@@ -189,28 +213,39 @@ export class VehicleManagerTwoWheels extends VehicleManager {
         this.wheels.set('back', backState);
         this.threeObject.add(backState.threeObject);
 
-        // add the constraint to the physics system
-        this.physicsSystem.physicsSystem.AddConstraint(this.constraint);
-        // SUPER IMPORTANT WEIRD LOOP LISTENER
-        this.physicsSystem.physicsSystem.AddStepListener(
-            new Raw.module.VehicleConstraintStepListener(this.constraint)
-        );
+        // the tester is owned by the constraint; the constraint is reference counted and its
+        // step listener is ours - see VehicleManager.attachConstraint
+        this.attachConstraint(new Raw.module.VehicleCollisionTesterCastCylinder(Layer.MOVING, 1));
         this.controller = Raw.module.castObject(
             this.constraint.GetController(),
             Raw.module.MotorcycleController
         );
+
+        // the constraint has taken everything it needs out of the settings (the wheels and the
+        // controller settings are reference counted members, freed with the settings)
+        Raw.module.destroy(vehicle);
     }
 
     // run the physics step
     prePhysicsUpdate(deltaTime: number): void {
+        if (this.destroyed) return;
         let forward = this.moveDirection.y;
         let right = this.moveDirection.x;
         let brake = 0.0,
             handBrake = 0.0;
 
         if (this.previousForward * forward < 0.0) {
-            const rotation = quat.joltToThree(this.carBody.GetRotation().Conjugated());
-            const linearV = vec3.three(this.carBody.GetLinearVelocity());
+            // static temporaries read into the shared scratch objects, see VehicleManager
+            const rotation = quat.joltToThree(
+                this.carBody.GetRotation().Conjugated(),
+                this._rotation
+            );
+            const linearV = vec3.three(
+                this.carBody.GetLinearVelocity(),
+                undefined,
+                undefined,
+                this._position
+            );
             const velocity = linearV.applyQuaternion(rotation).z;
             if ((forward > 0.0 && velocity < -0.1) || (forward < 0.0 && velocity > 0.1)) {
                 // Brake while we've not stopped yet
