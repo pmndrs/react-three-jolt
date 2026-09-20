@@ -32,7 +32,6 @@ export class Commander {
     gamepadListener: GamepadListener = new GamepadListener();
 
     constructor() {
-        console.log('gamepad listeners attaching');
         // add gamepad listeners
         this.gamepadListener.on('gamepad:connected', (event: any) => {
             if (this.debug) console.log('gamepad connected', event);

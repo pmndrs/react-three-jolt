@@ -177,7 +177,6 @@ export class VehicleManagerTwoWheels extends VehicleManager {
         const tester = new Raw.module.VehicleCollisionTesterCastCylinder(Layer.MOVING, 1);
         this.constraint.SetVehicleCollisionTester(tester);
 
-        console.log('wheel count', vehicle.mWheels.size());
         // now we have the constraint we can set the wheelStates
         const frontState = new WheelState(this.constraint, 0);
         this.wheels.set('front', frontState);

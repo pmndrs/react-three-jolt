@@ -38,7 +38,6 @@ export const useRaycaster = (
     );
     */
     useUnmount(() => {
-        console.log('hook destroying raycaster');
         raycaster.destroy();
     });
     return raycaster;

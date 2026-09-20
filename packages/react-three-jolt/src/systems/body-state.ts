@@ -465,7 +465,6 @@ export class BodyState {
         rotZ?: boolean;
     }) {
         let newDOF = this.rawDOF;
-        console.log('Setting DOF', dof, 'current DOF', this.dof, 'rawDOF', this.rawDOF);
         const allowedDOFs = [
             { key: 'x', flag: Raw.module.EAllowedDOFs_TranslationX },
             { key: 'y', flag: Raw.module.EAllowedDOFs_TranslationY },
