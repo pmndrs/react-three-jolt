@@ -623,7 +623,7 @@ function ConstraintsScene({ enabled, motorVelocity, doorTarget }: ConstraintsSce
 }
 
 export function Constraints() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
     const [resetKey, setResetKey] = useState(0);
 
     const { motorVelocity, doorTarget } = useControls('Motors', {
@@ -656,6 +656,7 @@ export function Constraints() {
 
     return (
         <Physics
+            module={module}
             paused={paused}
             key={`${physicsKey}-${resetKey}`}
             interpolate={interpolate}
