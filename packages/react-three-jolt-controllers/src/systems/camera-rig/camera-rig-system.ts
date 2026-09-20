@@ -3,14 +3,67 @@
 //import type Jolt from 'jolt-physics';
 
 // mostly for the types
-import { Emitter, PhysicsSystem, type Unsubscribe, vec3 } from '@react-three/jolt';
+import { type anyVec3, Emitter, PhysicsSystem, type Unsubscribe, vec3 } from '@react-three/jolt';
 import * as THREE from 'three';
 //import { ConstraintSystem } from '@react-three/jolt';
 
 //import { vec3, quat, convertNegativeRadians } from '@react-three/jolt';
 import { BodyState } from '@react-three/jolt';
 
-import { CameraBoom } from './camera-boom';
+import type { CharacterControllerSystem } from '../character-controller';
+import { CameraBoom, type CameraBoomOptions } from './camera-boom';
+
+/**
+ * How the rig decides where to point.
+ *
+ * - `free` (default): the boom only ever turns when the player turns it.
+ * - `movement`: the boom eases round to trail the character's horizontal velocity, so running
+ *   off in a new direction swings the camera in behind you. This is the "Mario style" camera of
+ *   issue #75.
+ * - `lookAt`: the boom eases round so `lookAtTarget` stays framed past the character.
+ *
+ * Neither automatic mode fights the player: a look command parks them for
+ * `manualOverrideTimeout` milliseconds, and `movement` only acts while the character is actually
+ * moving faster than `movementThreshold`.
+ */
+export type CameraFollowMode = 'free' | 'movement' | 'lookAt';
+
+/**
+ * Everything a {@link CameraRigManager} (and the {@link CameraBoom} it owns) can be configured
+ * with. Passing these to the constructor - which is what `useCameraRig(options)` does - is the
+ * fix for issue #86: the rig used to be built with its defaults, attached to the physics loop,
+ * and only then mutated into shape by whoever created it, so the first frame or two ran against
+ * a half-configured boom.
+ */
+export interface CameraRigOptions extends CameraBoomOptions {
+    /** Body the rig follows. Same thing `attach()` does, but before the first step. */
+    followTarget?: BodyState;
+    /** Offset of the anchor from the followed body. @default (0,2,0) */
+    anchorOffset?: anyVec3;
+    /** @default 'distance' */
+    positionUpdateType?: 'distance' | 'fixed';
+    /**
+     * Where the rig's `main` camera starts, in rig space. The boom takes its length, pitch and
+     * yaw from it, so the rig opens already framed (issue #86). @default (0,0,0)
+     */
+    cameraPosition?: anyVec3;
+    /** Show the rig's debug meshes. @default true */
+    debug?: boolean;
+
+    //* Follow modes (issue #75) --------------------------
+    /** How the rig decides where to point. @default 'free' */
+    followMode?: CameraFollowMode;
+    /** How quickly an automatic mode eases the yaw round, per second. @default 2 */
+    rotationSpeed?: number;
+    /** Ground speed the character has to beat before `movement` mode steers, m/s. @default 0.5 */
+    movementThreshold?: number;
+    /** How long a manual look command parks the automatic modes, ms. @default 1000 */
+    manualOverrideTimeout?: number;
+    /** What `lookAt` mode keeps framed. */
+    lookAtTarget?: THREE.Object3D | THREE.Vector3;
+    /** Character whose velocity drives `movement` mode. Falls back to the followed body. */
+    characterSystem?: CharacterControllerSystem;
+}
 
 export type CameraChangeCallback = (
     camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined
@@ -54,6 +107,28 @@ export class CameraRigManager {
     target: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
     targetOffset: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
 
+    //* Follow modes (issue #75) ==============================
+    /** see {@link CameraFollowMode} */
+    followMode: CameraFollowMode = 'free';
+    /** how quickly an automatic mode eases the yaw round, per second */
+    rotationSpeed = 2;
+    /** ground speed the character has to beat before `movement` mode steers, m/s */
+    movementThreshold = 0.5;
+    /** how long a manual look command parks the automatic modes, ms */
+    manualOverrideTimeout = 1000;
+    /** what `lookAt` mode keeps framed */
+    lookAtTarget?: THREE.Object3D | THREE.Vector3;
+    /**
+     * The character the rig is following, when there is one. `<CameraRig>` wires this up from
+     * the `CharacterControllerContext`; `movement` mode prefers its velocity over the followed
+     * body's because the virtual character is not a rigid body and the anchor that stands in for
+     * it is kinematic.
+     */
+    characterSystem?: CharacterControllerSystem;
+
+    // scratch for the follow modes, so the step stays allocation free
+    private readonly followVector = new THREE.Vector3();
+
     // listeners for when the camera changes or updates
     private events = new Emitter<CameraRigEventMap>();
 
@@ -80,15 +155,13 @@ export class CameraRigManager {
         return this.isDebugging;
     }
 
-    constructor(scene: THREE.Scene, physicsSystem: PhysicsSystem) {
+    constructor(scene: THREE.Scene, physicsSystem: PhysicsSystem, options: CameraRigOptions = {}) {
         this.scene = scene;
         this.physicsSystem = physicsSystem;
         //this.constraintSystem = physicsSystem.constraintSystem;
 
         this.controls = new CameraBoom(this.base, physicsSystem);
 
-        // attach to the physics system loop
-        this.attachToLoop();
         // create the rigs
         this.scene.add(this.anchor);
         this.scene.add(this.base);
@@ -99,9 +172,55 @@ export class CameraRigManager {
         //this.insertDebugShape('collar', '#F7A278');
         //  this.insertDebugShape('base', '#B0413E');
 
-        this.createCamera('main', { space: 'base', position: new THREE.Vector3(4, 4, 4) });
-        // put the camera into the control boom
-        this.controls.camera = this.getCamera('main') as THREE.PerspectiveCamera;
+        // Everything - the rig's own options, the boom's, and the main camera - is in place
+        // before the loop can step us even once (issue #86).
+        this.applyOptions(options, true);
+        // attach to the physics system loop
+        this.attachToLoop();
+    }
+
+    //* Options ========================================
+    /**
+     * Change options on a live rig. The rig is *not* rebuilt: `useCameraRig` memoises the
+     * manager and funnels prop changes through here so the camera keeps its pose.
+     */
+    setOptions(options: CameraRigOptions = {}) {
+        if (this.destroyed) return;
+        this.applyOptions(options, false);
+    }
+
+    private applyOptions(options: CameraRigOptions, initializing: boolean) {
+        if (options.anchorOffset !== undefined)
+            this.anchorOffset.copy(vec3.three(options.anchorOffset));
+        if (options.positionUpdateType !== undefined)
+            this.positionUpdateType = options.positionUpdateType;
+        if (options.debug !== undefined) this.debug = options.debug;
+        if (options.followTarget !== undefined) this.attach(options.followTarget);
+
+        // follow modes (issue #75) --------------------------------------
+        if (options.followMode !== undefined) this.followMode = options.followMode;
+        if (options.rotationSpeed !== undefined) this.rotationSpeed = options.rotationSpeed;
+        if (options.movementThreshold !== undefined)
+            this.movementThreshold = options.movementThreshold;
+        if (options.manualOverrideTimeout !== undefined)
+            this.manualOverrideTimeout = options.manualOverrideTimeout;
+        if (options.lookAtTarget !== undefined) this.lookAtTarget = options.lookAtTarget;
+        if (options.characterSystem !== undefined) this.characterSystem = options.characterSystem;
+
+        if (initializing) {
+            // an externally supplied camera becomes `main`; otherwise build one at the requested
+            // rig-space position and let the boom derive its length/pitch/yaw from it
+            let camera = options.camera;
+            if (camera) this.addCamera('main', camera, 'base');
+            else
+                camera = this.createCamera('main', {
+                    space: 'base',
+                    position: vec3.three(options.cameraPosition ?? ORIGIN)
+                });
+            this.controls.initialize({ ...options, camera });
+        } else {
+            this.controls.setOptions(options);
+        }
     }
     /**
      * Tear the rig down: stop being stepped, free the boom's jolt queries and remove every body
@@ -290,10 +409,71 @@ export class CameraRigManager {
     }
 
     // handler for when the frame updates
-    private handleUpdate(_deltaTime: number, _subFrame: number) {
+    private handleUpdate(deltaTime: number, _subFrame: number) {
         if (this.destroyed) return;
         this.updateSpaces();
-        if (this.activeCamera && this.controls) this.controls.handleFrameUpdate();
+        this.updateFollow(deltaTime);
+        if (this.activeCamera && this.controls) this.controls.handleFrameUpdate(deltaTime);
+    }
+
+    //* Follow modes (issue #75) ===========================
+    /**
+     * Ease the boom's yaw toward whatever the current {@link CameraFollowMode} asks for.
+     *
+     * The PC-style rig only ever translates with the anchor, so running off sideways leaves you
+     * staring at the character's ear until you drag the camera round yourself. `movement` mode
+     * swings the boom in behind the direction you are actually travelling, which is the camera
+     * issue #75 describes.
+     */
+    private updateFollow(deltaTime: number) {
+        if (this.followMode === 'free' || this.destroyed) return;
+        // never fight the player's hand: a look command parks us for a while afterwards
+        if (this.controls.timeSinceLook < this.manualOverrideTimeout) return;
+
+        const targetYaw = this.followMode === 'movement' ? this.movementYaw() : this.lookAtYaw();
+        if (targetYaw === undefined) return;
+
+        const current = this.controls.pivot.rotation.y;
+        // atan2(sin, cos) folds the difference into -PI..PI, so we always turn the short way
+        const difference = Math.atan2(Math.sin(targetYaw - current), Math.cos(targetYaw - current));
+        const ease = Math.min(1, Math.max(0, this.rotationSpeed * deltaTime));
+        this.controls.pivot.rotation.y = current + difference * ease;
+    }
+
+    /** Yaw that puts the boom - and so the camera - behind where the character is heading. */
+    private movementYaw(): number | undefined {
+        const velocity = this.followVelocity();
+        if (!velocity) return undefined;
+        const speedSquared = velocity.x * velocity.x + velocity.z * velocity.z;
+        if (speedSquared < this.movementThreshold * this.movementThreshold) return undefined;
+        // the camera rides the pivot's +Z, so trailing the character means aiming the boom back
+        // down the direction they came from
+        return Math.atan2(-velocity.x, -velocity.z);
+    }
+
+    /** Yaw that puts the camera on the far side of the anchor from `lookAtTarget`. */
+    private lookAtYaw(): number | undefined {
+        const lookAtTarget = this.lookAtTarget;
+        if (!lookAtTarget) return undefined;
+        if ((lookAtTarget as THREE.Object3D).isObject3D)
+            (lookAtTarget as THREE.Object3D).getWorldPosition(this.followVector);
+        else this.followVector.copy(lookAtTarget as THREE.Vector3);
+
+        const dx = this.anchor.position.x - this.followVector.x;
+        const dz = this.anchor.position.z - this.followVector.z;
+        // standing on the target leaves no direction to look from
+        if (dx * dx + dz * dz < 1e-6) return undefined;
+        return Math.atan2(dx, dz);
+    }
+
+    /** Horizontal velocity of whatever the rig is following, or undefined if there is nothing. */
+    private followVelocity(): THREE.Vector3 | undefined {
+        const character = this.characterSystem;
+        // the virtual character is not a rigid body; the anchor that stands in for it is
+        // kinematic and does not necessarily carry a velocity, so ask the character first
+        if (character) return this.followVector.copy(character.linearVelocity);
+        if (this.attachment) return this.followVector.copy(this.attachment.velocity);
+        return undefined;
     }
 
     updateSpaces() {
@@ -346,6 +526,10 @@ export class CameraRigManager {
         return point!;
     }
 }
+
+//* Helpers ================================================
+// shared, never mutated: the default rig-space position for the `main` camera
+const ORIGIN = new THREE.Vector3(0, 0, 0);
 
 //* Three cleanup helpers ==================================
 // three geometries and materials hold GPU resources that are only released by dispose()
