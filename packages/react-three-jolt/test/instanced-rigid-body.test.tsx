@@ -197,6 +197,48 @@ test('a StrictMode mount leaves exactly N bodies, and unmount clears them', asyn
     await renderer.unmount();
 });
 
+test('mounting at count 0 and growing to 20 works (#194)', async () => {
+    let bodySystem: BodySystem | undefined;
+    const capture = (bs: BodySystem) => {
+        bodySystem = bs;
+    };
+
+    // count={0} used to throw "Cannot set properties of null (setting 'needsUpdate')": with no
+    // instances `setColorAt` never runs, so three never lazily creates `instanceColor`.
+    const renderer = await create(
+        <Physics>
+            <BodySystemCapture onReady={capture} />
+            <InstancedRigidBodyMesh count={0}>{box()}</InstancedRigidBodyMesh>
+        </Physics>
+    );
+    await waitFor(() => !!bodySystem);
+    assert.equal(totalBodyCount(bodySystem!), 0, 'count 0 created bodies');
+
+    await renderer.update(
+        <Physics>
+            <BodySystemCapture onReady={capture} />
+            <InstancedRigidBodyMesh count={20}>{box()}</InstancedRigidBodyMesh>
+        </Physics>
+    );
+    await waitFor(() => totalBodyCount(bodySystem!) === 20);
+
+    // and back down to zero, which is the same guard from the other side
+    await renderer.update(
+        <Physics>
+            <BodySystemCapture onReady={capture} />
+            <InstancedRigidBodyMesh count={0}>{box()}</InstancedRigidBodyMesh>
+        </Physics>
+    );
+    await waitFor(() => totalBodyCount(bodySystem!) === 0);
+
+    await renderer.update(
+        <Physics>
+            <BodySystemCapture onReady={capture} />
+        </Physics>
+    );
+    await renderer.unmount();
+});
+
 test('setting color on an instanced body writes into the InstancedMesh color buffer', async () => {
     let bodySystem: BodySystem | undefined;
     const capture = (bs: BodySystem) => {

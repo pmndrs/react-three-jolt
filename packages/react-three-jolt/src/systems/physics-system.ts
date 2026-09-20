@@ -102,6 +102,12 @@ export class PhysicsSystem {
      */
     public maxSubSteps = 5;
 
+    /**
+     * The most recent (sanitised) render frame delta, in seconds. The fallback step length for
+     * callers that need one while `timeStep` is `"vary"` - see `BodyState.moveKinematic`.
+     */
+    public lastDelta = 1 / 60;
+
     // This lets us interpolate between physics steps. The poses themselves live on each
     // BodyState (preallocated); all we keep here is the leftover time.
     private steppingState = { accumulator: 0 };
@@ -192,6 +198,8 @@ export class PhysicsSystem {
         this.bodySystem = new BodySystem(this.physicsSystem);
         // so removing a body also removes the constraints attached to it (issue #82)
         this.bodySystem.constraintSystem = this.constraintSystem;
+        // bodies read the world's step timing through this (e.g. moveKinematic's default delta)
+        this.bodySystem.world = this;
         // the contact listener needs the world emitter for its zero-cost mask and for
         // dispatching world level events
         this.bodySystem.worldEvents = this.events;
@@ -232,6 +240,7 @@ export class PhysicsSystem {
         // loop restarts) can hand us a negative one, and a dropped frame can hand us NaN. Either
         // would sit in the accumulator and stall the simulation for many frames, so drop them.
         if (!(delta > 0)) delta = 0;
+        if (delta > 0) this.lastDelta = delta;
         const timeStepVariable = this.timeStep === 'vary';
         // interpolation only means anything when the simulation runs on its own fixed clock;
         // with a variable step the last step already lands exactly on the current frame
@@ -321,7 +330,9 @@ export class PhysicsSystem {
      */
     private stepSimulation(delta: number, steps: number) {
         this.events.emit('beforeStep', delta, this.currentSubframe);
-        this.bodySystem.handlePendingActions();
+        // the substep's own dt, so standing kinematic targets are re-aimed with the real step
+        // length rather than a frame delta (issue #194)
+        this.bodySystem.handlePendingActions(delta);
         this.joltInterface.Step(delta, steps);
         this.bodySystem.flushEvents();
         this.events.emit('afterStep', delta, this.currentSubframe);

@@ -113,7 +113,10 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
 
             const instancedMesh = new THREE.InstancedMesh(geometry, material, count);
             instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-            // loop over and set the initial colors
+            // loop over and set the initial colors.
+            // `count` may legitimately be 0 (#194: a spawner that starts empty and grows). three
+            // only creates `instanceColor` lazily, inside `setColorAt`, so with no instances it
+            // stays null - every read of it here and below is guarded for exactly that reason.
             const _col = new THREE.Color(color);
             for (let i = 0; i < count; i++) {
                 instancedMesh.setColorAt(i, _col);

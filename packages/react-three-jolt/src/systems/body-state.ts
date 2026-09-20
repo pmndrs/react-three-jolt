@@ -889,15 +889,101 @@ export class BodyState {
     addImpulse(impulse: Vector3) {
         this.body.AddImpulse(joltScratch.vec3(impulse));
     }
-    //move kinematic
-    // `rotation` is optional in practice; `joltScratch.quat(undefined)` is the identity rotation.
-    moveKinematic(position: Vector3, rotation: THREE.Quaternion, deltaTime = 0) {
+    //* Kinematic motion ----------------------------------
+    /**
+     * Drive a kinematic body towards `position` (and `rotation`) over `deltaTime`.
+     *
+     * Jolt derives the body's velocity from `(target - current) / deltaTime`, which is what makes
+     * a kinematic platform push and carry the things resting on it - a plain `position` write
+     * teleports instead, and carries nothing.
+     *
+     * @param position world space target position.
+     * @param rotation world space target rotation. Omitted (or `null`) keeps the body's current
+     * rotation, so `moveKinematic(pos)` never silently straightens a rotated platform (#194).
+     * @param deltaTime seconds to cover the distance in. Defaults to the world's step length:
+     * `physicsSystem.timeStep` when it is a number, otherwise the last frame delta. It used to
+     * default to `0`, which produces no velocity and therefore no motion at all.
+     *
+     * Called from `useFrame`, this applies the whole move in the first substep of the frame;
+     * {@link setKinematicTarget} is the smoother option, since the step loop re-aims it with the
+     * real substep dt.
+     */
+    moveKinematic(
+        position: anyVec3,
+        rotation?: THREE.Quaternion | Jolt.Quat | null,
+        deltaTime: number = this.stepDelta
+    ) {
         this.bodyInterface.MoveKinematic(
             this.BodyID,
             joltScratch.rvec3(position),
-            joltScratch.quat(rotation),
+            // `rvec3` and `quat` are separate scratch singletons, so both are live here
+            joltScratch.quat(rotation ?? this.body.GetRotation()),
             deltaTime
         );
+    }
+
+    /**
+     * Where this body is being driven to by {@link setKinematicTarget}, or `null`. Preallocated
+     * and written in place - the step loop reads it every substep, so it must not allocate.
+     */
+    kinematicTarget: { position: Vector3; rotation: Quaternion } | null = null;
+
+    /**
+     * Aim a kinematic body at a world space pose and let the step loop do the driving (#194).
+     *
+     * Unlike {@link moveKinematic}, which is applied once with whatever delta the caller passes,
+     * the target is re-applied at the top of **every substep** with that substep's real dt, so
+     * the body converges on the target exactly however many substeps a frame runs, and riders
+     * see a steady velocity instead of one big lurch followed by nothing.
+     *
+     * The target is sticky: set it once per frame (or once, and leave it) and clear it with
+     * {@link clearKinematicTarget}. Once reached, the derived velocity is zero, so a stale
+     * target simply parks the body where it asked to be.
+     *
+     * @param rotation omitted keeps the body's current rotation.
+     */
+    setKinematicTarget(position: anyVec3, rotation?: THREE.Quaternion | Jolt.Quat | null) {
+        if (!this.kinematicTarget)
+            this.kinematicTarget = { position: new Vector3(), rotation: new Quaternion() };
+        const target = this.kinematicTarget;
+        // `three()`'s out parameter is its fourth argument (it also takes loose x/y/z numbers)
+        vec3.three(position, undefined, undefined, target.position);
+        quat.three(rotation ?? this.body.GetRotation(), target.rotation);
+        this.bodySystem.trackKinematicTarget(this);
+    }
+
+    /** Stop driving this body; it keeps whatever velocity the last substep gave it. */
+    clearKinematicTarget() {
+        this.kinematicTarget = null;
+        this.bodySystem.untrackKinematicTarget(this);
+    }
+
+    /**
+     * Apply the standing target with the step's own dt. Called by `BodySystem` from inside the
+     * fixed step loop, before `Step()`; not part of the public API.
+     * @internal
+     */
+    applyKinematicTarget(deltaTime: number) {
+        const target = this.kinematicTarget;
+        if (!target || deltaTime <= 0) return;
+        this.bodyInterface.MoveKinematic(
+            this.BodyID,
+            joltScratch.rvec3(target.position),
+            joltScratch.quat(target.rotation),
+            deltaTime
+        );
+    }
+
+    /**
+     * How long one physics step is, for callers that don't want to pass a delta. The fixed step
+     * length when the world runs one, the last frame delta when it steps with `timeStep="vary"`,
+     * and 1/60 when there is no world to ask (a body built against a bare `BodySystem`).
+     */
+    private get stepDelta(): number {
+        const world = this.bodySystem.world;
+        if (!world) return 1 / 60;
+        if (typeof world.timeStep === 'number' && world.timeStep > 0) return world.timeStep;
+        return world.lastDelta > 0 ? world.lastDelta : 1 / 60;
     }
 
     //* Motion Source ----------------------------------

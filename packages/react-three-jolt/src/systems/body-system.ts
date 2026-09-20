@@ -24,6 +24,7 @@ import {
 } from './contact-events';
 import type { Emitter } from './emitter';
 import { type CollisionTarget, EventBit, type ValidatePayload, type WorldEventMap } from './events';
+import type { PhysicsSystem } from './physics-system';
 import {
     type AutoShape,
     checkDynamicMeshStrategy,
@@ -98,6 +99,20 @@ export class BodySystem {
         this.movedStatics.add(state);
     }
 
+    /**
+     * Bodies with a standing `setKinematicTarget` (issue #194), re-aimed at the top of every
+     * substep with that substep's real dt. Empty unless something uses the API.
+     */
+    private readonly kinematicTargets = new Set<BodyState>();
+    /** @internal called by {@link BodyState.setKinematicTarget}. */
+    trackKinematicTarget(state: BodyState) {
+        this.kinematicTargets.add(state);
+    }
+    /** @internal called by {@link BodyState.clearKinematicTarget}. */
+    untrackKinematicTarget(state: BodyState) {
+        this.kinematicTargets.delete(state);
+    }
+
     //* Events ======================================
     /** Jolt listener objects, kept so they can be freed. See {@link destroy}. */
     contactListener?: Jolt.ContactListenerJS;
@@ -110,6 +125,12 @@ export class BodySystem {
     readonly payloads = new PayloadPool();
     /** The world level emitter, wired up by `PhysicsSystem`. */
     worldEvents?: Emitter<WorldEventMap>;
+    /**
+     * The `PhysicsSystem` that owns this body system, wired up by it at construction. Bodies read
+     * the world's step timing through it (see `BodyState.moveKinematic`); it is optional because
+     * a `BodySystem` can be built on a bare Jolt physics system in tests.
+     */
+    world?: PhysicsSystem;
     /** Mirrors `PhysicsSystem.debug`: turns on payload poisoning after dispatch. */
     debug = false;
     /**
@@ -433,7 +454,10 @@ export class BodySystem {
     /** Drop a handle from every map. Jolt recycles handles, so nothing may be left behind. */
     private forget(bodyHandle: number) {
         const state = this.bodies.get(bodyHandle);
-        if (state) this.movedStatics.delete(state);
+        if (state) {
+            this.movedStatics.delete(state);
+            this.kinematicTargets.delete(state);
+        }
         this.bodies.delete(bodyHandle);
         this.dynamicBodies.delete(bodyHandle);
         this.staticBodies.delete(bodyHandle);
@@ -488,7 +512,16 @@ export class BodySystem {
     createPendingAction(action: string, handle: number, value: any) {
         this.pendingActions.push({ action, handle, value });
     }
-    handlePendingActions() {
+    /**
+     * Run at the top of every substep, before `Step()`.
+     *
+     * @param deltaTime the substep's own length in seconds, used to re-aim every standing
+     * kinematic target (issue #194) so `MoveKinematic` derives a velocity that lands the body on
+     * its target within this step, however many substeps the frame runs.
+     */
+    handlePendingActions(deltaTime = 0) {
+        if (deltaTime > 0 && this.kinematicTargets.size)
+            for (const state of this.kinematicTargets) state.applyKinematicTarget(deltaTime);
         if (!this.pendingActions.length) return;
         // { action: string, handle: number, value: any }
         // lets try this first utilizing setters
@@ -974,6 +1007,7 @@ export class BodySystem {
         this.staticBodies.clear();
         this.kinematicBodies.clear();
         this.movedStatics.clear();
+        this.kinematicTargets.clear();
         this.pendingActions = [];
         // Our own allocations, not listeners installed on the JoltInterface: these are freed even
         // when the interface belongs to another world (issue #95).
