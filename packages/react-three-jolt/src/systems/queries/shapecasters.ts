@@ -475,10 +475,12 @@ export class ShapecastHit {
             const joltNormal = body.GetWorldSpaceSurfaceNormal(shapeID, position);
             toReturn = vec3.three(joltNormal);
         }
-        // destroy remaining jolt items
-        // TODO: bodyID / shapeID are still leaked here, see the memory audit
-        //Raw.module.destroy(shapeID);
-        // Raw.module.destroy(bodyID);
+        // bodyID/shapeID/position ARE fresh allocations we made above with `new Raw.module.X()`,
+        // so - unlike joltNormal - these three are genuinely ours and must be freed: this getter
+        // leaked all three of them on every single call. Mirrors the RaycastHit fix in
+        // raycasters.ts.
+        Raw.module.destroy(shapeID);
+        Raw.module.destroy(bodyID);
         Raw.module.destroy(position);
         return toReturn;
     }
