@@ -3,7 +3,7 @@
 // arrow that `removeStepListener` (identity based) could never find. Mounting and unmounting the
 // component therefore left one dead listener per mount stepping a freed CharacterVirtual.
 
-import { Physics, type PhysicsSystem, useJolt } from '@react-three/jolt';
+import { Physics, type PhysicsSystem, RigidBody, useJolt } from '@react-three/jolt';
 import { create } from '@react-three/test-renderer';
 import React, { act, useEffect } from 'react';
 import { assert, test } from 'vitest';
@@ -30,16 +30,18 @@ const settle = async (isReady: () => boolean) => {
 
 const Harness = ({
     show,
-    onReady
+    onReady,
+    ...props
 }: {
     show: boolean;
     onReady: (system: AnyPhysicsSystem) => void;
+    [key: string]: unknown;
 }) => {
     const { physicsSystem } = useJolt();
     useEffect(() => {
         onReady(physicsSystem as unknown as AnyPhysicsSystem);
     }, [physicsSystem, onReady]);
-    return show ? <CharacterController /> : null;
+    return show ? <CharacterController {...props} /> : null;
 };
 
 test('mounting and unmounting <CharacterController> twice leaves no listeners behind', async () => {
@@ -75,6 +77,55 @@ test('mounting and unmounting <CharacterController> twice leaves no listeners be
             `cycle ${cycle}: the controller's step listener outlived the component`
         );
     }
+
+    await renderer.unmount();
+});
+
+// Issues #79/#80: the event props are effects keyed on the controller instance, so they have to
+// register on the pass that creates it - the same trap `<RigidBody on*>` fell into (#32).
+test('<CharacterController onGround onLand> registers and unregisters with the component', async () => {
+    let system: AnyPhysicsSystem | undefined;
+    const onReady = (s: AnyPhysicsSystem) => {
+        system = s;
+    };
+    const log: string[] = [];
+    // the controller spawns at the origin, so it needs something under it to land on
+    const tree = (show: boolean) => (
+        <Physics>
+            <RigidBody type="static" position={[0, -2, 0]}>
+                <mesh>
+                    <boxGeometry args={[200, 1, 200]} />
+                </mesh>
+            </RigidBody>
+            <Harness
+                show={show}
+                onReady={onReady}
+                onGround={() => log.push('ground')}
+                onLand={() => log.push('land')}
+                onMove={() => log.push('move')}
+            />
+        </Physics>
+    );
+
+    const renderer = await create(tree(false));
+    await settle(() => system !== undefined);
+    assert.isDefined(system);
+
+    await renderer.update(tree(true));
+    await settle(() => stepListeners(system!) > 0);
+
+    await act(async () => {
+        for (let i = 0; i < 200 && !log.includes('land'); i++) system!.onUpdate(1 / 60);
+    });
+    assert.include(log, 'ground', 'onGround never fired');
+    assert.include(log, 'land', 'onLand never fired');
+
+    const before = log.length;
+    await renderer.update(tree(false));
+    await act(async () => {
+        for (let i = 0; i < 60; i++) system!.onUpdate(1 / 60);
+    });
+    assert.equal(log.length, before, 'a handler outlived the component');
 
     await renderer.unmount();
 });

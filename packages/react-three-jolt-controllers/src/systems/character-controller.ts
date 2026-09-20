@@ -2,6 +2,7 @@
 so much and can be reused for things like NPC's */
 
 import {
+    type BodyState,
     type BodySystem,
     createShapeFromSettings,
     Emitter,
@@ -30,7 +31,100 @@ interface CharacterFilters {
 
 // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
 export type CharacterActionCallback = (action: any, payload?: any) => void;
-type CharacterEventMap = { action: CharacterActionCallback };
+
+/**
+ * One contact between the character and a body, forwarded from Jolt's
+ * `CharacterContactListener` (issues #79/#80/#187).
+ *
+ * **Pooled.** One object is reused for every contact in a step: read what you need inside the
+ * handler, the same contract `CollisionPayload` carries. `body`/`object` are `undefined` for a
+ * Jolt body `BodySystem` never registered.
+ */
+export interface CharacterContactPayload {
+    body: BodyState | undefined;
+    object: THREE.Object3D | undefined;
+    /** `BodyID.GetIndexAndSequenceNumber()` of the other body. Always valid. */
+    handle: number;
+    /** `SubShapeID.GetValue()` on the *other* body's shape. */
+    subShapeId: number;
+    /** World space contact point. Zeroed for `contactRemoved`, which Jolt gives no geometry. */
+    position: THREE.Vector3;
+    /** Contact normal as Jolt reports it: pointing from the character into the other body. */
+    normal: THREE.Vector3;
+}
+
+/**
+ * Everything a `CharacterControllerSystem` emits (issues #50, #79, #80).
+ *
+ * The movement events are **edges**, derived once per pre-step from the character's ground state
+ * and its velocity relative to whatever is carrying it. Every one of them is also emitted as an
+ * `action` under the same name, so `controller.on('move', fn)` - the older action-filtered API -
+ * and `controller.events.on('move', fn)` see the same things.
+ */
+export type CharacterEventMap = {
+    /** Every action, including the ones below, as `(name, payload)`. */
+    action: CharacterActionCallback;
+    /** Started moving under its own power. `speed` is m/s relative to the ground. */
+    move: (speed: number) => void;
+    /** Stopped moving under its own power. */
+    stop: () => void;
+    /** Started sliding down something too steep to stand on. `speed` is along the surface. */
+    slide: (speed: number) => void;
+    /** Stopped sliding. */
+    slideEnd: () => void;
+    /** A jump was accepted; `count` is which jump of the allowed sequence it was. */
+    jump: (count: number) => void;
+    /** Touched down. `airtime` is how long, in seconds, it had been unsupported. */
+    land: (airtime: number) => void;
+    /** Became supported by something. Always paired with `land`. */
+    ground: () => void;
+    /** Stopped being supported by anything. */
+    airborne: () => void;
+    crouch: () => void;
+    stand: () => void;
+    /** A new contact with a body. Dispatched after the character update, never inside it. */
+    contactAdded: (payload: CharacterContactPayload) => void;
+    contactPersisted: (payload: CharacterContactPayload) => void;
+    contactRemoved: (payload: CharacterContactPayload) => void;
+};
+
+/**
+ * One bit per forwarded contact event. The Jolt callbacks read
+ * `events.mask & CharacterEventBit.*` and return immediately when nobody is listening, so an
+ * unused contact stream costs one `&` per contact and nothing else.
+ */
+export const CharacterEventBit = {
+    contactAdded: 1 << 0,
+    contactPersisted: 1 << 1,
+    contactRemoved: 1 << 2
+} as const;
+
+const CHARACTER_EVENT_BITS: Partial<Record<keyof CharacterEventMap, number>> = {
+    contactAdded: CharacterEventBit.contactAdded,
+    contactPersisted: CharacterEventBit.contactPersisted,
+    contactRemoved: CharacterEventBit.contactRemoved
+};
+
+/** Queue record kinds; the index into `CONTACT_EVENT_NAME`. */
+const CONTACT_EVENT_NAME = ['contactAdded', 'contactPersisted', 'contactRemoved'] as const;
+
+/**
+ * One queued character contact. Jolt's `CharacterContactListener` fires from inside
+ * `CharacterVirtual::ExtendedUpdate`, where adding or removing a body is illegal and the
+ * pointers it hands over are into memory Jolt reuses - so the callback copies numbers into one
+ * of these and returns. They are pooled: the queue only ever grows.
+ */
+type QueuedContact = {
+    kind: number;
+    handle: number;
+    subShapeId: number;
+    px: number;
+    py: number;
+    pz: number;
+    nx: number;
+    ny: number;
+    nz: number;
+};
 
 export class CharacterControllerSystem {
     protected joltInterface: Jolt.JoltInterface;
@@ -61,8 +155,11 @@ export class CharacterControllerSystem {
         shapeFilter: new Raw.module.ShapeFilter()
     };
 
-    /** Action events, on the shared Emitter primitive (issue #50). */
-    protected events = new Emitter<CharacterEventMap>();
+    /**
+     * Everything this controller emits, on the shared Emitter primitive (issues #50/#79/#80).
+     * `events.on(type, fn)` returns its own unsubscribe; identity is never compared.
+     */
+    readonly events = new Emitter<CharacterEventMap>(CHARACTER_EVENT_BITS);
     /** Back compat so the deprecated `removeActionListener(fn)` still finds its handles. */
     private legacyActionSubs = new Map<Function, Unsubscribe[]>();
 
@@ -94,10 +191,42 @@ export class CharacterControllerSystem {
     isCrouched = false;
     isRotating = false;
     private isJumping = false;
-    isMoving = false;
-    isSliding = false;
     isRunning = false;
     isExhausted = false;
+
+    //* Derived motion state (issues #79, #80) ==============
+    // Recomputed once per pre-step, after the character has been updated, and read back through
+    // the cheap getters below. The `move`/`stop`, `slide`/`slideEnd`, `ground`/`airborne` and
+    // `land` events are the edges of exactly these three booleans.
+    private _isMoving = false;
+    private _isSliding = false;
+    private _isGrounded = false;
+    private airtime = 0;
+
+    /**
+     * Relative horizontal speed (m/s) at which the character counts as moving. It is measured
+     * against the *supporting body's* velocity, so standing on a moving platform is not walking
+     * (#79). Falling back below half of this is what ends the move.
+     */
+    moveThreshold = 0.5;
+    /**
+     * Speed (m/s) along a too-steep surface at which the character counts as sliding (#80).
+     * Falling back below half of this ends the slide.
+     */
+    slideThreshold = 0.5;
+
+    /** True while the character is moving under its own power. Cheap: a cached boolean. */
+    get isMoving(): boolean {
+        return this._isMoving;
+    }
+    /** True while the character is sliding down something too steep to stand on. */
+    get isSliding(): boolean {
+        return this._isSliding;
+    }
+    /** True while something is supporting the character (`OnGround` or `OnSteepGround`). */
+    get isGrounded(): boolean {
+        return this._isGrounded;
+    }
 
     allowSliding = false;
     allowRunning = true;
@@ -156,6 +285,24 @@ export class CharacterControllerSystem {
     //TODO remove this for global temps
     private _tmpVec3 = new Raw.module.Vec3();
 
+    //* Event plumbing ====================================
+    /** Records written inside `ExtendedUpdate`, dispatched by `flushContacts` after it. */
+    private readonly contactQueue: QueuedContact[] = [];
+    private contactQueueCount = 0;
+    /** One reused payload for the whole flush - see {@link CharacterContactPayload}. */
+    private readonly contactPayload: CharacterContactPayload = {
+        body: undefined,
+        object: undefined,
+        handle: 0,
+        subShapeId: -1,
+        position: new THREE.Vector3(),
+        normal: new THREE.Vector3()
+    };
+    // Scratch for the per-step state derivation. Kept as fields so it allocates nothing.
+    private readonly _stateVelocity = new THREE.Vector3();
+    private readonly _stateUp = new THREE.Vector3();
+    private readonly _stateNormal = new THREE.Vector3();
+
     constructor(physicsSystem: PhysicsSystem) {
         this.physicsSystem = physicsSystem;
         this.joltInterface = physicsSystem.joltInterface;
@@ -212,6 +359,8 @@ export class CharacterControllerSystem {
         // clearing it and the legacy subscription bookkeeping rather than emptying an array
         this.events.clear();
         this.legacyActionSubs.clear();
+        this.contactQueueCount = 0;
+        this.contactQueue.length = 0;
 
         // three side ---------------------------------------------------
         this.removeFromScene();
@@ -533,16 +682,17 @@ export class CharacterControllerSystem {
             // this seems to be a space to trigger sensors
             return true;
         };
+        // #79/#80/#187: forward the contacts Jolt actually reports. Every one of these is a
+        // number from emscripten's glue; `queueContact` bails out on the event mask before it
+        // wraps anything, so an unsubscribed stream costs one `&` per contact.
         this.characterContactListener.OnContactAdded = (
-            _character: Jolt.CharacterVirtual,
-            _bodyID2: Jolt.BodyID,
-            _subShapeID2: Jolt.SubShapeID,
-            _contactPosition: Jolt.Vec3,
-            _contactNormal: Jolt.Vec3,
-            _settings: any
-        ) => {
-            // not using this at the moment
-        };
+            _character: number,
+            bodyID2: number,
+            subShapeID2: number,
+            contactPosition: number,
+            contactNormal: number,
+            _settings: number
+        ) => this.queueContact(0, bodyID2, subShapeID2, contactPosition, contactNormal);
         this.characterContactListener.OnContactSolve = (
             character: any,
             _bodyID2: Jolt.BodyID,
@@ -584,8 +734,103 @@ export class CharacterControllerSystem {
         // against bodies. The five character-vs-character variants only fire once a
         // CharacterVsCharacterCollision is installed, which this controller never does, so
         // their no-op assignments were dead code and are gone. The test fails if that changes.
-        this.characterContactListener.OnContactPersisted = () => {};
-        this.characterContactListener.OnContactRemoved = () => {};
+        //
+        // Their argument lists are not in the 1.1.0 typings (only four of the eleven callbacks
+        // are), so they were settled at runtime: `OnContactPersisted` has the same six arguments
+        // as `OnContactAdded`, `OnContactRemoved` has three and no geometry at all.
+        this.characterContactListener.OnContactPersisted = (
+            _character: number,
+            bodyID2: number,
+            subShapeID2: number,
+            contactPosition: number,
+            contactNormal: number,
+            _settings: number
+        ) => this.queueContact(1, bodyID2, subShapeID2, contactPosition, contactNormal);
+        this.characterContactListener.OnContactRemoved = (
+            _character: number,
+            bodyID2: number,
+            subShapeID2: number
+        ) => this.queueContact(2, bodyID2, subShapeID2);
+    }
+
+    /**
+     * Copy one contact out of the Jolt callback. Nothing Jolt owns outlives this function, and
+     * nothing user facing runs here: `ExtendedUpdate` is still on the stack.
+     */
+    private queueContact(
+        kind: number,
+        bodyIDPtr: number,
+        subShapeIDPtr: number,
+        positionPtr?: number,
+        normalPtr?: number
+    ): void {
+        const bit =
+            kind === 0
+                ? CharacterEventBit.contactAdded
+                : kind === 1
+                  ? CharacterEventBit.contactPersisted
+                  : CharacterEventBit.contactRemoved;
+        if ((this.events.mask & bit) === 0) return;
+        const jolt = Raw.module;
+        let record = this.contactQueue[this.contactQueueCount];
+        if (!record) {
+            record = {
+                kind: 0,
+                handle: 0,
+                subShapeId: -1,
+                px: 0,
+                py: 0,
+                pz: 0,
+                nx: 0,
+                ny: 0,
+                nz: 0
+            };
+            this.contactQueue[this.contactQueueCount] = record;
+        }
+        this.contactQueueCount++;
+        record.kind = kind;
+        record.handle = jolt.wrapPointer(bodyIDPtr, jolt.BodyID).GetIndexAndSequenceNumber();
+        record.subShapeId = jolt.wrapPointer(subShapeIDPtr, jolt.SubShapeID).GetValue();
+        if (positionPtr === undefined || normalPtr === undefined) {
+            record.px = 0;
+            record.py = 0;
+            record.pz = 0;
+            record.nx = 0;
+            record.ny = 0;
+            record.nz = 0;
+            return;
+        }
+        const position = jolt.wrapPointer(positionPtr, jolt.RVec3);
+        record.px = position.GetX();
+        record.py = position.GetY();
+        record.pz = position.GetZ();
+        const normal = jolt.wrapPointer(normalPtr, jolt.Vec3);
+        record.nx = normal.GetX();
+        record.ny = normal.GetY();
+        record.nz = normal.GetZ();
+    }
+
+    /**
+     * Dispatch the contacts this update queued, once `ExtendedUpdate` has returned. Handlers may
+     * therefore do anything, including adding and removing bodies.
+     */
+    private flushContacts(): void {
+        const count = this.contactQueueCount;
+        if (count === 0) return;
+        // reset first: a handler that provokes another update must not re-dispatch these
+        this.contactQueueCount = 0;
+        const payload = this.contactPayload;
+        for (let i = 0; i < count; i++) {
+            const record = this.contactQueue[i];
+            const state = this.bodySystem.getBody(record.handle);
+            payload.handle = record.handle;
+            payload.subShapeId = record.subShapeId;
+            payload.body = state;
+            payload.object = state?.object;
+            payload.position.set(record.px, record.py, record.pz);
+            payload.normal.set(record.nx, record.ny, record.nz);
+            this.events.emit(CONTACT_EVENT_NAME[record.kind], payload);
+        }
     }
     // create the core character
     initCharacter() {
@@ -749,6 +994,114 @@ export class CharacterControllerSystem {
         //console.log('character position', vec3.three(this.character.GetPosition()	);
         // update the anchor
         this.anchor.setPositionAndRotation(this.threeObject.position, this.threeObject.quaternion);
+
+        // Everything user facing happens here, once the character update has returned: the
+        // contacts Jolt queued from inside it, then the state edges derived from the result.
+        this.flushContacts();
+        this.updateMotionState(deltaTime);
+    }
+
+    /**
+     * Recompute `isGrounded` / `isMoving` / `isSliding` and emit the edges (#79, #80).
+     *
+     * Movement is measured **relative to whatever is carrying the character**: Jolt's
+     * `GetLinearVelocity()` on a moving platform already includes the platform's velocity, so
+     * subtracting `GetGroundVelocity()` is what stops a ride reading as a walk - the open
+     * question in #79. Sliding is the tangential part of that same relative velocity, measured
+     * against the ground plane, and only counts on a surface too steep to stand on.
+     *
+     * Allocation free: every `Get*` below returns a Jolt static temporary, read straight into
+     * the reusable three.js vectors and never destroyed.
+     */
+    private updateMotionState(deltaTime: number): void {
+        const jolt = Raw.module;
+        const character = this.character;
+        const groundState = character.GetGroundState();
+        const supported =
+            groundState === jolt.EGroundState_OnGround ||
+            groundState === jolt.EGroundState_OnSteepGround;
+
+        const up = this._stateUp;
+        const jup = character.GetUp();
+        up.set(jup.GetX(), jup.GetY(), jup.GetZ());
+
+        // velocity relative to the ground, so a moving platform is not movement
+        const relative = this._stateVelocity;
+        const velocity = character.GetLinearVelocity();
+        relative.set(velocity.GetX(), velocity.GetY(), velocity.GetZ());
+        if (supported) {
+            const ground = character.GetGroundVelocity();
+            relative.x -= ground.GetX();
+            relative.y -= ground.GetY();
+            relative.z -= ground.GetZ();
+        }
+
+        // horizontal (up-plane) part drives isMoving; the ground-plane part drives isSliding
+        const alongUp = relative.dot(up);
+        const moveSpeed = Math.sqrt(Math.max(0, relative.lengthSq() - alongUp * alongUp));
+
+        const plane = this._stateNormal;
+        if (supported) {
+            const normal = character.GetGroundNormal();
+            plane.set(normal.GetX(), normal.GetY(), normal.GetZ());
+        } else plane.copy(up);
+        const alongPlane = relative.dot(plane);
+        const slideSpeed = Math.sqrt(Math.max(0, relative.lengthSq() - alongPlane * alongPlane));
+
+        // Grounded --------------------------------------------------------
+        if (supported !== this._isGrounded) {
+            this._isGrounded = supported;
+            if (supported) {
+                const airtime = this.airtime;
+                this.airtime = 0;
+                this.emitEvent('ground');
+                this.emitEvent('land', airtime);
+            } else this.emitEvent('airborne');
+        }
+        if (!supported) this.airtime += deltaTime;
+
+        // Moving ----------------------------------------------------------
+        // Hysteresis: a walk has to clear the threshold to start and drop to half of it to end,
+        // so a character hovering at exactly the threshold does not emit an event per step.
+        const moving = this._isMoving
+            ? moveSpeed > this.moveThreshold * 0.5
+            : moveSpeed > this.moveThreshold;
+        if (moving !== this._isMoving) {
+            this._isMoving = moving;
+            if (moving) this.emitEvent('move', moveSpeed);
+            else this.emitEvent('stop');
+        }
+
+        // Sliding ---------------------------------------------------------
+        // Only a surface that cannot support the character counts: `OnSteepGround` is Jolt's own
+        // verdict, and `NotSupported` is touching something that is not a floor at all.
+        const onSlope =
+            groundState === jolt.EGroundState_OnSteepGround ||
+            groundState === jolt.EGroundState_NotSupported;
+        const sliding =
+            onSlope &&
+            (this._isSliding
+                ? slideSpeed > this.slideThreshold * 0.5
+                : slideSpeed > this.slideThreshold);
+        if (sliding !== this._isSliding) {
+            this._isSliding = sliding;
+            if (sliding) this.emitEvent('slide', slideSpeed);
+            else this.emitEvent('slideEnd');
+        }
+    }
+
+    /**
+     * Emit a typed event *and* the matching `action`, so `controller.on('move', fn)` (the older
+     * action-filtered API) and `controller.events.on('move', fn)` agree about what happened.
+     */
+    private emitEvent<K extends keyof CharacterEventMap>(
+        type: K,
+        // biome-ignore lint/suspicious/noExplicitAny: forwarded straight to the emitter
+        ...args: any[]
+    ): void {
+        // biome-ignore lint/suspicious/noExplicitAny: see above
+        this.events.emit(type, ...(args as any));
+        this.triggerActionListeners(type, args[0]);
     }
     //* Movement Functions ========================================
     // Rotate with slerp
@@ -855,6 +1208,7 @@ export class CharacterControllerSystem {
             // if we allow double jump.
             if (this.jumpCounter < this.jumpLimit) {
                 this.jumpCounter++;
+                this.events.emit('jump', this.jumpCounter);
                 this.triggerActionListeners('jump', this.jumpCounter);
                 const jumpSpeed =
                     this.exhaustionEffectsJump && this.isExhausted
@@ -908,6 +1262,7 @@ export class CharacterControllerSystem {
                     this.standingMesh.visible = !crouched;
                     this.crouchingMesh.visible = crouched;
                 }
+                this.events.emit(crouched ? 'crouch' : 'stand');
                 this.triggerActionListeners('crouched', crouched);
             } else {
                 this.crouchingInterval = setInterval(() => {

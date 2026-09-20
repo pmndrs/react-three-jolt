@@ -60,6 +60,69 @@ interface CollisionTarget {
 }
 ```
 
+## Which part of a compound was hit
+
+`payload.targetSubShape` and `payload.otherSubShape` turn a raw `SubShapeID` into the `<Shape>`
+that produced it:
+
+```ts
+interface SubShapeRef {
+    id: number;                            // SubShapeID.GetValue()
+    index: number;                         // top-level compound child, or -1 for a leaf shape
+    userData: number;                      // the tag stamped on the <Shape>/descriptor, or 0
+    descriptor: ShapeDescriptor | undefined;  // what it was built from, `name` included
+}
+```
+
+**They are resolved on first read.** Touching `targetSubShape` is what walks the shape; a handler
+that never asks costs nothing per contact, which is why they are getters rather than fields. The
+`SubShapeRef` is pooled like the rest of the payload.
+
+`index` comes from the bit path Jolt packs into the id, and `userData` from
+`Shape::GetSubShapeUserData`, which resolves all the way down to the leaf that was hit. The two
+answer different questions: `index` is *which child of the body's shape*, `userData` is *which
+declaration*, at any nesting depth. `descriptor` is only filled in when the body kept the
+description it was built from — `<Shape>` and the automatic `describeObject` path both do;
+`bodySystem.addBody(object, { shape })` does not unless you also pass `shapeDescriptor`.
+
+```tsx
+<RigidBody onCollisionEnter={(e) => console.log('hit', e.targetSubShape.descriptor?.name)}>
+    <Shape>
+        <Shape name="hull" size={[4, 1, 2]} />
+        <Shape name="wing" size={[1, 0.2, 6]} position={[2, 0, 0]} />
+    </Shape>
+</RigidBody>
+```
+
+### Per-`<Shape>` handlers
+
+A `<Shape>` takes the same `onCollisionEnter` / `onCollisionPersist` / `onCollisionExit` /
+`onSensorEnter` / `onSensorExit` props as a `<RigidBody>`, scoped to itself:
+
+```tsx
+<RigidBody type="static">
+    <Shape>
+        <Shape size={[8, 1, 8]} position={[-6, 0, 0]} onCollisionEnter={leftPanelLitUp} />
+        <Shape size={[8, 1, 8]} position={[6, 0, 0]} onCollisionEnter={rightPanelLitUp} />
+    </Shape>
+</RigidBody>
+```
+
+They subscribe on the parent body and filter by sub-shape, so they cost the same as the body's
+own handlers plus one integer compare. A `<Shape>` that has any of them and no explicit
+`userData` is assigned one automatically (from the top of the 32-bit range, well clear of your
+own numbering). Pass `userData` yourself to choose the tag, and `name` to label the descriptor.
+
+Two caveats, both from how Jolt resolves a `SubShapeID`:
+
+- a `<Shape>` with handlers should be a **leaf**. Jolt resolves a contact down to the leaf shape,
+  so an intermediate compound's own tag is never what a contact reports. A *root* `<Shape>` that
+  is the whole compound is the exception and is handled: it is the whole body, so its handlers
+  simply are the body's, unfiltered.
+- for a two-child compound, child 1's id is `0xFFFFFFFF` — the same word as the "empty" id, since
+  Jolt pads the unused high bits with ones. `index` is therefore resolved against the body's
+  shape rather than from the id alone, and is `-1` only when the shape genuinely has no children.
+
 **Payloads are pooled and reused.** Read what you need inside the handler, or clone it; do not
 retain the payload, its `normal`, its `points` or either `CollisionTarget`. This is the contract
 r3f pointer events and rapier's `TempContactManifold` already carry. Under `<Physics debug>` a
@@ -141,6 +204,62 @@ Or imperatively, from anywhere under `<Physics>`:
 const { physicsSystem } = useJolt();
 useEffect(() => physicsSystem.events.on('collisionEnter', fn), [physicsSystem]);
 ```
+
+## Character controller events
+
+`CharacterControllerSystem` emits on the same `Emitter`, with the same subscription contract:
+
+| Concept | `<CharacterController>` prop | imperative |
+|---|---|---|
+| started moving under its own power | `onMove` | `controller.events.on('move', fn)` |
+| stopped moving | `onStop` | `…on('stop', fn)` |
+| started sliding down something too steep | `onSlide` | `…on('slide', fn)` |
+| stopped sliding | `onSlideEnd` | `…on('slideEnd', fn)` |
+| a jump was accepted | `onJump` | `…on('jump', fn)` |
+| touched down | `onLand` | `…on('land', fn)` |
+| became / stopped being supported | `onGround` / `onAirborne` | `…on('ground' \| 'airborne', fn)` |
+| crouched / stood up | `onCrouch` / `onStand` | `…on('crouch' \| 'stand', fn)` |
+| a contact with a body | `onContactAdded` / `onContactPersisted` / `onContactRemoved` | `…on('contactAdded', fn)` |
+| anything, as `(name, payload)` | `onAction` | `controller.on(name, fn)` |
+
+`controller.isMoving`, `controller.isSliding` and `controller.isGrounded` are the state those
+edges come from — cached booleans, recomputed once per pre-step, free to read every frame. (They
+were declared fields that nothing ever assigned; issues #79 and #80.)
+
+**Movement is measured relative to whatever is carrying you.** Jolt's `GetLinearVelocity()` on a
+moving platform already includes the platform's velocity, so `GetGroundVelocity()` is subtracted
+before the horizontal speed is taken — riding a lift is not walking. `isSliding` is the
+*tangential* part of that same relative velocity, and only counts on a surface Jolt reports as
+`OnSteepGround` (or `NotSupported`). Both use hysteresis — enter at the threshold, leave at half
+of it — so a character hovering at exactly the threshold does not emit an event per step.
+`moveThreshold` and `slideThreshold` (default `0.5` m/s each) are settable on the controller and
+as props.
+
+Every one of these is *also* emitted as an `action` under the same name, so
+`controller.on('move', fn)` — the older action-filtered API — and
+`controller.events.on('move', fn)` agree about what happened. They differ only in signature:
+actions are `(name, payload)`, typed events take the payload directly.
+
+Contact events are forwarded from Jolt's `CharacterContactListener`, which fires from *inside*
+`CharacterVirtual::ExtendedUpdate`. They are queued there and dispatched once it returns, so a
+handler may do anything — the same two-tier arrangement bodies use. The payload is pooled:
+
+```ts
+interface CharacterContactPayload {
+    body: BodyState | undefined;   // undefined for a body BodySystem never registered
+    object: THREE.Object3D | undefined;
+    handle: number;
+    subShapeId: number;            // on the *other* body's shape
+    position: THREE.Vector3;       // world space; zeroed for contactRemoved
+    normal: THREE.Vector3;         // points from the character into the other body
+}
+```
+
+`contactRemoved` carries no geometry — Jolt's callback for it takes only the body and sub-shape —
+so `position` and `normal` are zero there.
+
+With nothing subscribed the contact callbacks return on a mask test and queue nothing, exactly
+like the body pipeline.
 
 ## Cost
 
