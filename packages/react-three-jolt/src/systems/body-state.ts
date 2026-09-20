@@ -77,6 +77,9 @@ export class BodyState {
     private bodyInterface: Jolt.BodyInterface;
     private bodySystem;
     //private collisionGroupChanged = false;
+    // true once `set color` has cloned this (non-instanced) body's material so it stops sharing
+    // it with whatever else was originally assigned it - see `set color` and `destroy()`.
+    private ownsMaterial = false;
 
     constructor(
         object: Object3D | InstancedMesh,
@@ -260,6 +263,13 @@ export class BodyState {
     // destroy the body
     destroy(ignoreThree?: boolean) {
         this.bodySystem.removeBody(this.handle, ignoreThree);
+        // only dispose the material if `set color` cloned it for us - anything else is still
+        // whatever the caller (or another body sharing the same mesh/material) put there.
+        if (this.ownsMaterial && !this.isInstance) {
+            const mesh = this.object as THREE.Mesh;
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            for (const material of materials) material?.dispose();
+        }
     }
     // probably only used for instances
     getMatrix(matrix: Matrix4) {
@@ -411,23 +421,45 @@ export class BodyState {
     get color(): THREE.Color {
         // if we are a mesh, get the material color of the mesh
         if (!this.isInstance) {
-            //@ts-ignore color does exist
-            return (this.object as THREE.Mesh).material.color;
+            const material = this.firstMaterial;
+            return (material as THREE.Material & { color: THREE.Color }).color;
         }
         // if we are an instance, get the color of the instanced mesh
         const _color = new THREE.Color();
         (this.object as InstancedMesh).getColorAt(this.index!, _color);
         return _color;
     }
-    set color(color: THREE.Color | string | number) {
-        color = color instanceof THREE.Color ? color : new THREE.Color(color);
-        // if we are a mesh, set the material color of the mesh
-        if (!this.isInstance) {
-            //@ts-ignore
-            (this.object as THREE.Mesh).material.color = color;
+    set color(color: THREE.ColorRepresentation) {
+        const newColor = color instanceof THREE.Color ? color : new THREE.Color(color);
+        // if we are an instance, set the color on the shared InstancedMesh's color buffer
+        if (this.isInstance) {
+            const object = this.object as InstancedMesh;
+            object.setColorAt(this.index!, newColor);
+            // setColorAt only writes into the CPU-side buffer; without this the GPU buffer (and
+            // therefore what's rendered) never picks up the change.
+            if (object.instanceColor) object.instanceColor.needsUpdate = true;
+            return;
         }
-        // if we are an instance, set the color of the instanced mesh
-        (this.object as InstancedMesh).setColorAt(this.index!, color);
+        // plain mesh: the material may be shared with other meshes (e.g. re-used across several
+        // <RigidBody>s), so mutating it in place would recolor all of them. Clone it exactly
+        // once - on the first color write - and mark it as owned so `destroy()` disposes it;
+        // every subsequent write reuses that same owned clone.
+        const mesh = this.object as THREE.Mesh;
+        if (!this.ownsMaterial) {
+            mesh.material = Array.isArray(mesh.material)
+                ? mesh.material.map((material) => material.clone())
+                : mesh.material.clone();
+            this.ownsMaterial = true;
+        }
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const material of materials) {
+            (material as THREE.Material & { color?: THREE.Color }).color?.copy(newColor);
+        }
+    }
+    // the material this body's mesh renders with (first slot, for multi-material meshes)
+    private get firstMaterial(): THREE.Material {
+        const material = (this.object as THREE.Mesh).material;
+        return Array.isArray(material) ? material[0] : material;
     }
 
     //* Physics Properties ----------------------------------
