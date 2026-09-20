@@ -3,12 +3,14 @@ so much and can be reused for things like NPC's */
 
 import {
     type BodySystem,
+    Emitter,
     generateBodySettings,
     joltScratch,
     Layer,
     type PhysicsSystem,
     quat,
     Raw,
+    type Unsubscribe,
     vec3
 } from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
@@ -23,6 +25,10 @@ interface CharacterFilters {
     bodyFilter: Jolt.BodyFilterJS;
     shapeFilter: Jolt.ShapeFilter;
 }
+
+// biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
+export type CharacterActionCallback = (action: any, payload?: any) => void;
+type CharacterEventMap = { action: CharacterActionCallback };
 
 export class CharacterControllerSystem {
     protected joltInterface: Jolt.JoltInterface;
@@ -53,7 +59,10 @@ export class CharacterControllerSystem {
         shapeFilter: new Raw.module.ShapeFilter()
     };
 
-    protected actionListeners: any = [];
+    /** Action events, on the shared Emitter primitive (issue #50). */
+    protected events = new Emitter<CharacterEventMap>();
+    /** Back compat so the deprecated `removeActionListener(fn)` still finds its handles. */
+    private legacyActionSubs = new Map<Function, Unsubscribe[]>();
 
     // configurable options
 
@@ -161,13 +170,19 @@ export class CharacterControllerSystem {
         this.setCapsule(1, 2);
         // create the rig anchor
         this.createAnchor();
-        // Finally, attach to main loop
-        this.physicsSystem.addPreStepListener((deltaTime: number) =>
+        // Finally, attach to main loop. Keep the handle: this used to be an inline arrow passed
+        // to `addPreStepListener`, which `removeStepListener` could never match by identity, so
+        // a destroyed character carried on being pre-stepped against a freed CharacterVirtual.
+        this.detachFromLoop = this.physicsSystem.onBeforeStep((deltaTime: number) =>
             this.prePhysicsUpdate(deltaTime)
         );
     }
+    /** Unsubscribes the pre-step callback. Replaced in the constructor. */
+    private detachFromLoop: () => void = () => {};
     // cleanup
     destroy() {
+        // stop stepping before anything is torn down
+        this.detachFromLoop();
         // remove itself from the scene
         this.removeFromScene();
         //todo: destroy the character
@@ -465,18 +480,18 @@ export class CharacterControllerSystem {
             }
         };
 
-        // jolt-physics 0.32 grew the CharacterContactListener interface (persisted/removed
-        // contacts, and the character-vs-character variants). Emscripten's JSImplementation
-        // binding throws "a JSImplementation must implement all functions" the moment Jolt calls
-        // one that JavaScript has not assigned, so every remaining callback gets the no-op /
-        // accept-everything behaviour this listener had before those functions existed.
+        // jolt-physics 0.32 grew the CharacterContactListener interface. Emscripten's
+        // JSImplementation binding throws "a JSImplementation must implement all functions" the
+        // moment Jolt calls one that JavaScript has not assigned - but the check is lazy, one
+        // per call site, so only the callbacks Jolt actually reaches have to exist.
+        //
+        // Measured against jolt-physics 1.1.0 (test/character-contact-listener.test.ts): Jolt
+        // calls exactly six of the eleven declared callbacks for a CharacterVirtual stepping
+        // against bodies. The five character-vs-character variants only fire once a
+        // CharacterVsCharacterCollision is installed, which this controller never does, so
+        // their no-op assignments were dead code and are gone. The test fails if that changes.
         this.characterContactListener.OnContactPersisted = () => {};
         this.characterContactListener.OnContactRemoved = () => {};
-        this.characterContactListener.OnCharacterContactValidate = () => true;
-        this.characterContactListener.OnCharacterContactAdded = () => {};
-        this.characterContactListener.OnCharacterContactPersisted = () => {};
-        this.characterContactListener.OnCharacterContactRemoved = () => {};
-        this.characterContactListener.OnCharacterContactSolve = () => {};
     }
     // create the core character
     initCharacter() {
@@ -828,26 +843,37 @@ export class CharacterControllerSystem {
     }
 
     //* Action Listener Functions ----------------------------
-    addActionListener = (listener: any) => {
-        this.actionListeners.push(listener);
+    /** Subscribe to every action. Returns the unsubscribe. */
+    addActionListener = (listener: CharacterActionCallback): Unsubscribe => {
+        const off = this.events.on('action', listener);
+        const subs = this.legacyActionSubs.get(listener);
+        if (subs) subs.push(off);
+        else this.legacyActionSubs.set(listener, [off]);
+        return off;
     };
-    removeActionListener = (listener: any) => {
-        this.actionListeners = this.actionListeners.filter((l: any) => l !== listener);
+    /**
+     * @deprecated identity based removal; keep the function {@link addActionListener} returns.
+     * Removes every subscription made for `listener`.
+     */
+    removeActionListener = (listener: CharacterActionCallback) => {
+        const subs = this.legacyActionSubs.get(listener);
+        if (!subs) return;
+        this.legacyActionSubs.delete(listener);
+        for (const off of subs) off();
     };
+    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
     triggerActionListeners = (action: any, payload?: any) => {
         if (this.isDebugging && this.debugVerbose)
             console.log('Character Controller:', action, payload);
-        //@ts-ignore
-        this.actionListeners.forEach((listener) => listener(action, payload));
+        this.events.emit('action', action, payload);
     };
     // watch function takes an action and a callback and adds the correct listener
-    on = (action: any, callback: any) => {
-        const listener = (a: any) => {
-            if (a === action) callback();
-        };
-        this.addActionListener(listener);
-        return () => this.removeActionListener(listener);
-    };
+    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
+    on = (action: any, callback: (action: any, payload?: any) => void): Unsubscribe =>
+        // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
+        this.events.on('action', (a: any, payload?: any) => {
+            if (a === action) callback(a, payload);
+        });
 
     //* Debug mesh functions =================================
     // create a debug mesh for the character with arrow shape

@@ -129,13 +129,28 @@ export class VehicleSystem {
 
     //* Physics Loop ====================================
 
+    /** Unsubscribes for the two loop callbacks; inline arrows could never be removed before. */
+    private loopUnsubscribes: (() => void)[] = [];
+
     private attachToLoop() {
-        this.physicsSystem.addPreStepListener((deltaTime: number) =>
-            this.prePhysicsUpdate(deltaTime)
-        );
-        this.physicsSystem.addPostStepListener((deltaTime: number) =>
-            this.postPhysicsUpdate(deltaTime)
-        );
+        this.detachFromLoop();
+        this.loopUnsubscribes = [
+            this.physicsSystem.onBeforeStep((deltaTime: number) =>
+                this.prePhysicsUpdate(deltaTime)
+            ),
+            this.physicsSystem.onAfterStep((deltaTime: number) => this.postPhysicsUpdate(deltaTime))
+        ];
+    }
+
+    /** Stop stepping the vehicles. Call before dropping the system. */
+    detachFromLoop() {
+        for (const off of this.loopUnsubscribes) off();
+        this.loopUnsubscribes = [];
+    }
+
+    destroy() {
+        this.detachFromLoop();
+        this.vehicles.clear();
     }
 
     prePhysicsUpdate(deltaTime: number) {
