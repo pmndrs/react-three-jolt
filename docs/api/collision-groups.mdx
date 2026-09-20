@@ -19,22 +19,21 @@ Each `<Physics>` world sets up three object layers and maps them onto three broa
 
 `Layer` and `NUM_OBJECT_LAYERS` are exported if you need the constants, but the tables
 themselves aren't configurable yet. Body layers follow from the `type` you give a
-[`<RigidBody>`](/api/rigid-body).
+[`<RigidBody>`](/api/rigid-body): `static` uses `NON_MOVING`, `kinematic` and `dynamic` use
+`MOVING`, `rig` uses `RIG`. (`Layer.KINEMATIC` is declared but nothing is assigned to it.)
 
 ## Groups and sub-groups
 
-Group filtering is the per-body layer you control. A `group` is a set of bodies with a shared
-filtering relationship; a `subGroup` says what kind of member this body is. The sub-group
-semantics are this library's own extension on top of Jolt's group filter.
+Group filtering is the "**this specific pair of objects shouldn't collide**" filter. Object layers
+stay the broad category filter.
 
-> [!IMPORTANT]
-> Filtering is **off by default** — it costs a little per pair, so it is not applied unless
-> asked for. Jolt does not expose `SetCollisionGroup()` to JavaScript, so filtering has to be
-> switched on **when the body is created**: at least one of `group` / `subGroup` must be present
-> at creation. Both can be changed freely afterwards.
+A `group` is a set of bodies that filter against each other; a `subGroup` is that body's id within
+the group. Two bodies consult the filter **only when their group ids match** — bodies in different
+groups, and bodies with no group at all, always collide normally. Within a group, every sub-group
+pair collides **until you turn one off**.
 
 ```tsx
-<RigidBody group={0} subGroup={1}>
+<RigidBody group={7} subGroup={1}>
     <mesh>
         <boxGeometry args={[5, 0.5, 8]} />
         <meshStandardMaterial color="#ff4060" />
@@ -42,48 +41,90 @@ semantics are this library's own extension on top of Jolt's group filter.
 </RigidBody>
 ```
 
+```tsx
+import { useJolt } from '@react-three/jolt';
+import { useEffect } from 'react';
+
+function Trapdoor() {
+    const { bodySystem } = useJolt();
+
+    useEffect(() => {
+        // the platform (sub group 1) and the player (sub group 2) stop colliding
+        bodySystem.disableCollision(1, 2);
+        return () => bodySystem.enableCollision(1, 2);
+    }, [bodySystem]);
+
+    return null;
+}
+```
+
+> [!IMPORTANT]
+> **Breaking change.** The old hard-coded sub-group 0/1/2 semantics are gone. Sub-group 0 no
+> longer means "pass through everyone in my group", 2 no longer means "collide only with my
+> group": the table starts fully enabled and you switch pairs off explicitly with
+> `disableCollision`. Give every body that needs its own filtering relationship its own sub-group
+> id.
+
+### `<RigidBody group subGroup>`
+
+Both props are **reactive** — writing them after creation pushes a new `CollisionGroup` through
+`BodyInterface.SetCollisionGroup` and wakes the body, so the change takes effect on the next step.
+A body that never asked for a group gets one lazily the first time you set either. `group={0}` and
+`subGroup={0}` are real ids and are no longer swallowed by a truthy check. Setting a prop back to
+`undefined` does not clear the group.
+
+The same thing on a [`BodyState`](/api/rigid-body#bodystate):
+
+```ts
+body.group = 7;
+body.subGroup = 2;
+// `collisionGroup` / `collisionSubGroup` are aliases of the same pair
+body.collisionSubGroup = 3;
+```
+
 Or, creating bodies by hand:
 
 ```ts
-const handle = bodySystem.addBody(mesh, { group: 0, subGroup: 1 });
+const handle = bodySystem.addBody(mesh, { group: 7, subGroup: 1 });
 const body = bodySystem.getBody(handle);
-if (body) body.subGroup = 2; // fine: it was present at creation
+if (body) body.subGroup = 2;
 ```
 
-Bodies in **different** groups always collide normally. Everything below is about bodies that
-share a group.
+### The filter table
 
-### Sub-group 0 — the default
+| call | |
+| --- | --- |
+| `bodySystem.setGroupCollision(a, b, enabled)` | turn a sub-group pair on or off |
+| `bodySystem.disableCollision(a, b)` | `setGroupCollision(a, b, false)` |
+| `bodySystem.enableCollision(a, b)` | `setGroupCollision(a, b, true)` |
+| `bodySystem.isCollisionEnabled(a, b)` | current state of that pair |
+| `bodySystem.subGroupCount` | how many sub-group ids the table holds. Default `256` |
 
-| | 0 | 1 | 2 | non-members |
-| --- | --- | --- | --- | --- |
-| **Doesn't collide** | ✅ | ✅ | | |
-| **Collides** | | | ✅ | ✅ |
+The table is a Jolt `GroupFilterTable`, built the first time a grouped body is created. **Raise
+`subGroupCount` before that** if you need more than 256 ids — the table is sized once:
 
-The conventional behaviour: members of the same group pass through each other. They also ignore
-sub-group 1. Note that they don't stack on each other — they merge.
+```ts
+bodySystem.subGroupCount = 1024;
+```
 
-### Sub-group 1 — "normal object"
+> [!CAUTION]
+> Sub-group ids are **range checked here**, because Jolt only bounds-checks the table with an
+> assert that is compiled out of the release WASM — an id past the end of the table would scribble
+> over the heap. An out-of-range id (not an integer, negative, or `>= subGroupCount`) is dropped
+> with a [`devWarn`](/advanced/memory#debug-output) naming the valid range, rather than throwing;
+> `isCollisionEnabled` fails open and returns `true`. **Nothing in this API throws**, so turn on
+> `setDebug(true)` while you are wiring filtering up.
 
-| | 0 | 1 | 2 | non-members |
-| --- | --- | --- | --- | --- |
-| **Doesn't collide** | ✅ | | | |
-| **Collides** | | ✅ | ✅ | ✅ |
+Filtering a sub-group against **itself** (`a === b`) is also rejected with a warning:
+Jolt stores only the lower triangle of the table, so the `(n, n)` slot aliases a real pair's bit.
+Give every body in a group its own sub-group id instead of relying on it.
 
-The recommended sub-group for ordinary objects that need to use a filter. They collide with each
-other and with everything else, but still pass through sub-group 0 — so a crate can fall through
-a trapdoor while stacking normally with other crates.
+### Lifecycle
 
-### Sub-group 2 — the filter/gate
-
-| | 0 | 1 | 2 | non-members |
-| --- | --- | --- | --- | --- |
-| **Doesn't collide** | | | | ✅ |
-| **Collides** | ✅ | ✅ | ✅ | |
-
-The inverse: bodies here collide **only** with members of the same group. Everything outside the
-group falls straight through. This is the piece you build one-way barriers, selective platforms
-and filters out of.
+Every grouped body owns its own `CollisionGroup`, created with the body and destroyed when the
+body is removed — handles are recycled, so a stale group is never left behind. The filter table is
+reference counted and released by `bodySystem.destroy()`, which `<Physics>` calls for you on
+unmount.
 
 ## Sensors
 

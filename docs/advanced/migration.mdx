@@ -55,21 +55,162 @@ If you call Jolt directly, note two upstream changes that bit this library:
 `BodyInterface.AddForce`/`AddTorque` gained an `EActivation` parameter (0.24), and body user data
 went from 64-bit to 32-bit (0.39).
 
-## 3. Removed
+## 3. Breaking changes
+
+Everything that can break a compiling app, by package.
+
+### `@react-three/jolt`
+
+| what | before | now |
+| --- | --- | --- |
+| **Contact handler signature** | `(handle1, handle2, manifold, settings, count, context)` | one [payload object](/api/rigid-body#payloads). The old arguments handed out Jolt pointers that were freed before the handler could run |
+| **Per-body listener arrays** | `BodyState.contactAddedListeners` / `contactRemovedListeners` / `contactPersistedListeners` / `activationListeners` | `BodyState.events`, an [`Emitter`](/api/rigid-body#events) |
+| **The 900 ms contact debounce** | `BodyState.contactThreshold`, `contactTimestamps` | **gone.** Enter/persist/exit come from Jolt's sub-shape pairs, which is what the debounce was compensating for |
+| **Collision sub-groups** | hard-coded 0/1/2 semantics | a `GroupFilterTable`. Every sub-group pair collides until you call [`disableCollision(a, b)`](/api/collision-groups#the-filter-table) |
+| **`BodyEvents` / `WorldEvents` types** | in `types.ts` | deleted. They were unreachable and described signatures that were never dispatched. Use `BodyEventMap` / `WorldEventMap` |
+| **`BodyState.getPosition(true)`** | `Jolt.Vec3` | `Jolt.RVec3` |
+| **`vec3.jolt()` / `vec3.rjolt()` / `quat.jolt()`** | returned their argument when it already was a Jolt object | always return a **new object the caller owns** |
+| **`jolt-physics`** | a dependency | a peer — add it to your app |
+| **`@react-three/drei`** | undeclared | a required peer |
+| **Console output** | ~17 unconditional `console.log`s | off unless you call `setDebug(true)` |
+
+`<RigidBody>`'s `onContactAdded` / `onContactRemoved` / `onContactPersisted` props still work as
+deprecated aliases of `onCollisionEnter` / `onCollisionExit` / `onCollisionPersist`, and now
+receive the new payload — their declared type never matched what was actually dispatched, so
+nothing that worked before breaks.
+
+### `@react-three/jolt-addons`
+
+| what | before | now |
+| --- | --- | --- |
+| **`useCommand` return value** | the `Command`, from the first render | **`undefined` on the first render**, the command from the first effect onwards. The command is no longer created during render. Use it in an effect, or guard it |
+| **`gamepad.js`** | a dependency | removed; gamepads are polled in-house. `GamepadInputEvent` and its payload are unchanged |
+| **`Commander.getSnapsot`** | the only spelling | deprecated in favour of `getSnapshot` |
+
+### `@react-three/jolt-controllers`
+
+| what | before | now |
+| --- | --- | --- |
+| **`<VehicleFourWheel>`** | the vehicle component | deprecated; forwards to [`<Vehicle type="fourWheel">`](/api/controllers#vehicle). Its `type` string is replaced by `<Vehicle type="twoWheel">` |
+| **`VehicleFourWheelManager`** | the class | renamed `FourWheelVehicleManager`; old name kept as a deprecated alias |
+| **`VehicleManagerTwoWheels`** | the class | renamed `TwoWheelVehicleManager`; old name kept as a deprecated alias |
+| **Two-wheel default settings** | merged **over** your settings | merged **under** them — a motorcycle built with a custom mass or custom wheels no longer silently gets the defaults back |
+| **`VehicleManager.settings`** | `any` | a fully resolved, typed `ResolvedVehicleSettings` |
+| **`camera-controls`** | a dependency | removed with the dead camera rig that used it |
+
+Manager source files were kebab-cased (`vehicle-manager.ts`, `four-wheel-vehicle-manager.ts`,
+`two-wheel-vehicle-manager.ts`, `wheel-state.ts`). If you were deep-importing them, import from
+the package root instead.
+
+## 4. Deprecated but still working
+
+Nothing in this list has been removed. Each one has a replacement that returns an unsubscribe,
+because removal by function identity can never match the inline arrows callers actually pass.
+
+| deprecated | use |
+| --- | --- |
+| `BodyState.addContactListener(fn, type)` / `removeContactListener(fn)` | `body.on(type, fn)` |
+| `BodyState.addActivationListener(fn)` / `removeActivationListener(fn)` | `body.onSleep(fn)` / `body.onWake(fn)`, which tell the two apart |
+| `PhysicsSystem.addPreStepListener(fn)` / `addPostStepListener(fn)` / `removeStepListener(fn)` | `onBeforeStep(fn)` / `onAfterStep(fn)`, or the [hooks](/api/physics#step-hooks) |
+| `<RigidBody onContactAdded/onContactRemoved/onContactPersisted>` | `onCollisionEnter` / `onCollisionExit` / `onCollisionPersist` |
+| `CharacterControllerSystem.removeActionListener(fn)` | keep the handle `addActionListener` / `on` returns |
+| `Commander.getSnapsot()` | `getSnapshot()` |
+| `createMeshForShape` | `createMeshFromShape` (they were byte-identical; both names still work) |
+| `VehicleFourWheel`, `VehicleFourWheelProps`, `VehicleFourWheelManager`, `VehicleManagerTwoWheels`, `VehicleFourWheelSettings`, `VehicleTwoWheelSettings` | the [`Vehicle`](/api/controllers#vehicle) equivalents |
+
+`addPreStepListener` / `addPostStepListener` now return an unsubscribe where they used to return
+`void`, so that part is source compatible; `removeStepListener(fn)` and `removeContactListener(fn)`
+now remove *every* subscription made for that function, where the old `else if` chain removed it
+from only the first channel.
+
+## 5. Removed
 
 | gone | instead |
 | --- | --- |
 | `heightField/heightfieldManager.ts` and its worker scaffold | — (never referenced) |
 | `heightField/generators-save.ts`, `utils/heightmap.ts`, `utils/psrddnoise3.ts` | — |
-| the `camera-controls`-based camera rig (`camera-rig-system-camera-controls.ts`) | the default [`CameraRigManager`](/api/controllers#camerarig) |
+| the `camera-controls`-based camera rig (`camera-rig-system-camera-controls.ts`) | the default [`CameraRigManager`](/api/controllers#camerarigmanager) |
 | `use-character-controller.ts` (empty), `tmp.ts` | — |
 | the `camera-controls` runtime dependency of `@react-three/jolt-controllers` | — |
+| `packages/react-three-jolt/types/gamepad.js.d.ts` | — (the dependency is gone) |
 | `apps/examples/src/jolt/` (vendored Jolt builds, ~1 GB) | the `jolt-physics` package |
 
-`createMeshForShape` and `createMeshFromShape` were byte-identical copies; there is now one
-implementation and **both names still work**.
+## 6. New
 
-## 4. Behaviour changes
+### `@react-three/jolt`
+
+- **[Events](/api/rigid-body#events).** `onCollisionEnter` / `onCollisionPersist` /
+  `onCollisionExit` / `onSensorEnter` / `onSensorExit` / `onIntersectionEnter` /
+  `onIntersectionExit` / `onSleep` / `onWake` / `onContactValidate` on `<RigidBody>` and
+  `<InstancedRigidBodyMesh>`; the same names plus `onSettled` and `onActivityChange` on
+  [`<Physics>`](/api/physics#world-events); `bodyState.on(type, fn)`, `physicsSystem.events`, and
+  the `useBodyEvent` / `useWorldEvent` hooks. New exported types: `CollisionTarget`,
+  `CollisionPayload`, `CollisionEnterPayload`, `CollisionExitPayload`, `SensorPayload`,
+  `ActivationPayload`, `ValidatePayload`, `BodyEventMap`, `WorldEventMap`, `Unsubscribe`,
+  `Emitter`.
+- **[Step hooks](/api/physics#step-hooks).** `useBeforePhysicsStep` / `useAfterPhysicsStep`,
+  `physicsSystem.onBeforeStep` / `onAfterStep`. The step order is now defined:
+  `beforeStep → pending actions → Step() → queued events → afterStep`, **per substep**.
+- **[Activity accounting](/api/physics#steady-state).** `bodySystem.activeBodyCount`,
+  `simulatedBodyCount`, `isSettled`.
+- **[The shape pipeline](/api/shapes#the-shape-pipeline).** `describeShape` / `generateShape` /
+  `createShapeSettings` / `descriptorKey` / `stableKey` / `scaleShape` / `validScaleFor`, the
+  `ShapeDescriptor` union, and explicit descriptors for tapered capsules, cylinders and **tapered
+  cylinders**.
+- **[Mutable compounds](/api/shapes#mutable-compounds).** `<Shape dynamic>`, `addSubShape` /
+  `removeSubShape` / `modifySubShape` (free functions and `BodyState` methods),
+  `BodyState.notifyShapeChanged`.
+- **[Object scaling](/api/shapes#scaling).** A scaled mesh below a described object produces a
+  `scaled` descriptor; `describeShape`'s `applyObjectScale`; `offsetCenterOfMass`.
+- **[Per-body collision groups](/api/collision-groups).** `bodySystem.setGroupCollision` /
+  `disableCollision` / `enableCollision` / `isCollisionEnabled` / `subGroupCount`,
+  `BodyState.collisionGroup` / `collisionSubGroup`, `BodySystem.destroy()`.
+- **[`useMouseRaycaster`](/api/queries#usemouseraycaster)**, and normal-oriented, pooled debug
+  markers on `Raycaster`.
+- **[`<Physics>` props](/api/physics#props).** `timeStep`, `maxSubSteps`, `defaultShape`, a working
+  `interpolate`, and a bounded accumulator. Plus `PhysicsSystem.accumulator`,
+  `resetAccumulator()`, `invalidatePoseCache()`, `destroyed`.
+- **Memory helpers.** `withJolt()` / `withRJolt()` / `withQuat()`, `joltScratch`,
+  `createShapeFromSettings()` / `releaseShape()`, `setDebug()`, and the allocation-free
+  `BodyState.readPose()` / `getInterpolatedPose()` / `resetPoseCache()`.
+- **`dynamicMeshStrategy`** on the body options: a trimesh on a dynamic body becomes a convex
+  hull rather than falling through the world ([#112](/api/shapes#trimeshes)).
+- `constraintSystem.constraints`, `removeConstraintsForBody()`, `removeAllConstraints()`, and
+  typed `ConstraintType` / `ConstraintOptions` / `ConstraintTypeMap`.
+
+### `@react-three/jolt-addons`
+
+- **[Gamepads](/api/addons#gamepads).** An in-house poller with `CommanderOptions.gamepad`
+  (`deadzone`, `axisThreshold`, `buttonThreshold`), the `standardGamepadButtons` /
+  `gamepadButtonName` / `standardGamepadSticks` helpers, `hasGamepadSupport()` and
+  `GamepadPoller`. Connect/disconnect is handled, and a yanked controller releases whatever it was
+  holding.
+- **[`useLookCommand` touch and gamepad](/api/addons#uselookcommand)** — `{ mouse, touch, gamepad,
+  sensitivity, invertY }`.
+- **[`<CommanderProvider>`](/api/addons#usecommander-and-commanderprovider) / `CommanderContext`**
+  to scope a commander to a subtree.
+- **`CommandInfo` is a real exported type** — callbacks used to be declared as
+  `(info: CommandCallback) => void`, so `info` was typed as the callback itself and every
+  `info.isInitial` needed a `@ts-ignore`. **Delete those.** `CommandValue`, `CommandOptions`,
+  `CommandEvent`, `CommandState` and `VectorBinding` are exported too.
+
+### `@react-three/jolt-controllers`
+
+- **[`<Vehicle>` / `useVehicle`](/api/controllers#vehicle).** One component for both vehicle types,
+  a typed `vehicleSettings` prop, injectable chassis (`bodyObject`, children-as-chassis) and
+  wheels (`wheels`, `wheelObjects`), and `followCamera`.
+- **[Camera rig options](/api/controllers#options).** `cameraPosition`, `minPitch` / `maxPitch`
+  (the old hard-coded `-1.5` / `0.5` clamp), and everything else set **before** the first step
+  rather than mutated onto a rig that is already running.
+- **[`followMode`](/api/controllers#follow-modes)** — `'free'`, `'movement'`, `'lookAt'`.
+- **[Whiskers](/api/controllers#whiskers)** — the boom steers around a corner before the wall
+  becomes a problem.
+- **Real teardown.** `CharacterControllerSystem`, `CameraRigManager` / `CameraBoom`,
+  `VehicleSystem` / `VehicleManager` and `WheelState` all have idempotent `destroy()` methods, and
+  each system's pre-step listener is a stored reference so it can actually be removed. The
+  components release everything on unmount, so mounting and unmounting them no longer leaks.
+
+## 7. Behaviour changes
 
 ### `<Physics>`
 
@@ -83,6 +224,30 @@ implementation and **both names still work**.
   deltas are dropped too.
 - **`defaultShape` is new** — the Jolt answer to rapier's `colliders`.
 - `updatePriority` is typed `number` instead of `any`.
+- **`module` no longer reinitialises the WASM module.** `initJolt(factory)` used to delete
+  `Raw.module` and spin up a brand new instance on every call — including the one `<Physics
+  module={x}>` made on every render — with no way to free the old one and every live handle left
+  dangling. The same factory reference now reuses the module, and swapping to a *different* one
+  while a world exists is refused with a warning. `<Physics>` also calls `suspend()`
+  unconditionally now; toggling `module` used to change the number of hooks between renders.
+
+### Bodies and events
+
+- **`<RigidBody>`'s listener effect never registered anything.** Its dependency array read
+  `rigidBodyRef.current`, a mutable ref, which is not reactive — on the render that created the
+  body the effect had already run with `undefined`. If you concluded that contact props didn't
+  work, they do now.
+- **`<InstancedRigidBodyMesh>` never destroyed its bodies or its `InstancedMesh`.** Both are
+  released on unmount now, `count` changes add and remove bodies incrementally, and shrinking
+  `count` no longer copies the old, larger buffer over the new one.
+- **`BodyState.color` on a non-instanced body** fell through into `setColorAt`, a method only
+  `THREE.InstancedMesh` has. It works, sets `instanceColor.needsUpdate` on instanced bodies, and
+  clones a shared material exactly once instead of mutating it.
+- **`BodyState.scale = 2`** used to apply a `NaN` scale (`inScale instanceof Number` is always
+  false). A plain number works, and non-uniform scale is supported wherever Jolt allows it.
+- **`<Heightfield>`** no longer creates or leaks a stale body when `url` changes (or the component
+  unmounts) while a previous image is still loading, and an invalid sample grid throws a clear
+  error naming the count instead of failing silently.
 
 ### Constraints
 
@@ -108,7 +273,28 @@ values change. New: `constraintSystem.constraints`, `removeConstraintsForBody()`
 - `Multicaster` gained `destroy()` (it leaked its raycaster) and now clears `results` between
   casts instead of growing forever.
 - `ShapeCollider.destroy()` was a no-op; it now frees everything it owns and is idempotent.
-  Setting `position`/`rotation`/`matrix` no longer allocates a transform per call.
+  Setting `position`/`rotation`/`matrix` no longer allocates a transform per call, and
+  `collider.shape` is properly reference counted.
+- `Raycaster.drawMarker()` drew a world-axis-aligned cross whatever it hit; markers now orient
+  along the hit normal, and the debug objects are pooled instead of a fresh
+  geometry/material/`Object3D` per cast.
+- `ShapecastHit`'s constructor used to `destroy()` the by-value return of `GetPointOnRay()` — the
+  binder's shared static temporary — and `impactNormal` leaked a `BodyID`, `SubShapeID` and
+  `RVec3` per read. Both fixed.
+
+### Shapes
+
+- **`<Shape>` rebuilt its shape only when `type` changed, and never released anything.** Changing
+  `size` / `radius` / `height` / `scale` / children now replaces the shape exactly once and
+  releases the superseded one; unmounting releases everything it owns.
+- A `ConeGeometry` used to become a NaN-sized cylinder (three keeps its own `{ radius }`
+  parameters); it is now inferred as a tapered cylinder.
+- Cylinders thinner than the default 0.5 convex radius no longer fail to build.
+- `generateShapeSettings('box')` with no options no longer throws, and a numeric `size` means a
+  cube rather than `(size, NaN, NaN)`.
+- `updateScaleShape` was a `console.warn` stub; it wraps the shape in a `ScaledShape`.
+- The shape system leaked one WASM object per point, vertex and triangle. Building a mesh collider
+  from a 2k-triangle sphere left 3078 live Jolt objects behind; it now leaves none.
 
 ### Input (`@react-three/jolt-addons`)
 
@@ -116,15 +302,33 @@ values change. New: `constraintSystem.constraints`, `removeConstraintsForBody()`
   four `window` listeners and a gamepad poll on first use and never released them. It is
   reference counted now, commands register in an effect rather than during render, and
   everything is removed on unmount.
-- **`CommandInfo` is a real exported type.** Callbacks were declared as
-  `(info: CommandCallback) => void`, so `info` was typed as the callback itself and every
-  `info.isInitial` needed a `@ts-ignore`. **Delete those.**
 - `Command.setOptions` indexed by value (`setOptions({ sensitivity: 2 })` wrote `command[2]`);
   fixed.
 - `VectorCommand` mutated the shared preset when given `bindings`, leaking bindings into every
   other command using that preset; fixed.
+- `vectorPresets.look` names its vertical directions `up` / `down`, but `VectorCommand` only
+  mapped `forward` / `backward` onto `y` — so the whole `look` preset drove yaw with its pitch
+  bindings. Fixed.
+- `Commander.updateState` never removed a command that went inactive, so `useCommandState`
+  consumers kept acting on an input nobody was giving any more. Fixed.
 - `useLookCommand` removes its `mouseout` listener and reads state through refs.
-- **New:** `<CommanderProvider>` / `CommanderContext` to scope a commander to a subtree.
+- The commander no longer throws in environments with no Gamepad API (SSR, tests), and the
+  poller removes every listener it adds — `gamepad.js` used to leave a `window` `error` listener
+  behind permanently.
+
+### Controllers
+
+- **Step listeners are removable.** All four controller systems subscribed with inline arrows that
+  `removeStepListener`'s identity match could never find, so a destroyed character kept being
+  pre-stepped against a freed `CharacterVirtual` and `CameraRigManager.detachFromLoop()` silently
+  did nothing.
+- `CharacterController.on`, `CameraRigManager.onCamera` and `VehicleManager.onPreStep` /
+  `onPostCollide` / `onPostStep` / `onAction` keep their signatures and are reimplemented on the
+  shared emitter.
+- `createWheelSettings` understands an explicit wheel `position`, vector-valued settings and
+  `suspensionSpring`, and no longer assigns the library's own layout keys onto the Jolt settings.
+- The five character-vs-character `CharacterContactListenerJS` callbacks were dead code and are
+  removed, with a test that fails if Jolt ever starts calling them.
 
 ### Memory
 
@@ -141,19 +345,28 @@ argument"; `quat.jolt(undefined)` returns identity instead of throwing; the shap
 longer leaks one WASM object per vertex/triangle; `RaycastHit`/`ShapecastHit.impactNormal` no
 longer leak a `BodyID`, `SubShapeID` and `RVec3` per read.
 
-**New helpers:** `withJolt()` / `withRJolt()` / `withQuat()`, `joltScratch`,
-`createShapeFromSettings()` / `releaseShape()`, `setDebug()`, `PhysicsSystem.destroyed`, and the
-allocation-free `BodyState.readPose()` / `getInterpolatedPose()` / `resetPoseCache()`. See
-[Memory & lifecycle](/advanced/memory).
+`generateJoltMatrix()` returns a real `RMat44` copy — the binder returns a pointer to a single
+static temporary from a "by value" return, so the matrix used to be silently rewritten by the next
+caller, and destroying it freed memory the binder owns.
+
+See [Memory & lifecycle](/advanced/memory) for the full ownership rules, and
+[Contributing](/advanced/contributing#working-on-the-physics-layer) before you touch `systems/`.
 
 ### Logging
 
 ~17 unconditional `console.log` calls are gone, and the remaining warnings are gated behind
 `setDebug(true)` (off by default). If you relied on the library's console output, opt back in.
 
-## 5. Packaging
+## 8. Packaging
 
 All three packages declare `"sideEffects": false`, ship `exports` maps with a `./package.json`
 entry and a `default` fallback, keep `main`/`module`/`types` for older resolvers, and externalise
 their real dependencies properly (`gamepad.js` and `suspend-react` used to be silently inlined
-into `dist`).
+into `dist`). `files` now includes `CHANGELOG.md`, and each package declares
+`"type": "commonjs"` and `"engines": { "node": ">=22" }` of its own.
+
+The declaration files changed shape: `exports` nests `types` inside `import` / `require`, so ESM
+and CJS consumers each get their own bundled `.d.mts` / `.d.cts` rather than a graph of per-file
+declarations. That is what fixes `arethetypeswrong`'s "masquerading as CJS" finding under
+`node16 (from ESM)`. `publint` and `@arethetypeswrong/cli --pack` are clean in all four resolution
+modes on all three packages. Nothing about how you import them changes.

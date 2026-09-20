@@ -61,6 +61,16 @@ yarn docs:build  # static build into docs/out
 Front matter is `title`, `description` and `nav` — one ordering number shared across every page.
 `DEVELOPMENT.md` has the full conventions and the GitHub Pages setup.
 
+Two rules for doc pages:
+
+- **Internal links are `/section/page#anchor`**, where the page is `docs/section/page.mdx` and the
+  anchor is the slug of a heading on it (lowercase, punctuation dropped, spaces to hyphens). A
+  broken anchor renders as a link to the top of the page rather than an error, so check them.
+- **Every `ts` / `tsx` code sample is expected to typecheck** against the built `dist`. The
+  cheapest way to verify a sample is to drop it into a scratch file under `apps/examples/src` and
+  run `tsc -p apps/examples`. A sample that can't (a Next.js snippet, a partial JSX fragment)
+  should be obviously partial.
+
 ## Lint, format, test
 
 ```sh
@@ -79,6 +89,21 @@ single quotes, no trailing commas. `yarn lint` runs in CI and must exit 0.
 > default `React` import into `import type`. Format only your own files:
 > `yarn biome format --write <paths>`. `LINTING.md` lists the rules currently downgraded to
 > `warn` and why.
+
+## Merging
+
+> [!CAUTION]
+> **Git merges duplicate methods silently.** Two branches that each add a `destroy()`, a listener
+> array or a `dispose()` to the same class merge cleanly into a class with the method twice — no
+> conflict, and in JavaScript the *last* definition wins, so the first branch's teardown
+> disappears without a single error. Before you add a teardown method, a listener list or an
+> `on*` helper to an existing class, **grep for one first**; after a merge, grep the file again.
+>
+> The same applies to the listener convention: `emitter.on(type, fn)` returns an unsubscribe and
+> nothing is ever removed by function identity. If you find yourself writing a
+> `removeXListener(fn)`, there is almost certainly one already — and it is almost certainly
+> deprecated. `PhysicsSystem.events.listenerCount(type)` is the supported test hook for asserting
+> that a subscription was actually dropped.
 
 ## Tests
 
@@ -125,3 +150,13 @@ Three things to read before your first PR into `systems/`:
 3. [The Jolt docs](https://jrouwe.github.io/JoltPhysics/) — the JS API mirrors the C++ one, and
    [`JoltJS.idl`](https://github.com/jrouwe/JoltPhysics.js/blob/main/JoltJS.idl) is the
    authoritative list of what is exposed to JavaScript.
+
+The IDL is a *declaration*, not a promise about what Jolt actually calls. Measured against
+jolt-physics 1.1.0, a `CharacterVirtual` stepping against bodies invokes six of
+`CharacterContactListenerJS`'s eleven declared callbacks (`OnAdjustBodyVelocity`,
+`OnContactValidate`, `OnContactAdded`, `OnContactPersisted`, `OnContactRemoved`,
+`OnContactSolve`); the five character-vs-character ones only fire once a
+`CharacterVsCharacterCollision` is installed. Emscripten's `hasOwnProperty` check is lazy — one
+per call site — so the unused ones need no stubs. If you are about to add a no-op callback
+"because the IDL says so", write a test that fails when Jolt starts calling it instead
+(`packages/react-three-jolt-controllers/test/character-contact-listener.test.ts` is the pattern).

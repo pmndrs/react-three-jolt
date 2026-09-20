@@ -1,6 +1,6 @@
 ---
 title: Controllers
-description: CharacterController, CameraRig and VehicleFourWheel from @react-three/jolt-controllers.
+description: CharacterController, CameraRig and Vehicle from @react-three/jolt-controllers.
 nav: 7
 ---
 
@@ -91,24 +91,56 @@ Movement and state:
 | `position`, `rotation`, `linearVelocity` | three.js types, get/set |
 | `isMoving`, `isRunning`, `isCrouched`, `isSliding`, `isExhausted`, `isRotating`, `hangtime` | state |
 | `anchor` | the `BodyState` other things (like the camera rig) attach to |
-| `on(action, callback)` | subscribe to an action, returns an unsubscribe function |
-| `destroy()` | called for you when the component unmounts |
+| `on(action, callback)` | subscribe to one action; returns an unsubscribe |
+| `addActionListener(fn)` | subscribe to *every* action; returns an unsubscribe |
+| `destroy()` | idempotent; called for you when the component unmounts |
+
+Actions, and what they carry:
+
+| action | payload |
+| --- | --- |
+| `'falling'` | `true` on the first frame of hangtime, then the hangtime in seconds |
+| `'jump'` | the jump counter |
+| `'crouched'` | `boolean` |
+| `'running'` | the new speed on start, `0` on stop |
+| `'exhausted'` | the exhaustion time limit |
+| `'exausted'` | `false` — the spelling is a bug in the source; it is a *different* string from `'exhausted'` |
+
+```ts
+import type { CharacterControllerSystem } from '@react-three/jolt-controllers';
+
+function watchJumps(characterSystem: CharacterControllerSystem) {
+    const off = characterSystem.on('jump', (_action, count) => console.log('jump', count));
+    off();
+}
+```
+
+`removeActionListener(fn)` still exists and is deprecated — keep the unsubscribe instead.
 
 Tuning (all plain properties with sensible defaults):
 
 `characterSpeed` (6), `characterSpeedCrouched` (3), `characterSpeedExhausted` (2), `jumpSpeed`
 (15), `jumpLimit` (2), `jumpDegradeFactor` (0.5), `characterHeightStanding` (2),
 `characterRadiusStanding` (1), `characterHeightCrouching` (1), `characterRadiusCrouching` (0.8),
-`allowAirbornControl`, `enableCharacterInertia`, `enableCharacterRotation`, `enableWalkStairs`,
-`enableStickToFloor`, `allowSliding`, `allowRunning`, `enableExhaustion`, `runningTimeLimit`
-(5000 ms), `exauhstionTimeLimit` (7000 ms), `maxRotationSpeed`, `lerpFactor`.
+`allowAirbornControl` (true), `enableCharacterInertia` (true), `enableCharacterRotation` (true),
+`enableWalkStairs` (true), `enableStickToFloor` (true), `allowSliding` (false), `allowRunning`
+(true), `enableExhaustion` (true), `allowJumpWhileFalling` (true), `runningTimeLimit` (5000 ms),
+`exauhstionTimeLimit` (7000 ms, spelled as in the source), `maxRotationSpeed` (0.1 rad/frame),
+`lerpFactor` (0.4).
 
 Stair and floor behaviour maps onto Jolt's own settings: `walkStairsStepUp`,
 `walkStairsMinStepForward`, `walkStairsStepForwardTest`, `walkStairsStepDownExtra`,
-`stickToFloorStepDown`.
+`stickToFloorStepDown`. Ground state is readable through `groundState`, `isSupported`,
+`isFalling`, `groundNormal`, `groundPosition`, `groundVelocity`, `groundMaterial` and
+`groundBodyHandle`.
 
 The character uses `Layer.RIG`, so it does not collide with other rigs — see
 [layers](/api/collision-groups#preset-layers).
+
+> [!NOTE]
+> There is no head-collision event (`onHeadHit` / `headAngle`) on this branch. Jolt reports six of
+> the eleven declared `CharacterContactListenerJS` callbacks for a `CharacterVirtual` stepping
+> against bodies, so the building blocks are there, but nothing surfaces a head hit yet.
 
 ## CameraRig
 
@@ -131,47 +163,257 @@ itself automatically. Otherwise pass a body:
 <CameraRig anchor={body.current ?? undefined} />
 ```
 
-Mouse/stick look and zoom are bound through
+Mouse, touch, stick look and wheel zoom are bound through
 [`useLookCommand`](/api/addons#uselookcommand); `R` resets the camera behind the anchor.
 
-`useCameraRig()` gives you the `CameraRigManager` directly (it also takes over r3f's default
-camera — and restores it on unmount):
+### Options
+
+Every option below is also a `<CameraRig>` prop. They reach the boom **before the rig is first
+stepped**, so the camera opens already framed instead of snapping into place on frame one.
+Changing one afterwards updates the live rig through `setOptions()` — the manager is memoised and
+is never rebuilt for a prop change, and a new `distance` is eased into rather than snapped to.
+
+| option | default | |
+| --- | --- | --- |
+| `cameraPosition` | `(0, 0, 0)` | where the rig's `main` camera starts, in rig space. A camera anywhere other than the origin **defines the boom's length, pitch and yaw** |
+| `distance` | `5` | boom length, metres. An explicit value wins over `cameraPosition` |
+| `minDistance` / `maxDistance` | `0.1` / `100` | zoom limits |
+| `pitch` | `0` | starting pitch, radians; negative looks down |
+| `minPitch` / `maxPitch` | `-1.5` / `0.5` | what a look command may reach |
+| `yaw` | `0` | starting yaw about world up |
+| `collisionRadius` | — | radius of the camera's collision sphere; left to the shape collider's own default when unset |
+| `smoothing` | `0.5` | lerp factor while the boom changes length |
+| `lookSpeed` / `zoomSpeed` | `1` / `1` | input multipliers |
+| `allowCameraClipping` | `false` | skip the collision, obstruction and shapecast tests entirely |
+| `obstructionBuffer` | `0.01` | gap kept between the camera and whatever obstructs it |
+| `target` | `(0, 0, 0)` | point the boom frames, relative to the pivot |
+| `updateMode` | `'demand'` | `'demand'` recomputes on every command, `'additive'` once per frame |
+| `followTarget` | — | `BodyState` to follow, before the first step |
+| `anchorOffset` | `(0, 2, 0)` | where on the body the boom hangs |
+| `positionUpdateType` | `'distance'` | or `'fixed'` |
+| `debug` | `true` | draw the rig's spaces |
+
+```tsx
+<CameraRig cameraPosition={[4, 4, 4]} minPitch={-1.2} maxPitch={0.4} smoothing={0.35} />
+```
+
+### Follow modes
+
+A PC-style rig only *translates* with its anchor, so running off sideways leaves you looking at
+the character's ear. `followMode` decides where the rig points:
+
+| mode | |
+| --- | --- |
+| `'free'` (default) | the boom only turns when the player turns it |
+| `'movement'` | the boom eases round to trail the character's horizontal velocity, so heading off in a new direction swings the camera in behind you |
+| `'lookAt'` | the boom eases round so `lookAtTarget` stays framed past the character |
+
+```tsx
+<CameraRig followMode="movement" rotationSpeed={3} movementThreshold={0.5} />
+```
+
+| option | default | |
+| --- | --- | --- |
+| `followMode` | `'free'` | |
+| `rotationSpeed` | `2` | how fast an automatic mode eases the yaw round, per second. Always takes the short way |
+| `movementThreshold` | `0.5` | ground speed, m/s, the character must beat before `'movement'` steers |
+| `manualOverrideTimeout` | `1000` | ms a look command parks the automatic modes for |
+| `lookAtTarget` | — | `THREE.Object3D \| THREE.Vector3`, for `'lookAt'` |
+| `characterSystem` | — | whose velocity drives `'movement'`; set for you inside a `<CharacterController>` |
+
+Neither automatic mode fights the player: `CameraBoom.move()` / `rotate()` stamp `lastLookTime`,
+so the existing look bindings need no changes. Inside a `<CharacterController>` the rig reads the
+character's own `linearVelocity` — the anchor it follows is a kinematic stand-in for a
+`CharacterVirtual` and does not carry one. Standalone, it falls back to the followed body's
+velocity.
+
+### Whiskers
+
+The boom already shape-casts backwards and pulls the camera in when a wall gets between it and the
+player, which reads as a snap. With `whiskers` on it also fans short rays out either side of the
+boom every step and rotates the yaw away from whatever they touch, so the camera slides around a
+corner before the wall ever becomes a problem.
+
+```tsx
+<CameraRig whiskers whiskerLength={3} whiskerStrength={2} />
+```
+
+| option | default | |
+| --- | --- | --- |
+| `whiskers` | `false` | |
+| `whiskerCount` | `5` | fanned evenly across the spread |
+| `whiskerSpread` | 60° | half-angle of the fan either side of the boom, radians |
+| `whiskerLength` | `3` | metres |
+| `whiskerStrength` | `2` | peak yaw rate a fully buried whisker asks for, rad/s |
+| `whiskerDamping` | `0.2` | how fast the steering rate catches up; lower is smoother |
+
+`boom.isWhiskerSteering` says whether anything is currently in the way (it is a field on
+`CameraBoom`, not an option), and `boom.whiskerYawVelocity` is the current rate. The steering is
+spring damped, so it eases in and decays back to zero once the whiskers come clear.
+
+The whisker raycaster is built lazily the first time whiskers are switched on and is freed by
+`destroy()` with the boom's other queries. The per-step sweep allocates on neither side of the
+WASM boundary.
+
+### `CameraRigManager`
+
+`useCameraRig(options)` gives you the manager directly. It takes over r3f's default camera — and
+restores it on unmount — and disables the r3f `controls` while it is mounted.
 
 | member | |
 | --- | --- |
+| `setOptions(options)` | change options on a live rig; the rig is not rebuilt |
 | `attach(body, offset?)` / `detach()` / `reAttach()` | follow a `BodyState` |
-| `anchorOffset` | where on the body the boom hangs (default `[0, 2, 0]`) |
 | `moveBoom(lookVector)` / `zoom(level)` | what the look command drives |
 | `createCamera(name, options?)` / `addCamera(name, camera, space?)` / `setActiveCamera(name)` / `getCamera(name)` / `removeCamera(name)` | multiple cameras, positioned in rig space |
-| `onCamera(fn)` | subscribe to camera changes; returns an unsubscribe function |
-| `controls` | the `CameraBoom`: collision and obstruction handling |
+| `onCamera(fn)` | subscribe to camera changes; returns an unsubscribe |
+| `controls` | the [`CameraBoom`](#camerarig): collision, obstruction and whiskers |
 | `debug` | draw the rig's spaces |
+| `destroy()` | **the public teardown** |
+
+> [!IMPORTANT]
+> `destroy()` stops the rig being stepped, frees the boom's raycaster, shapecaster and shape
+> collider, and removes every body and three.js object the rig created. It is idempotent.
+> `useCameraRig` and `<CameraRig>` call it on unmount, so mounting and unmounting a rig no longer
+> leaks. `attachToLoop()` / `detachFromLoop()` are private on the manager — `destroy()` is what
+> you call. (`VehicleSystem.detachFromLoop()` is the one public exception.)
+
+On the boom itself, `initialize(options)` configures it and **snaps** to the resulting pose,
+`setOptions(options)` eases into it and only touches the options you passed, and `destroy()` is
+likewise idempotent.
 
 Bodies marked [`allowObstruction`](/api/rigid-body#props) let the boom pull the camera in (or
 see through them) rather than getting stuck behind them.
 
-## VehicleFourWheel
+## Vehicle
 
-A Jolt wheeled-vehicle constraint with engine, transmission, differentials and suspension.
+One component for every kind of vehicle: a Jolt vehicle constraint with engine, transmission,
+differentials and suspension.
 
 ```tsx
-import { VehicleFourWheel } from '@react-three/jolt-controllers';
+import { Vehicle } from '@react-three/jolt-controllers';
 
-<VehicleFourWheel position={[0, 2, 0]} name="car" />;
+<Vehicle type="fourWheel" position={[0, 25, 0]} vehicleSettings={{ vehicleMass: 900 }} />;
 ```
 
-| prop | type | |
-| --- | --- | --- |
-| `position` | `THREE.Vector3 \| number[]` | reactive |
-| `type` | `string` | `'twoWheel'` switches to the two-wheeled manager |
-| `name` | `string` | defaults to `'car'` (or `'bike'`) |
+| prop | type | default | |
+| --- | --- | --- | --- |
+| `type` | `'fourWheel' \| 'twoWheel'` | `'fourWheel'` | a car or a motorcycle |
+| `name` | `string` | `'car'` / `'bike'` | the key it is registered under in its `VehicleSystem` |
+| `position` | `THREE.Vector3 \| [number, number, number]` | — | reactive |
+| `vehicleSettings` | `VehicleSettings` | per type | merged **over** the defaults — see below |
+| `bodyObject` | `Object3DSource` | — | your own chassis object |
+| `childrenAsChassis` | `boolean` | true when children are given and `bodyObject` is not | |
+| `wheels` | `VehicleWheelOptions[]` | — | per-wheel settings, in constraint order |
+| `wheelObjects` | `Object3DSource[]` | — | just the objects, in constraint order |
+| `debug` | `boolean` | `true` | show the generated stand-in meshes |
+| `followCamera` | `boolean` | `true` | translate the r3f camera by the chassis delta each step |
+| `onVehicle` | `(vehicle: VehicleManager \| null) => void` | — | called when the manager appears and again with `null` when it goes |
 
-Driving is bound to the `move` command (stick/WASD); the component also moves the r3f camera to
-follow the vehicle. The underlying `VehicleSystem` / `VehicleFourWheelManager` expose
-`addVehicle(name, settings?)`, `getVehicle(name)`, `setPosition(name, position)`, `move(direction)`
-and the step hooks `onPreStep`, `onPostCollide`, `onPostStep`, plus `onAction(type, fn)`.
+`Object3DSource` is `THREE.Object3D | RefObject<THREE.Object3D | null> | null | undefined`, so a
+ref is fine and is resolved after mount.
+
+Driving is bound to the `move` command (stick/WASD) out of the box.
+
+### Injecting your own meshes
+
+```tsx
+<Vehicle type="fourWheel" position={[0, 25, 0]} wheelObjects={[fl, fr, bl, br]}>
+    <primitive object={chassisGltf.scene} />
+</Vehicle>
+```
+
+Children become the chassis by default. `bodyObject` does the same with an object or a ref, and
+`wheels` / `wheelObjects` do it for the wheels — position *and* rotation, steering included. Wheel
+order is `fl, fr, bl, br` for a four-wheeler and `front, back` for a two-wheeler
+(`wheelOrderByType`). If both `wheels` and `wheelObjects` are given, `wheels` wins.
+
+**Ownership:** the manager disposes only the meshes it generated itself. An object you injected is
+detached on teardown and never disposed.
+
+### `useVehicle`
+
+```tsx
+import { useVehicle } from '@react-three/jolt-controllers';
+import { useEffect } from 'react';
+
+function Car() {
+    const vehicle = useVehicle({ type: 'fourWheel', position: [0, 25, 0] });
+
+    useEffect(() => vehicle?.onPostStep(() => console.log(vehicle.position)), [vehicle]);
+
+    return null;
+}
+```
+
+`useVehicle(options)` returns the `VehicleManager`, or **`null` on the first render** — it is
+created after mount. Options are `name`, `type`, `settings`, `position`, `bodyObject`, `wheels`,
+`wheelObjects`, `debug` and `addToScene` (default `true`). Settings are read when the vehicle is
+built: changing `name` or `type` rebuilds it, and live changes go through the manager's own
+setters. The vehicle, its `VehicleSystem` and everything they own are destroyed on unmount.
+
+### `VehicleManager`
+
+| member | |
+| --- | --- |
+| `move(direction)` | a `Vector3` or `Vector2` of driver input |
+| `setHandBrake(v)` / `setBrake(v)` / `triggerTurbo(extraTime?)` | |
+| `setPosition(position)` | |
+| `setBodyObject(object \| null)` | `null` puts the generated box back |
+| `setWheelObject(index \| name, object \| null)` / `setWheelObjects(objects)` | |
+| `getWheel(index \| name)` / `getWheelObject(index \| name)` | |
+| `onPreStep(fn)` / `onPostCollide(fn)` / `onPostStep(fn)` | each returns an unsubscribe |
+| `onAction(type, fn)` | ditto |
+| `position`, `bodyObject`, `wheels`, `wheelOrder`, `settings`, `debug` | |
+| `destroy()` | idempotent |
+
+`settings` is a fully resolved, typed `ResolvedVehicleSettings` object rather than `any`.
+`FourWheelVehicleManager` and `TwoWheelVehicleManager` are the two concrete classes;
+`VehicleSystem` holds them by name (`addVehicle`, `getVehicle`, `removeVehicle`, `setPosition`,
+`detachFromLoop`, `destroy`).
+
+### Settings
+
+`vehicleSettings` is a discriminated union on `type`. Shared by both:
+
+`bodyPosition`, `castType` (`'ray' | 'sphere' | 'cylinder'`), `vehicleLength`, `vehicleWidth`,
+`vehicleHeight`, `vehicleMass`, `maxPitchRollAngle`, `maxEngineTorque`, `clutchStrength`,
+`bodyObject`, `wheelObjects`.
+
+**`fourWheel`** adds `fourWheelDrive`, `frontBackLimitedSlipRatio`, `leftRightLimitedSlipRatio`,
+`antiRollbar`, `splitEngineTorqueFront`, `splitEngineTorqueRear`, `frontRollBarStiffness`,
+`rearRollBarStiffness` and a `wheels` object with `fl` / `fr` / `bl` / `br` overrides. Defaults:
+4.0 × 1.8 × 0.4 m, 1500 kg, cylinder cast, four-wheel drive, 500 N·m of engine torque, 30° of
+steering, 0.5 m wheels.
+
+**`twoWheel`** adds `steerSpeed` (radians per second the steering angle may change by),
+`casterAngle` and a `wheels` object with `front` / `back` overrides. Defaults: 0.8 × 0.4 × 0.6 m,
+250 kg, 30° caster, 0.31 m wheels.
+
+Per-wheel settings cover `radius`, `width`, `position` (the attachment point; when given it
+overrides the `wheelOffsetHorizontal` / `wheelOffsetVertical` layout helpers),
+`suspensionMinLength` / `suspensionMaxLength` / `suspensionPreloadLength`, `suspensionDirection`,
+`suspensionForcePoint`, `suspensionSpring` (`{ frequency, damping }`), `steeringAxis`, `wheelUp`,
+`wheelForward`, `inertia`, `angularDamping`, plus `maxSteerAngle` / `maxBrakeTorque` /
+`maxHandBrakeTorque` (four-wheel) or `posZ` / `suspensionFreq` / `brakeTorque` (two-wheel).
+
+`defaultFourWheelVehicleSettings`, `defaultTwoWheelVehicleSettings` and
+`resolveVehicleSettings(settings)` are exported if you want to inspect or pre-merge them. Your
+settings are merged **over** the defaults — a motorcycle built with a custom mass or custom wheels
+no longer silently gets the defaults back.
+
+### `VehicleFourWheel`
 
 > [!WARNING]
-> The vehicle components assume the default r3f `controls` are present and drive the camera
-> themselves. Expect friction if you also manage the camera — that, and configurable vehicle
-> settings through props, are known gaps.
+> **Deprecated.** `<VehicleFourWheel />` is exactly `<Vehicle type="fourWheel" />` and now forwards
+> to it; the `type` string it used to take is replaced by `<Vehicle type="twoWheel">`. It keeps
+> working for one release and warns once under [`setDebug(true)`](/advanced/memory#debug-output).
+> `VehicleFourWheelProps` is likewise a deprecated alias of `VehicleProps`.
+
+The managers were renamed to `FourWheelVehicleManager` / `TwoWheelVehicleManager`; the old
+`VehicleFourWheelManager` and `VehicleManagerTwoWheels` names are exported as deprecated aliases.
+
+> [!NOTE]
+> `<Vehicle followCamera>` translates the r3f camera by the chassis delta on every pre-step (and
+> retargets the default `controls` if there are any). Pass `followCamera={false}` if you are
+> managing the camera yourself — with a [`<CameraRig>`](#camerarig), for instance.

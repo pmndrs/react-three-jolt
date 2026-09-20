@@ -36,23 +36,47 @@ already exist), subscribes both callbacks, and unsubscribes on unmount. Registra
 an effect, so Strict Mode's double render can't double-register, and the callbacks are read
 through refs — inline arrow functions do not re-subscribe on every render.
 
+> [!IMPORTANT]
+> Because registration is an effect, the hook **returns `undefined` on the first render** and the
+> `Command` from the first effect onwards. Use the returned command inside an effect, or guard it:
+>
+> ```tsx
+> const command = useCommand('jump');
+> useEffect(() => command?.setOptions({ rate: 0.2 }), [command]);
+> ```
+
 Commands with a name in `commonCommands` pick up their bindings automatically:
 `moveForward`, `moveBackward`, `moveLeft`, `moveRight`, `jump`, `crouch`, `run`, `fire`,
 `spaceFire`.
 
 ### `CommandInfo`
 
-Every callback receives:
+Every callback receives a `CommandInfo` — a real exported type, so `info.isInitial` no longer
+needs a `@ts-ignore`:
+
+```ts
+type CommandInfo = {
+    command: Command;
+    label: string;
+    method: string;
+    value: CommandValue;
+    isInitial: boolean;
+    startTime: number;
+    event?: CommandEvent;
+    duration?: number;
+};
+```
 
 | field | |
 | --- | --- |
 | `command` | the `Command` itself |
 | `label` | its name |
-| `method` | what triggered it (`keydown`, `mouseup`, `update`, …) |
-| `value` | `boolean`, `number` or `{ x, y }` for vector commands |
+| `method` | what triggered it — the event's `type`, or `'update'` |
+| `value` | `string`, `number`, `boolean` or `{ x, y }` for vector commands (`CommandValue`) |
 | `isInitial` | `true` on the first fire of a press — what you check to avoid key repeat |
-| `startTime`, `duration` | ms |
-| `event` | the original keyboard/mouse/gamepad event, if any |
+| `startTime` | ms |
+| `duration` | ms; set on the initial down and on every up |
+| `event` | the original `KeyboardEvent`, `MouseEvent` or `GamepadInputEvent` (`CommandEvent`) |
 
 ### `CommandOptions`
 
@@ -95,7 +119,8 @@ For per-frame reading prefer `useCommand`'s callbacks; this one re-renders.
 
 ## `useLookCommand`
 
-Pointer look and wheel zoom, with optional pointer lock:
+Look and zoom from **mouse, touch and gamepad** — all three on by default, each registered in its
+own effect with a full cleanup.
 
 ```tsx
 import { useLookCommand } from '@react-three/jolt-addons';
@@ -103,21 +128,45 @@ import { useLookCommand } from '@react-three/jolt-addons';
 useLookCommand(
     (look) => rig.moveBoom(look), // THREE.Vector2 of movement deltas
     (zoom) => rig.zoom(zoom),
-    { lockPointer: true, invert: { y: true } }
+    {
+        mouse: true,
+        touch: true,
+        gamepad: { stick: 'right', deadzone: 0.15 },
+        sensitivity: { mouse: 1, touch: 1, gamepad: 200 },
+        invertY: false,
+        lockPointer: true
+    }
 );
 ```
 
+Both handlers are positional and required. The zoom handler is a `wheel` listener on the target
+element and is independent of the `mouse` option.
+
 | option | default | |
 | --- | --- | --- |
+| `mouse` | `true` | mouse drag / pointer lock |
+| `touch` | `true` | one-finger touch drag |
+| `gamepad` | `true` | `false` to disable, or `{ stick: 'left' \| 'right', deadzone?: number }` |
+| `sensitivity` | `{ mouse: 1, touch: 1, gamepad: 200 }` | per source |
+| `invertY` | `false` | shorthand for `invert.y`; it wins if both are given |
+| `invert` | — | `{ x?, y? }` |
 | `domElement` | `document.body` | where the listeners go |
 | `lockPointer` | `false` | request pointer lock on mouse down |
 | `useAccelerated` | `false` | use the OS pointer acceleration curve while locked |
-| `invert` | — | `{ x?, y? }` |
 
-The look handler fires while the pointer is locked **or** the mouse is held down. Both handlers
-are read through refs, and every listener is removed on unmount.
+- **Mouse** deltas fire while the pointer is locked **or** the mouse is held down.
+- **Touch** uses pointer events filtered on `pointerType === 'touch'`; a second finger (a pinch)
+  abandons the drag rather than jumping. `touch-action: none` is set on the target element while
+  mounted and restored on cleanup.
+- **Gamepad** samples the stick once per animation frame and scales by the frame delta (so
+  `sensitivity.gamepad` is "units at full deflection per second"), clamped so a backgrounded tab
+  can't hand it one enormous delta. The stick defaults to the right one; environments with no
+  Gamepad API skip it silently.
 
-## `useCommander` and `<CommanderProvider>`
+The look vector handed to your handler is a single reused `THREE.Vector2`, and a zero delta is not
+dispatched at all. Both handlers are read through refs, and every listener is removed on unmount.
+
+## `useCommander` and `CommanderProvider`
 
 The commander attaches four `window` listeners and a gamepad polling loop. It is **reference
 counted**: the first hook to mount connects it, the last to unmount disconnects it, so a screen
@@ -136,11 +185,60 @@ import { CommanderProvider } from '@react-three/jolt-addons';
 ```
 
 Pass your own instance with `<CommanderProvider commander={myCommander}>` if you want to
-configure it up front. `useCommander()` returns whichever commander applies, for
-`addCommand` / `getCommand` / `addListener` / `removeListener` / `subscribe`.
+configure it up front. The provider destroys the commander it created when it unmounts.
+`useCommander()` returns whichever commander applies, for `addCommand` / `getCommand` /
+`addListener` / `removeListener` / `subscribe` / `getSnapshot`.
+
+> [!NOTE]
+> `Commander.getSnapsot` (one `h` short) is deprecated in favour of `getSnapshot`. And there is no
+> `release()` method — the release function is what `retain()` returns.
 
 Environments with no gamepad API (SSR, tests, some browsers) are handled — gamepad input is
 simply skipped.
+
+## Gamepads
+
+Gamepad support is in-house now; the `gamepad.js` dependency is gone. `Commander` diffs
+`navigator.getGamepads()` inside a `requestAnimationFrame` loop that only runs while at least one
+consumer retains the commander, and stops when the last one lets go.
+
+```tsx
+import { Commander, CommanderProvider } from '@react-three/jolt-addons';
+
+const commander = new Commander({
+    gamepad: { deadzone: 0.2, axisThreshold: 0.02, buttonThreshold: 0.01 }
+});
+
+<CommanderProvider commander={commander}>{null}</CommanderProvider>;
+```
+
+`CommanderOptions` is `{ debug?: boolean; gamepad?: GamepadPollerOptions }`, and
+`GamepadPollerOptions` is:
+
+| option | default | |
+| --- | --- | --- |
+| `deadzone` | `0.15` | axis values at or below this magnitude report as `0` |
+| `axisThreshold` | `0.01` | an axis only emits once it has moved this far from its last emitted value |
+| `buttonThreshold` | `0.01` | the same for a button's analogue value; a `pressed` change always emits |
+| `debug` | `false` | |
+
+Events keep the payload shape they always had — `{ type: 'gamepad:button' | 'gamepad:axis',
+detail: { index, button | axis, value, pressed } }` — so anything written against
+`GamepadInputEvent` is unchanged. The button detail gained an additive optional `name`: the W3C
+standard-mapping name, which is what `commonCommands` binds its indices against.
+
+```ts
+import { gamepadButtonName, standardGamepadButtons, standardGamepadSticks } from '@react-three/jolt-addons';
+
+standardGamepadButtons; // ['A', 'B', 'X', 'Y', 'LeftBumper', …, 'DPadRight', 'Home'] as const
+gamepadButtonName(12); // 'DPadUp'
+standardGamepadSticks; // { left: [0, 1], right: [2, 3] } — the axis indices of each stick
+```
+
+`gamepadconnected` / `gamepaddisconnected` are handled, several pads are tracked by index, and a
+disconnect **releases whatever that pad was holding**, so a yanked controller can't leave a
+command stuck down. `hasGamepadSupport()` tells you whether any of this will do anything, and
+`GamepadPoller` is exported if you want to drive `poll()` from your own loop.
 
 ## `useGamepadForCameraControls`
 
