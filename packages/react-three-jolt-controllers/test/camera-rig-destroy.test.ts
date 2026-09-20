@@ -45,8 +45,10 @@ const TRACKED_TYPES = [
 
 let ps: PhysicsSystem;
 
-const stepListenerCount = (system: PhysicsSystem) =>
-    ((system as unknown as { preStepListeners: unknown[] }).preStepListeners ?? []).length;
+// Step callbacks moved from the private `preStepListeners`/`postStepListeners` arrays onto the
+// world Emitter (issue #187). `listenerCount` is the supported way to ask, and is still the
+// whole point of these tests: that unsubscribing actually happened.
+const stepListenerCount = (system: PhysicsSystem) => system.events.listenerCount('beforeStep');
 
 const newScene = () => new THREE.Scene();
 

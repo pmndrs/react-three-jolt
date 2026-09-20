@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef } from 'react';
+import { useCallback, useContext, useEffect, useRef } from 'react';
 import { joltContext } from '../context';
 
 // External Hooks ====================================
@@ -10,6 +10,32 @@ export const useJolt = () => {
     }
     return jolt;
 };
+
+/**
+ * A callback with a stable identity that always calls the latest `fn`.
+ *
+ * Every event subscription in this library is made from an effect whose cleanup is the
+ * unsubscribe. If the subscribed function changed identity on every render, that effect would
+ * tear down and re-register 60 times a second for an inline arrow. The ref indirection keeps
+ * the subscription alive across renders while still calling the freshest closure.
+ *
+ * `fn` may be undefined, in which case the returned callback is a no-op; callers gate on the
+ * prop being present, not on the callback's identity.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: passthrough wrapper for arbitrary handlers
+export function useEventCallback<T extends (...args: any[]) => any>(
+    fn: T | undefined
+): (...args: Parameters<T>) => ReturnType<T> | undefined {
+    const ref = useRef(fn);
+    // Written in an effect rather than during render so a concurrent render that is thrown
+    // away cannot publish its closure to a live subscription.
+    useEffect(() => {
+        ref.current = fn;
+    }, [fn]);
+    // The very first step can happen between render and effect, so seed it synchronously too.
+    if (ref.current === undefined) ref.current = fn;
+    return useCallback((...args: Parameters<T>) => ref.current?.(...args), []);
+}
 
 // helper function for a cleaner useMemo
 // this is the r3/rapier version but you can find it here:

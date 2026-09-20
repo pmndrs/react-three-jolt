@@ -1,50 +1,33 @@
 import { Environment } from '@react-three/drei';
-import { Heightfield, Physics, RigidBody } from '@react-three/jolt';
+import {
+    type CollisionEnterPayload,
+    type CollisionExitPayload,
+    Heightfield,
+    Physics,
+    RigidBody
+} from '@react-three/jolt';
 import { useDemo } from '../App';
 import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 
 export function HeightfieldDemo() {
     const { debug, paused, interpolate, physicsKey, module } = useDemo();
 
-    // contact listeners
-    const onContactAdded = (
-        body1: number,
-        body2: number,
-        numListeners?: number,
-        context?: 'new' | 'final'
-    ) => {
-        if (context == 'new')
-            console.log(Date.now(), ': NEW Contact Added', body1, body2, numListeners, context);
-        /*else
-            console.log(
-                Date.now(),
-                ':Contact Added to Existing',
-                body1,
-                body2,
-                numListeners,
-                context,
-            );
-            */
+    // contact listeners. The handler now gets one payload object; `target` is the body the
+    // handler is registered on, `other` is what it hit. Don't retain the payload - it is
+    // pooled and reused (see docs/events.md).
+    const onCollisionEnter = (event: CollisionEnterPayload) => {
+        console.log(
+            Date.now(),
+            ': contact enter',
+            event.target.handle,
+            event.other.handle,
+            event.contactCount,
+            event.normal.y.toFixed(2)
+        );
     };
 
-    const onContactRemoved = (
-        body1: number,
-        body2: number,
-        numListeners?: number,
-        context?: 'new' | 'final'
-    ) => {
-        if (context == 'final')
-            console.log(Date.now(), ': FINAL Contact Removed', body1, body2, numListeners, context);
-        /*else
-            console.log(
-                Date.now(),
-                ': Existing Contact Removed',
-                body1,
-                body2,
-                numListeners,
-                context,
-            );
-            */
+    const onCollisionExit = (event: CollisionExitPayload) => {
+        console.log(Date.now(), ': contact exit', event.target.handle, event.other.handle);
     };
 
     // body settings so shapes bounce
@@ -119,8 +102,8 @@ export function HeightfieldDemo() {
                 <RigidBody
                     key={index}
                     position={position}
-                    onContactAdded={onContactAdded}
-                    onContactRemoved={onContactRemoved}
+                    onCollisionEnter={onCollisionEnter}
+                    onCollisionExit={onCollisionExit}
                 >
                     <mesh shape={'sphere'}>
                         <sphereGeometry args={[1, 32, 32]} />

@@ -13,6 +13,8 @@ import { Raw } from '../raw';
 
 import { anyVec3, joltScratch, quat, vec3 } from '../utils';
 import { type BodySystem, getThreeObjectForBody } from './body-system';
+import { Emitter, type Unsubscribe } from './emitter';
+import { BODY_EVENT_BITS, type BodyEventMap, EventBit } from './events';
 import { releaseShape, scaleShape } from './shape-system';
 
 // Initital body object copied from r3/rapier's state object
@@ -60,17 +62,30 @@ export class BodyState {
         return this.meshType === 'instancedMesh';
     }
 
-    // contact pairs
+    /**
+     * Open sub-shape manifolds per peer handle, maintained by `BodySystem`'s contact listener.
+     * Derived state - write through the listener, read through {@link isContacting}.
+     */
     contacts: Map<number, number> = new Map();
-    contactTimestamps: Map<number, number> = new Map();
-    contactThreshold = 900;
 
     // Listeners ----------------------------------
-    // TODO: Make Listener callback type for these
-    activationListeners: Function[] = [];
-    contactAddedListeners: Function[] = [];
-    contactRemovedListeners: Function[] = [];
-    contactPersistedListeners: Function[] = [];
+    /**
+     * This body's events. `on(type, fn)` returns the unsubscribe; the named helpers below are
+     * one-line sugar for the same thing, spelled exactly like the `<RigidBody>` props.
+     */
+    readonly events = new Emitter<BodyEventMap>(BODY_EVENT_BITS);
+    /** Bits that are set for library-internal reasons, e.g. an active motion source. */
+    private internalMask = 0;
+    /** True once `dispose()` has run; the body is on its way out of the simulation. */
+    disposed = false;
+
+    /**
+     * What this body is listening for, as a bitfield. Read inside the Jolt contact callback to
+     * decide whether a manifold is worth wrapping at all.
+     */
+    get eventMask(): number {
+        return this.events.mask | this.internalMask;
+    }
 
     // References so we can modify the body directly
     //@ts-ignore
@@ -110,37 +125,117 @@ export class BodyState {
     }
 
     //* Activation & Contact Listeners ===================================
-    // add a function to the activationListener Array
-    addActivationListener(listener: Function) {
-        this.activationListeners.push(listener);
+    /** Subscribe to one of this body's events. Returns the unsubscribe. */
+    on<K extends keyof BodyEventMap>(type: K, fn: BodyEventMap[K]): Unsubscribe {
+        return this.events.on(type, fn);
     }
-    // remove a function from the activationListener Array
-    removeActivationListener(listener: Function) {
-        this.activationListeners = this.activationListeners.filter((l) => l !== listener);
+    /** Fires once when this body starts touching another. */
+    onCollisionEnter(fn: BodyEventMap['collisionEnter']): Unsubscribe {
+        return this.events.on('collisionEnter', fn);
     }
-    // add a function to one of the contact listener arrays with the function and which as input
-    addContactListener(listener: Function, type: 'added' | 'removed' | 'persisted') {
-        if (type === 'added') this.contactAddedListeners.push(listener);
-        if (type === 'removed') this.contactRemovedListeners.push(listener);
-        if (type === 'persisted') this.contactPersistedListeners.push(listener);
+    /** Fires every step the contact is maintained. Free from Jolt; zero cost when unused. */
+    onCollisionPersist(fn: BodyEventMap['collisionPersist']): Unsubscribe {
+        return this.events.on('collisionPersist', fn);
     }
-    // remove a function from one of the contact listener arrays
-    removeContactListener(listener: Function) {
-        const indexAdded = this.contactAddedListeners.indexOf(listener);
-        const indexRemoved = this.contactRemovedListeners.indexOf(listener);
-        const indexPersisted = this.contactPersistedListeners.indexOf(listener);
+    /** Fires once when the last sub-shape manifold between the two bodies closes. */
+    onCollisionExit(fn: BodyEventMap['collisionExit']): Unsubscribe {
+        return this.events.on('collisionExit', fn);
+    }
+    onSensorEnter(fn: BodyEventMap['sensorEnter']): Unsubscribe {
+        return this.events.on('sensorEnter', fn);
+    }
+    onSensorExit(fn: BodyEventMap['sensorExit']): Unsubscribe {
+        return this.events.on('sensorExit', fn);
+    }
+    onSleep(fn: BodyEventMap['sleep']): Unsubscribe {
+        return this.events.on('sleep', fn);
+    }
+    onWake(fn: BodyEventMap['wake']): Unsubscribe {
+        return this.events.on('wake', fn);
+    }
+    /** Synchronous, inside the step. Return false to reject the contact. See docs/events.md. */
+    onContactValidate(fn: BodyEventMap['contactValidate']): Unsubscribe {
+        return this.events.on('contactValidate', fn);
+    }
 
-        if (indexAdded !== -1) {
-            this.contactAddedListeners.splice(indexAdded, 1);
-        } else if (indexRemoved !== -1) {
-            this.contactRemovedListeners.splice(indexRemoved, 1);
-        } else if (indexPersisted !== -1) {
-            this.contactPersistedListeners.splice(indexPersisted, 1);
-        }
+    /** Back compat so the deprecated identity-based removers can still find their handles. */
+    private legacySubs = new Map<Function, Unsubscribe[]>();
+    private trackLegacy(listener: Function, off: Unsubscribe): Unsubscribe {
+        const subs = this.legacySubs.get(listener);
+        if (subs) subs.push(off);
+        else this.legacySubs.set(listener, [off]);
+        return off;
+    }
+    private removeLegacy(listener: Function): void {
+        const subs = this.legacySubs.get(listener);
+        if (!subs) return;
+        this.legacySubs.delete(listener);
+        for (const off of subs) off();
+    }
+
+    /**
+     * @deprecated use {@link onSleep} / {@link onWake}, which tell the two apart. This fires
+     * for both, as it always did.
+     */
+    addActivationListener(listener: Function): Unsubscribe {
+        const handler = () => listener(this);
+        const offSleep = this.events.on('sleep', handler);
+        const offWake = this.events.on('wake', handler);
+        return this.trackLegacy(listener, () => {
+            offSleep();
+            offWake();
+        });
+    }
+    /** @deprecated keep the function {@link addActivationListener} returns. */
+    removeActivationListener(listener: Function) {
+        this.removeLegacy(listener);
+    }
+    /**
+     * @deprecated use {@link on}. The handler now receives a single payload object rather than
+     * `(handle1, handle2, manifold, settings, count, context)` - the old arguments handed out
+     * Jolt pointers that are freed before the handler could run.
+     */
+    addContactListener(listener: Function, type: 'added' | 'removed' | 'persisted'): Unsubscribe {
+        const event =
+            type === 'added'
+                ? 'collisionEnter'
+                : type === 'removed'
+                  ? 'collisionExit'
+                  : 'collisionPersist';
+        return this.trackLegacy(listener, this.events.on(event, listener as never));
+    }
+    /**
+     * @deprecated keep the function {@link addContactListener} returns.
+     *
+     * Removes the listener from *every* channel it was added to. The old implementation used an
+     * `else if` chain, so a function registered for both `"added"` and `"persisted"` - which
+     * `activateMotionSource` did - could only ever be removed from the first.
+     */
+    removeContactListener(listener: Function) {
+        this.removeLegacy(listener);
     }
     // get the value of a contact pair
     isContacting(handle: number) {
         return this.contacts.get(handle) || 0;
+    }
+
+    /**
+     * Leave the simulation cleanly: close every open contact pair (peers get their exit event),
+     * drop every listener, and forget the contact bookkeeping. Called by
+     * `BodySystem.removeBody` before the body is removed from Jolt.
+     *
+     * Without this, a recycled handle inherits the previous body's open pairs and its peers
+     * never learn the contact ended.
+     */
+    dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        if (this.contacts.size)
+            this.bodySystem.closeContactsFor(this.handle, [...this.contacts.keys()]);
+        this.contacts.clear();
+        this.events.clear();
+        this.legacySubs.clear();
+        this.internalMask = 0;
     }
     //* Interpolation pose cache ==============================
     /*
@@ -667,14 +762,24 @@ export class BodyState {
         if (angularVector) this.motionAngularVector = angularVector;
         // if you want to use the normal for a bouncepad call it separately
 
-        // add the listeners
-        this.addContactListener(this.motionAddedListener, 'added');
-        this.addContactListener(this.motionAddedListener, 'persisted');
+        // Tier A: this no longer goes on the user listener lists. `ContactSettings` is only
+        // live inside the Jolt callback, so the surface velocity half has to run there, while
+        // the impulse/teleport half is illegal there and is queued instead. The bit tells the
+        // contact listener to keep calling us even when no user handler is attached.
+        this.internalMask |= EventBit.motionSource;
     }
-    motionAddedListener = (
+
+    /**
+     * Synchronous, inside `Step()`. Writes `ContactSettings` directly (surface velocity) and
+     * queues anything that touches the body interface as a pending action, which
+     * `BodySystem.handlePendingActions` applies at the top of the next substep.
+     *
+     * `addImpulse` used to be called straight from the contact callback, which goes through
+     * `BodyInterface` and is not allowed while Jolt owns the world.
+     */
+    handleMotionContact = (
         body1Handle: number,
         body2Handle: number,
-        _manifold: Jolt.ContactManifold,
         settings: Jolt.ContactSettings
     ) => {
         // get the body states of the two bodies
@@ -726,10 +831,10 @@ export class BodyState {
                 const v = body2LinearSurfaceVelocity.sub(body1LinearSurfaceVelocity);
                 settings.mRelativeLinearSurfaceVelocity.Set(v.x, v.y, v.z);
             } else {
-                // do it as an impulse
-                // THis could be dangerous because it uses the bodyInterface to apply impulse
+                // Queued, not applied: AddImpulse goes through the body interface, which may
+                // not be touched while Jolt is inside Step().
                 if (this.useRotation) linearVector.applyQuaternion(sourceBody.rotation);
-                targetBody.addImpulse(linearVector);
+                this.bodySystem.createPendingAction('addImpulse', targetBody.handle, linearVector);
             }
         }
         // angular

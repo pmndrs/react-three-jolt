@@ -3,7 +3,7 @@
 //import type Jolt from 'jolt-physics';
 
 // mostly for the types
-import { PhysicsSystem, vec3 } from '@react-three/jolt';
+import { Emitter, PhysicsSystem, type Unsubscribe, vec3 } from '@react-three/jolt';
 import * as THREE from 'three';
 //import { ConstraintSystem } from '@react-three/jolt';
 
@@ -11,6 +11,11 @@ import * as THREE from 'three';
 import { BodyState } from '@react-three/jolt';
 
 import { CameraBoom } from './camera-boom';
+
+export type CameraChangeCallback = (
+    camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined
+) => void;
+type CameraRigEventMap = { camera: CameraChangeCallback };
 
 //activate camera controls
 export class CameraRigManager {
@@ -50,16 +55,17 @@ export class CameraRigManager {
     targetOffset: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
 
     // listeners for when the camera changes or updates
-    private cameraChangeListeners = [];
+    private events = new Emitter<CameraRigEventMap>();
 
     /** true once `destroy()` has run */
     private destroyed = false;
 
     /**
-     * The *exact* function handed to `addPreStepListener`. `removeStepListener` matches by
-     * identity, and `detachFromLoop()` used to pass `this.handleUpdate` - a different function
-     * object than the inline arrow that was registered - so removal silently did nothing and the
-     * rig kept stepping after `destroy()` (issue #139).
+     * The function handed to `onBeforeStep`. Removal is by the returned unsubscribe now
+     * (issue #187), not by identity - which is what used to break: `detachFromLoop()` passed
+     * `this.handleUpdate`, a different function object than the inline arrow that was actually
+     * registered, so it silently did nothing and the rig kept stepping after `destroy()`
+     * (issue #139). Kept hoisted so reattaching does not build a fresh closure.
      */
     private readonly handlePreStep = (deltaTime: number, subFrame: number) =>
         this.handleUpdate(deltaTime, subFrame);
@@ -122,7 +128,8 @@ export class CameraRigManager {
         this.cameras.forEach((camera) => camera.removeFromParent());
         this.cameras.clear();
         this.activeCamera = undefined;
-        this.cameraChangeListeners = [];
+        // camera-change listeners live on the Emitter now (issue #50/#187)
+        this.events.clear();
 
         // remove the rigs (and any debug shapes parented to them)
         for (const space of [this.anchor, this.base, this.collar]) {
@@ -239,19 +246,12 @@ export class CameraRigManager {
         this.cameras.delete(name);
     }
     // create a camera change listener
-    onCamera(change: any) {
-        //@ts-ignore
-        this.cameraChangeListeners.push(change);
-        // return a function to remove the listener
-        return () => {
-            this.cameraChangeListeners = this.cameraChangeListeners.filter(
-                (listener) => listener !== change
-            );
-        };
+    onCamera(change: CameraChangeCallback): Unsubscribe {
+        return this.events.on('camera', change);
     }
     // trigger the camera change listeners
     private triggerCameraChange() {
-        this.cameraChangeListeners.forEach((listener: any) => listener(this.activeCamera));
+        this.events.emit('camera', this.activeCamera);
     }
 
     //attach a camera to a point
@@ -272,14 +272,21 @@ export class CameraRigManager {
     }
 
     //* Loop Updates and Animations ========================
+    /** Unsubscribe for the pre-step callback; a no-op until `attachToLoop` runs. */
+    private stepUnsubscribe: () => void = () => {};
     // attach to the physics loop
     private attachToLoop() {
         //TODO: consider postStep as there's a slight delay in position even if fixed
-        this.physicsSystem.addPreStepListener(this.handlePreStep);
+        this.stepUnsubscribe();
+        this.stepUnsubscribe = this.physicsSystem.onBeforeStep(this.handlePreStep);
     }
     // detach from the physics loop
+    // This used to call `removeStepListener(this.handleUpdate)` - a different object than the
+    // arrow that was actually subscribed - so it silently did nothing and `destroy()` left the
+    // rig stepping forever.
     private detachFromLoop() {
-        this.physicsSystem.removeStepListener(this.handlePreStep);
+        this.stepUnsubscribe();
+        this.stepUnsubscribe = () => {};
     }
 
     // handler for when the frame updates

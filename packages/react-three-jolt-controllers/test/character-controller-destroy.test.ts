@@ -48,9 +48,10 @@ beforeAll(async () => {
     new CharacterControllerSystem(ps).destroy();
 });
 
-const stepListenerCount = (system: PhysicsSystem) =>
-    // preStepListeners is private; the whole point of the test is that removal actually happened
-    ((system as unknown as { preStepListeners: unknown[] }).preStepListeners ?? []).length;
+// Step callbacks moved from the private `preStepListeners`/`postStepListeners` arrays onto the
+// world Emitter (issue #187). `listenerCount` is the supported way to ask, and is still the
+// whole point of these tests: that unsubscribing actually happened.
+const stepListenerCount = (system: PhysicsSystem) => system.events.listenerCount('beforeStep');
 
 test('construct -> step -> destroy leaves no live jolt objects behind', () => {
     const alloc = installAllocTracker(Raw, { types: TRACKED_TYPES });

@@ -34,13 +34,11 @@ const TRACKED_TYPES = [
 
 let ps: PhysicsSystem;
 
-const stepListeners = (system: PhysicsSystem) => {
-    const internals = system as unknown as {
-        preStepListeners: unknown[];
-        postStepListeners: unknown[];
-    };
-    return internals.preStepListeners.length + internals.postStepListeners.length;
-};
+// Step callbacks moved from the private `preStepListeners`/`postStepListeners` arrays onto the
+// world Emitter (issue #187). `listenerCount` is the supported way to ask, and is still the
+// whole point of these tests: that unsubscribing actually happened.
+const stepListeners = (system: PhysicsSystem) =>
+    system.events.listenerCount('beforeStep') + system.events.listenerCount('afterStep');
 
 beforeAll(async () => {
     await initJolt();

@@ -91,8 +91,9 @@ export class VehicleSystem {
 
     private destroyed = false;
 
-    // The *exact* functions handed to the physics system. `removeStepListener` matches by
-    // identity, so the inline arrows this used to register could never be removed (issue #140).
+    // The functions handed to the physics system. Subscribing now returns an unsubscribe
+    // (issue #187) rather than matching by identity, but these stay hoisted so `attachToLoop`
+    // does not build a fresh closure on every reattach (issue #140).
     private readonly handlePreStep = (deltaTime: number) => this.prePhysicsUpdate(deltaTime);
     private readonly handlePostStep = (deltaTime: number) => this.postPhysicsUpdate(deltaTime);
 
@@ -157,14 +158,21 @@ export class VehicleSystem {
 
     //* Physics Loop ====================================
 
+    /** Unsubscribes for the two loop callbacks; inline arrows could never be removed before. */
+    private loopUnsubscribes: (() => void)[] = [];
+
     private attachToLoop() {
-        this.physicsSystem.addPreStepListener(this.handlePreStep);
-        this.physicsSystem.addPostStepListener(this.handlePostStep);
+        this.detachFromLoop();
+        this.loopUnsubscribes = [
+            this.physicsSystem.onBeforeStep(this.handlePreStep),
+            this.physicsSystem.onAfterStep(this.handlePostStep)
+        ];
     }
 
-    private detachFromLoop() {
-        this.physicsSystem.removeStepListener(this.handlePreStep);
-        this.physicsSystem.removeStepListener(this.handlePostStep);
+    /** Stop stepping the vehicles. Call before dropping the system. */
+    detachFromLoop() {
+        for (const off of this.loopUnsubscribes) off();
+        this.loopUnsubscribes = [];
     }
 
     prePhysicsUpdate(deltaTime: number) {

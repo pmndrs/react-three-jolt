@@ -22,8 +22,8 @@ export function useCameraRig() {
 
     useEffect(() => {
         // create the camera listener first
-        const cameraListener = cameraRig.onCamera((camera: THREE.PerspectiveCamera) => {
-            updateCamera(camera);
+        const cameraListener = cameraRig.onCamera((camera) => {
+            if (camera) updateCamera(camera);
         });
         return () => {
             cameraListener();

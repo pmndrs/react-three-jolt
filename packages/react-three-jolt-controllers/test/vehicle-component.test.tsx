@@ -2,7 +2,7 @@
 // `onPreStep` remover it registered was thrown away. Mounting and unmounting therefore left the
 // VehicleSystem's two step listeners (and the vehicle's whole constraint graph) behind every time.
 
-import { Physics, useJolt } from '@react-three/jolt';
+import { Physics, type PhysicsSystem, useJolt } from '@react-three/jolt';
 import { create } from '@react-three/test-renderer';
 import React, { act, useEffect } from 'react';
 import { assert, test } from 'vitest';
@@ -11,10 +11,13 @@ import { VehicleFourWheel } from '../src/components/vehicle/VehicleFourWheel';
 // r3f's test renderer drives React directly, so opt in to act's queue flushing
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type AnyPhysicsSystem = { preStepListeners: unknown[]; postStepListeners: unknown[] };
+// Step callbacks moved from the private `preStepListeners`/`postStepListeners` arrays onto the
+// world Emitter (issue #187). `listenerCount` is the supported way to ask, and is still the
+// whole point of these tests: that unsubscribing actually happened.
+type AnyPhysicsSystem = PhysicsSystem;
 
 const stepListeners = (system: AnyPhysicsSystem) =>
-    system.preStepListeners.length + system.postStepListeners.length;
+    system.events.listenerCount('beforeStep') + system.events.listenerCount('afterStep');
 
 const settle = async (isReady: () => boolean) => {
     for (let i = 0; i < 100 && !isReady(); i++)

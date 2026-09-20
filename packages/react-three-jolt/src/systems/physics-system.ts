@@ -18,6 +18,8 @@ import { anyVec3, devWarn, joltScratch, vec3 } from '../utils';
 import { BodyState } from './body-state';
 import { BodySystem } from './body-system';
 import { ConstraintSystem } from './constraint-system';
+import { Emitter, type Unsubscribe } from './emitter';
+import { type StepCallback, WORLD_EVENT_BITS, type WorldEventMap } from './events';
 import { ShapeCollider } from './queries/collider';
 import { AdvancedRaycaster, Multicaster, Raycaster } from './queries/raycasters';
 import { Shapecaster } from './queries/shapecasters';
@@ -31,9 +33,19 @@ const resetPoseCache = (state: BodyState): void => {
 };
 
 export class PhysicsSystem {
-    // Step Event Listeners
-    private preStepListeners: Function[] = [];
-    private postStepListeners: Function[] = [];
+    /**
+     * World level events. `beforeStep` / `afterStep` fire once per *substep*, around
+     * `joltInterface.Step()`; the contact and activation events are flushed between the step
+     * and `afterStep`. Subscribe with `events.on(type, fn)`, which returns the unsubscribe.
+     */
+    readonly events = new Emitter<WorldEventMap>(WORLD_EVENT_BITS);
+    /**
+     * Back compat for `removeStepListener(fn)`, which removes by identity. Every deprecated
+     * `addPreStepListener` / `addPostStepListener` call records its unsubscribe here so the
+     * old removal API keeps working - it now removes *every* entry for that function, where it
+     * used to remove at most one per list.
+     */
+    private legacyStepSubs = new Map<Function, Unsubscribe[]>();
     private currentSubframe = 0;
 
     joltInterface!: Jolt.JoltInterface;
@@ -57,7 +69,16 @@ export class PhysicsSystem {
      * constraints - everything wasm-facing has to check this before calling into jolt.
      */
     public destroyed = false;
-    public debug = false;
+    private _debug = false;
+    /** Log lifecycle info, warn when simulation time is dropped, and poison event payloads. */
+    get debug(): boolean {
+        return this._debug;
+    }
+    set debug(value: boolean) {
+        this._debug = value;
+        // BodySystem does not exist yet while the field initialisers run
+        if (this.bodySystem) this.bodySystem.debug = value;
+    }
     private _interpolate = true;
     /**
      * Interpolate the three.js objects between the last two fixed steps instead of snapping
@@ -163,27 +184,45 @@ export class PhysicsSystem {
         jolt.destroy(settings);
         jolt.destroy(BP_LAYER_NON_MOVING);
         jolt.destroy(BP_LAYER_MOVING);
+        // the broadphase table copied it, same as the other two; this one was being leaked
+        jolt.destroy(BP_LAYER_RIG);
 
         // start the chain of systems/services
         this.constraintSystem = new ConstraintSystem(this);
         this.bodySystem = new BodySystem(this.physicsSystem);
         // so removing a body also removes the constraints attached to it (issue #82)
         this.bodySystem.constraintSystem = this.constraintSystem;
+        // the contact listener needs the world emitter for its zero-cost mask and for
+        // dispatching world level events
+        this.bodySystem.worldEvents = this.events;
+        this.bodySystem.debug = this._debug;
     }
 
     destroy(pid = '0'): void {
         // console.log('Request to destroy PhysicsSystem', pid);
-        // check if it exists in the global
-        if (Raw.joltInterfaces.has(pid)) {
+        // Drop every subscription first: nothing should be dispatched into user code once the
+        // world is on its way out.
+        this.events.clear();
+        this.legacyStepSubs.clear();
+        this.bodySystem.clearEvents();
+        // When `maxInterfaces` is exceeded the constructor reuses somebody else's JoltInterface
+        // rather than making one. Such a world does not own it, and must not free the listeners
+        // installed on it either - another PhysicsSystem is still stepping it.
+        const owned = Raw.joltInterfaces.get(pid) === this.joltInterface;
+        if (owned) {
+            // The JoltInterface goes FIRST. Jolt's PhysicsSystem holds raw pointers to the
+            // contact and activation listeners, so freeing an installed listener before the
+            // interface is a use after free on the next step.
             Raw.module.destroy(this.joltInterface);
             Raw.joltInterfaces.delete(pid);
             // console.log('*** PhysicsSystem:' + pid + ' destroyed ***');
         }
-        // every body, constraint and shape went with the interface, but the BodySystem also owns
-        // plain heap allocations of its own (per-body CollisionGroups, the ref counted
-        // GroupFilterTable - issue #95) that the interface knows nothing about. Idempotent, so a
-        // second destroy() of this system is still a no-op.
-        this.bodySystem.destroy();
+        // ...and only now the listener objects it was pointing at, plus the body maps. Every
+        // body, constraint and shape went with the interface, but the BodySystem also owns plain
+        // heap allocations the interface knows nothing about (per-body CollisionGroups, the ref
+        // counted GroupFilterTable - issue #95), and those go here too. Idempotent, so a second
+        // destroy() of this system is still a no-op.
+        this.bodySystem.destroy(owned);
         this.destroyed = true;
     }
     // TODO: Loops and steps seems messy
@@ -260,12 +299,23 @@ export class PhysicsSystem {
         this.stepSimulation(deltaTime, numSteps);
     }
 
-    // Step the physics simulation
+    /**
+     * One substep, and the one place the event ordering is defined:
+     *
+     * `beforeStep` -> pending actions -> `Step()` -> queued contact/activation events ->
+     * `afterStep`.
+     *
+     * Everything Jolt hands us from inside `Step()` is written to a queue and dispatched here,
+     * so a user handler is never running while Jolt owns the world: it can add bodies, apply
+     * impulses and remove things, and the only Jolt-internal work that happens synchronously
+     * inside the step is the `ValidateResult` return and the `ContactSettings` writes.
+     */
     private stepSimulation(delta: number, steps: number) {
-        this.triggerStepListener(delta);
+        this.events.emit('beforeStep', delta, this.currentSubframe);
         this.bodySystem.handlePendingActions();
         this.joltInterface.Step(delta, steps);
-        this.triggerStepListener(delta, 'post');
+        this.bodySystem.flushEvents();
+        this.events.emit('afterStep', delta, this.currentSubframe);
         this.currentSubframe = (this.currentSubframe + 1) % 4;
     }
     private fixedTimeStep(delta: number, timeStep: number, interpolate: boolean): void {
@@ -304,28 +354,54 @@ export class PhysicsSystem {
     }
 
     // Listeners ===================================
-    addPreStepListener(listener: Function): void {
-        this.preStepListeners.push(listener);
+    /** Run `fn(deltaTime, subframe)` before each substep. Returns the unsubscribe. */
+    onBeforeStep(fn: StepCallback): Unsubscribe {
+        return this.events.on('beforeStep', fn);
     }
-    addPostStepListener(listener: Function): void {
-        this.postStepListeners.push(listener);
+    /** Run `fn(deltaTime, subframe)` after each substep and its event flush. Returns the unsubscribe. */
+    onAfterStep(fn: StepCallback): Unsubscribe {
+        return this.events.on('afterStep', fn);
     }
-    // remove a listener from either the pre or post step
+
+    /**
+     * @deprecated use {@link onBeforeStep}, which is the same thing with a usable return value.
+     */
+    addPreStepListener(listener: Function): Unsubscribe {
+        return this.trackLegacyStepSub(listener, this.events.on('beforeStep', listener as never));
+    }
+    /**
+     * @deprecated use {@link onAfterStep}.
+     */
+    addPostStepListener(listener: Function): Unsubscribe {
+        return this.trackLegacyStepSub(listener, this.events.on('afterStep', listener as never));
+    }
+    /**
+     * Remove every pre and post step subscription made for `listener`.
+     *
+     * @deprecated removal by function identity cannot work for the inline arrows every caller
+     * actually passes. Keep the `Unsubscribe` returned by {@link onBeforeStep} instead.
+     */
     removeStepListener(listener: Function): void {
-        const preIndex = this.preStepListeners.indexOf(listener);
-        if (preIndex !== -1) {
-            this.preStepListeners.splice(preIndex, 1);
-        }
-        const postIndex = this.postStepListeners.indexOf(listener);
-        if (postIndex !== -1) {
-            this.postStepListeners.splice(postIndex, 1);
-        }
+        const subs = this.legacyStepSubs.get(listener);
+        if (!subs) return;
+        this.legacyStepSubs.delete(listener);
+        for (const off of subs) off();
     }
+    private trackLegacyStepSub(listener: Function, off: Unsubscribe): Unsubscribe {
+        const subs = this.legacyStepSubs.get(listener);
+        if (subs) subs.push(off);
+        else this.legacyStepSubs.set(listener, [off]);
+        return off;
+    }
+    /**
+     * @deprecated internal; emit through {@link events} instead.
+     */
     triggerStepListener(deltaTime: number, position = 'pre'): void {
-        const listeners = position === 'pre' ? this.preStepListeners : this.postStepListeners;
-        for (const listener of listeners) {
-            listener(deltaTime, this.currentSubframe);
-        }
+        this.events.emit(
+            position === 'pre' ? 'beforeStep' : 'afterStep',
+            deltaTime,
+            this.currentSubframe
+        );
     }
 
     //* Raycasters ===================================

@@ -2,7 +2,7 @@
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import {
-    InstancedMesh,
+    type InstancedMesh,
     //MathUtils,
     //    Matrix4,
     Object3D,
@@ -15,7 +15,17 @@ import { devWarn, quat, vec3, withJolt } from '../utils';
 import { BodyState } from './body-state';
 import type { ConstraintSystem } from './constraint-system';
 import {
-    AutoShape,
+    ContactEventQueue,
+    ContactPairTracker,
+    EventKind,
+    FLUSH_ORDER,
+    KIND_EVENT,
+    PayloadPool
+} from './contact-events';
+import type { Emitter } from './emitter';
+import { type CollisionTarget, EventBit, type ValidatePayload, type WorldEventMap } from './events';
+import {
+    type AutoShape,
     createMeshForShape,
     createShapeFromSettings,
     generateHeightfieldShapeFromThree,
@@ -47,9 +57,51 @@ export interface GenerateBodyOptions {
 // ================================================
 export class BodySystem {
     jolt = Raw.module;
+    /**
+     * Every registered body by handle. The type partitioned maps below stay, because the frame
+     * loop iterates dynamic and kinematic bodies separately; this one makes `getBody` - which
+     * the contact listener calls twice per contact - a single lookup instead of up to three.
+     */
+    readonly bodies = new Map<number, BodyState>();
     dynamicBodies = new Map<number, BodyState>();
     staticBodies = new Map<number, BodyState>();
     kinematicBodies = new Map<number, BodyState>();
+
+    //* Events ======================================
+    /** Jolt listener objects, kept so they can be freed. See {@link destroy}. */
+    contactListener?: Jolt.ContactListenerJS;
+    activationListener?: Jolt.BodyActivationListenerJS;
+    /** Records written inside `Step()`, dispatched by {@link flushEvents} after it. */
+    readonly eventQueue = new ContactEventQueue();
+    /** Open sub-shape manifolds per body pair; enter/persist/exit are derived from it. */
+    readonly contactPairs = new ContactPairTracker();
+    /** Reused event payloads. */
+    readonly payloads = new PayloadPool();
+    /** The world level emitter, wired up by `PhysicsSystem`. */
+    worldEvents?: Emitter<WorldEventMap>;
+    /** Mirrors `PhysicsSystem.debug`: turns on payload poisoning after dispatch. */
+    debug = false;
+    /**
+     * Registered bodies Jolt currently has awake. Maintained by the activation listener rather
+     * than by scanning, and the basis of `settled` / `activityChange` (#52).
+     */
+    activeBodyCount = 0;
+    private lastReportedActive = -1;
+
+    /** Bodies that can be awake at all: dynamic (including rigs) and kinematic. */
+    get simulatedBodyCount(): number {
+        return this.dynamicBodies.size + this.kinematicBodies.size;
+    }
+    /** True when nothing is awake. `settled` fires on the transition into this state. */
+    get isSettled(): boolean {
+        return this.activeBodyCount === 0;
+    }
+    /** Single reused payload for the synchronous, inside-the-step validate callback. */
+    private readonly validatePayload: ValidatePayload = {
+        target: { body: undefined, object: undefined, handle: 0, subShapeId: -1 },
+        other: { body: undefined, object: undefined, handle: 0, subShapeId: -1 },
+        baseOffset: new Vector3()
+    };
 
     // pending actions to be called at the begining of a frame
     //todo: type these
@@ -264,8 +316,15 @@ export class BodySystem {
         const state = new BodyState(object, body, this.joltPhysicsSystem, this, options?.index);
         // generate the handle
         const handle = body.GetID().GetIndexAndSequenceNumber();
+        // Stamp the handle into Jolt's user data so the activation listener - whose second
+        // argument is `inBodyUserData` - resolves a body with no wrapPointer and no lookup.
+        // Jolt >=0.39 narrowed user data to 32 bit unsigned, which is exactly what
+        // GetIndexAndSequenceNumber() is; sequence numbers start at 1, so a valid handle is
+        // never 0 and 0 reliably means "a body this system did not create".
+        body.SetUserData(handle);
         // console.log('adding body', handle, options, state, object, body);
         // add to the correct map
+        this.bodies.set(handle, state);
         if (options?.bodyType === 'static') this.staticBodies.set(handle, state);
         else if (options?.bodyType === 'kinematic') this.kinematicBodies.set(handle, state);
         else this.dynamicBodies.set(handle, state);
@@ -288,11 +347,7 @@ export class BodySystem {
         return handle;
     }
     getBody(handle: number) {
-        return (
-            this.dynamicBodies.get(handle) ||
-            this.staticBodies.get(handle) ||
-            this.kinematicBodies.get(handle)
-        );
+        return this.bodies.get(handle);
     }
     removeBody(bodyHandle: number, ignoreThree = false) {
         //console.log('Trying to remove body', bodyHandle);
@@ -307,15 +362,22 @@ export class BodySystem {
         // first check the simulation is still here (might be removed after physics is removed)
         if (!this.joltPhysicsSystem) return;
         if (!this.bodyInterface) return;
+        // Close open contacts and drop this body's listeners BEFORE it leaves the simulation:
+        // handles are recycled, so leftover pair state would be attributed to a different body,
+        // and `RemoveBody` deactivates the body synchronously - which would otherwise deliver a
+        // phantom `sleep` to a handler that is on its way out.
+        bodyState.dispose();
         const bodyID = bodyState.body.GetID();
         const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
         if (!body) {
             devWarn('body getter failed during delete', bodyHandle);
+            this.forget(bodyHandle);
             return;
         }
 
         if (!this.bodyInterface.IsAdded(bodyID)) {
             // console.log('body already removed');
+            this.forget(bodyHandle);
             return;
         }
 
@@ -333,24 +395,16 @@ export class BodySystem {
         if (!bodyState.isInstance || ignoreThree) bodyState.object.parent?.remove(bodyState.object);
         // remove it from the maps
 
-        this.dynamicBodies.delete(bodyHandle);
-        this.staticBodies.delete(bodyHandle);
-        this.kinematicBodies.delete(bodyHandle);
+        this.forget(bodyHandle);
         // console.log('Removed body', bodyHandle);
     }
 
-    /**
-     * Free everything this system allocated on the Jolt heap that isn't a body. Call it after the
-     * bodies are gone: the group filter is ref counted, so releasing our reference frees it only
-     * once no body is still holding a copy of a group that points at it.
-     */
-    destroy() {
-        this.collisionGroups.forEach((collisionGroup) => Raw.module.destroy(collisionGroup));
-        this.collisionGroups.clear();
-        if (this.groupFilterTable) {
-            this.groupFilterTable.Release();
-            this.groupFilterTable = undefined;
-        }
+    /** Drop a handle from every map. Jolt recycles handles, so nothing may be left behind. */
+    private forget(bodyHandle: number) {
+        this.bodies.delete(bodyHandle);
+        this.dynamicBodies.delete(bodyHandle);
+        this.staticBodies.delete(bodyHandle);
+        this.kinematicBodies.delete(bodyHandle);
     }
 
     // There's probably a better pattern, but im making my own function for this
@@ -361,7 +415,7 @@ export class BodySystem {
         //const position = new Raw.module.Vec3(0, -20, 0); // The image tends towards 'white', so offset it down closer to zero
         const quaternion = new Raw.module.Quat(0, 0, 0, 1);
         const size = shapeSettings.mSampleCount;
-        //@ts-ignore  yes it does exist
+        //@ts-expect-error  yes it does exist
         const planeWidth = planeMesh.geometry.parameters.width;
         const scale = planeWidth / size;
         const offset = -size * scale * 0.5;
@@ -435,246 +489,497 @@ export class BodySystem {
     }
 
     // Activation Listeners ================================
-    //@ts-ignore
+    /**
+     * Wake and sleep. `inBodyUserData` is the handle stamped onto every body this system
+     * creates, so the pair resolves with no `wrapPointer` and no map walk - a body someone
+     * else created has user data 0 and simply resolves to `undefined`.
+     */
     private initializeActivationListeners() {
-        const activationListener = new Raw.module.BodyActivationListenerJS();
-        //@ts-ignore
-        activationListener.OnBodyActivated = (bodyId: Jolt.BodyID) => {
-            //@ts-ignore wrapPointer bug
-            bodyId = Raw.module.wrapPointer(bodyId, Raw.module.BodyID);
-            this.triggerActivationListeners(bodyId.GetIndexAndSequenceNumber());
-        };
-        //@ts-ignore
-        activationListener.OnBodyDeactivated = (bodyId: Jolt.BodyID) => {
-            //@ts-ignore wrapPointer bug
-            bodyId = Raw.module.wrapPointer(bodyId, Raw.module.BodyID);
-            this.triggerActivationListeners(bodyId.GetIndexAndSequenceNumber());
-        };
-
-        this.joltPhysicsSystem.SetBodyActivationListener(activationListener);
+        // Emscripten's JSImplementation glue does a `hasOwnProperty` check per call site, so
+        // these have to be own properties of the instance - a subclass with prototype methods
+        // would throw from inside the WASM callback.
+        const listener = new Raw.module.BodyActivationListenerJS();
+        // (the binding declares these as raw pointer numbers, which is what they are here)
+        listener.OnBodyActivated = (_bodyId: number, userData: number) =>
+            this.queueActivation(userData, EventKind.wake);
+        listener.OnBodyDeactivated = (_bodyId: number, userData: number) =>
+            this.queueActivation(userData, EventKind.sleep);
+        // Owned, so it can be freed - after the JoltInterface, which holds a raw pointer to it.
+        this.activationListener = listener;
+        this.joltPhysicsSystem.SetBodyActivationListener(listener);
     }
-    private triggerActivationListeners(handle: number) {
-        // go through the body system and trigger the activation listeners{
-        const body = this.getBody(handle);
-        if (!body) return;
 
-        body.activationListeners.forEach((listener) => listener(body));
+    private queueActivation(userData: number, kind: number): void {
+        const state = userData ? this.bodies.get(userData) : undefined;
+        // The count is maintained here, unconditionally and synchronously: it is a single
+        // integer, safe to touch inside the step, and it is what `settled` is edge triggered
+        // off instead of scanning every body each frame. Bodies this system did not create are
+        // not counted, so `activeBodyCount <= simulatedBodyCount` holds.
+        if (state) {
+            if (kind === EventKind.wake) this.activeBodyCount++;
+            else if (this.activeBodyCount > 0) this.activeBodyCount--;
+        }
+        // A body is activated by `AddBody` before any listener could have subscribed, and
+        // deactivated by `RemoveBody` after `dispose()` cleared its emitter. Gating on the mask
+        // keeps both of those out of the queue instead of delivering a phantom wake on mount.
+        const mask = (state?.eventMask ?? 0) | this.worldEventMask;
+        const bit = kind === EventKind.wake ? EventBit.wake : EventBit.sleep;
+        if ((mask & bit) === 0) return;
+        this.eventQueue.push(kind, userData, 0, -1, -1, 0);
+    }
+
+    /**
+     * Report `activityChange`, and `settled` when the last awake body goes to sleep (#52).
+     * Edge triggered off {@link activeBodyCount}, so this costs one comparison per step.
+     */
+    private reportActivity(): void {
+        const active = this.activeBodyCount;
+        if (active === this.lastReportedActive) return;
+        const previous = this.lastReportedActive;
+        this.lastReportedActive = active;
+        const world = this.worldEvents;
+        if (!world) return;
+        world.emit('activityChange', active, this.simulatedBodyCount);
+        // `previous > 0` so a world that was never active does not announce itself settled
+        if (active === 0 && previous > 0) world.emit('settled');
     }
 
     // Contact Listeners ===================================
-    //@ts-ignore
+    /**
+     * Two tiers. Inside the Jolt callback only the things that have to be synchronous happen:
+     * the `ValidateResult` return, `ContactSettings` writes (conveyors), and the sub-shape pair
+     * refcount. Everything user facing is written to `eventQueue` and dispatched from
+     * `flushEvents()` once `Step()` has returned.
+     */
     private initializeContactListeners() {
-        const contactListener = new Raw.module.ContactListenerJS();
-        //@ts-ignore
-        contactListener.OnContactAdded = (
-            body1: Jolt.Body,
-            body2: Jolt.Body,
-            manifold: Jolt.ContactManifold,
-            settings: Jolt.ContactSettings
-        ) => {
-            //@ts-ignore
-            body1 = Raw.module.wrapPointer(body1, Raw.module.Body);
-            //@ts-ignore
-            body2 = Raw.module.wrapPointer(body2, Raw.module.Body);
-            const body1Handle = body1.GetID().GetIndexAndSequenceNumber();
-            const body2Handle = body2.GetID().GetIndexAndSequenceNumber();
-            //@ts-ignore
-            manifold = Raw.module.wrapPointer(manifold, Raw.module.ContactManifold);
-            //@ts-ignore
-            settings = Raw.module.wrapPointer(settings, Raw.module.ContactSettings);
-            // get the contact count, if it doesn't exist we are creating it
-            const body1State = this.getBody(body1Handle);
-            //@ts-ignore
-            let isContacting = body1State.isContacting(body2Handle);
+        const listener = new Raw.module.ContactListenerJS();
+        listener.OnContactValidate = (
+            body1: number,
+            body2: number,
+            baseOffset: number,
+            _collisionResult: number
+        ) => this.onContactValidate(body1, body2, baseOffset);
+        listener.OnContactAdded = (
+            body1: number,
+            body2: number,
+            manifold: number,
+            settings: number
+        ) => this.onContact(body1, body2, manifold, settings, true);
+        listener.OnContactPersisted = (
+            body1: number,
+            body2: number,
+            manifold: number,
+            settings: number
+        ) => this.onContact(body1, body2, manifold, settings, false);
+        listener.OnContactRemoved = (subShapePair: number) => this.onContactRemoved(subShapePair);
 
-            // check the body contact threshold as we may have JUST been in contact
-            // even if isCOntacting is 0
-            if (isContacting === 0) {
-                const timestamp = Date.now();
-                const lastFinalRemoval =
-                    //@ts-ignore it'll come back
-                    body1State!.contactTimestamps.get(body2Handle);
-                if (
-                    lastFinalRemoval &&
-                    //@ts-ignore
-                    timestamp - lastFinalRemoval < body1State.contactThreshold
-                ) {
-                    isContacting = 1;
-                }
-            }
-
-            // add the contact pair
-            const numContacts = this.addContactPair(
-                body1.GetID().GetIndexAndSequenceNumber(),
-                body2.GetID().GetIndexAndSequenceNumber()
-            );
-            /* This doesn't seem to work
-
-            const subshape1 = manifold.mSubShapeID1;
-            const subshape2 = manifold.mSubShapeID2;
-            console.log('subshape1', subshape1.GetValue());
-            */
-            this.triggerContactListeners(
-                body1.GetID().GetIndexAndSequenceNumber(),
-                body2.GetID().GetIndexAndSequenceNumber(),
-                'added',
-                isContacting ? 'additional' : 'new', // 'new' or 'additional'
-                numContacts,
-                manifold,
-                settings
-            );
-        };
-        //@ts-ignore
-        contactListener.OnContactPersisted = (
-            body1: Jolt.Body,
-            body2: Jolt.Body,
-            manifold: Jolt.ContactManifold,
-            settings: Jolt.ContactSettings
-        ) => {
-            //@ts-ignore
-            body1 = Raw.module.wrapPointer(body1, Raw.module.Body);
-            //@ts-ignore
-            body2 = Raw.module.wrapPointer(body2, Raw.module.Body);
-            //@ts-ignore
-            manifold = Raw.module.wrapPointer(manifold, Raw.module.ContactManifold);
-            //@ts-ignore
-            settings = Raw.module.wrapPointer(settings, Raw.module.ContactSettings);
-            //@ts-ignore
-            const numContacts = this.getBody(
-                body1.GetID().GetIndexAndSequenceNumber()
-            ).isContacting(body2.GetID().GetIndexAndSequenceNumber());
-            this.triggerContactListeners(
-                body1.GetID().GetIndexAndSequenceNumber(),
-                body2.GetID().GetIndexAndSequenceNumber(),
-                'persisted',
-                'persisted',
-                numContacts,
-                manifold,
-                settings
-            );
-        };
-        // removed uses a weird subshapepair argument
-        //@ts-ignore
-        contactListener.OnContactRemoved = (subShapePair: Jolt.SubShapeIDPair) => {
-            //@ts-ignore
-            subShapePair = Raw.module.wrapPointer(subShapePair, Raw.module.SubShapeIDPair);
-            const numContacts = this.removeContactPair(
-                subShapePair.GetBody1ID().GetIndexAndSequenceNumber(),
-                subShapePair.GetBody2ID().GetIndexAndSequenceNumber()
-            );
-            let isFinalRemoval = false;
-            if (!numContacts) {
-                const bodyState1 = this.getBody(
-                    subShapePair.GetBody1ID().GetIndexAndSequenceNumber()
-                );
-                if (bodyState1)
-                    //@ts-ignore
-                    bodyState1.contactTimestamps.set(
-                        subShapePair.GetBody2ID().GetIndexAndSequenceNumber(),
-                        Date.now()
-                    );
-                isFinalRemoval = true;
-            }
-            this.triggerContactListeners(
-                subShapePair.GetBody1ID().GetIndexAndSequenceNumber(),
-                subShapePair.GetBody2ID().GetIndexAndSequenceNumber(),
-                'removed',
-                isFinalRemoval ? 'final' : 'removed',
-                numContacts
-            );
-        };
-
-        // for now we aren't messing with validated but its required
-        contactListener.OnContactValidate = () => {
-            return Raw.module.ValidateResult_AcceptAllContactsForThisBodyPair;
-        };
-
-        this.joltPhysicsSystem.SetContactListener(contactListener);
+        this.contactListener = listener;
+        this.joltPhysicsSystem.SetContactListener(listener);
     }
-    private triggerContactListeners(
-        body1: number,
-        body2: number,
+
+    /** Ors together everything anyone is listening for, per pair. Drives the zero-cost path. */
+    private get worldEventMask(): number {
+        return this.worldEvents?.mask ?? 0;
+    }
+
+    private onContactValidate(body1Ptr: number, body2Ptr: number, baseOffsetPtr: number): number {
+        const jolt = Raw.module;
+        const accept = jolt.ValidateResult_AcceptAllContactsForThisBodyPair;
+        const body1 = jolt.wrapPointer(body1Ptr, jolt.Body);
+        const body2 = jolt.wrapPointer(body2Ptr, jolt.Body);
+        const handle1 = body1.GetID().GetIndexAndSequenceNumber();
+        const handle2 = body2.GetID().GetIndexAndSequenceNumber();
+        const state1 = this.bodies.get(handle1);
+        const state2 = this.bodies.get(handle2);
+        const mask = (state1?.eventMask ?? 0) | (state2?.eventMask ?? 0) | this.worldEventMask;
+        if ((mask & EventBit.contactValidate) === 0) return accept;
+
+        const payload = this.validatePayload;
+        const offset = jolt.wrapPointer(baseOffsetPtr, jolt.RVec3);
+        payload.baseOffset.set(offset.GetX(), offset.GetY(), offset.GetZ());
+
+        let accepted = true;
+        if (state1?.events.has('contactValidate')) {
+            fillTarget(payload.target, handle1, state1);
+            fillTarget(payload.other, handle2, state2);
+            accepted = state1.events.emitVeto('contactValidate', payload) && accepted;
+        }
+        if (state2?.events.has('contactValidate')) {
+            fillTarget(payload.target, handle2, state2);
+            fillTarget(payload.other, handle1, state1);
+            accepted = state2.events.emitVeto('contactValidate', payload) && accepted;
+        }
+        if (this.worldEvents?.has('contactValidate')) {
+            fillTarget(payload.target, handle1, state1);
+            fillTarget(payload.other, handle2, state2);
+            accepted = this.worldEvents.emitVeto('contactValidate', payload) && accepted;
+        }
+        return accepted ? accept : jolt.ValidateResult_RejectContact;
+    }
+
+    private onContact(
+        body1Ptr: number,
+        body2Ptr: number,
+        manifoldPtr: number,
+        settingsPtr: number,
+        added: boolean
+    ): void {
+        const jolt = Raw.module;
+        const body1 = jolt.wrapPointer(body1Ptr, jolt.Body);
+        const body2 = jolt.wrapPointer(body2Ptr, jolt.Body);
+        const handle1 = body1.GetID().GetIndexAndSequenceNumber();
+        const handle2 = body2.GetID().GetIndexAndSequenceNumber();
+        const state1 = this.bodies.get(handle1);
+        const state2 = this.bodies.get(handle2);
+        const mask = (state1?.eventMask ?? 0) | (state2?.eventMask ?? 0) | this.worldEventMask;
+
+        let sensor = false;
+        let count: number;
+        let sub1 = -1;
+        let sub2 = -1;
+        let manifold: Jolt.ContactManifold | undefined;
+
+        if (added) {
+            // The sub-shape ids live on the manifold, and the refcount is maintained whether or
+            // not anyone is listening: `isContacting()` is public API in its own right.
+            manifold = jolt.wrapPointer(manifoldPtr, jolt.ContactManifold);
+            sub1 = manifold.get_mSubShapeID1().GetValue();
+            sub2 = manifold.get_mSubShapeID2().GetValue();
+            sensor = body1.IsSensor() || body2.IsSensor();
+            const pair = this.contactPairs.add(handle1, handle2, sub1, sub2, sensor);
+            count = pair.count;
+            sensor = pair.sensor;
+            setContactCount(state1, handle2, count);
+            setContactCount(state2, handle1, count);
+        } else {
+            count = this.contactPairs.count(handle1, handle2);
+            sensor = this.contactPairs.isSensorPair(handle1, handle2);
+        }
+
+        // Tier A: the conveyor / bounce pad surface velocity writes have to happen here,
+        // synchronously, because `ContactSettings` is only live inside this call.
+        if (mask & EventBit.motionSource) {
+            const source = state1?.isMotionSource
+                ? state1
+                : state2?.isMotionSource
+                  ? state2
+                  : undefined;
+            if (source) {
+                const settings = jolt.wrapPointer(settingsPtr, jolt.ContactSettings);
+                source.handleMotionContact(handle1, handle2, settings);
+            }
+        }
+
+        // Tier B: queue for dispatch after the step.
+        const enter = added && count === 1;
+        let kind: number;
+        let bit: number;
+        if (sensor) {
+            if (!enter) return; // sensors have no persist channel
+            kind = EventKind.sensorEnter;
+            bit = EventBit.sensorEnter;
+        } else if (enter) {
+            kind = EventKind.collisionEnter;
+            bit = EventBit.collisionEnter;
+        } else {
+            kind = EventKind.collisionPersist;
+            bit = EventBit.collisionPersist;
+        }
+        if ((mask & bit) === 0) return;
+
+        if (!manifold) manifold = jolt.wrapPointer(manifoldPtr, jolt.ContactManifold);
+        if (!added) {
+            sub1 = manifold.get_mSubShapeID1().GetValue();
+            sub2 = manifold.get_mSubShapeID2().GetValue();
+        }
+        this.queueManifold(kind, handle1, handle2, sub1, sub2, count, manifold, sensor);
+    }
+
+    /** Snapshot the manifold's scalars. Nothing Jolt owns outlives this function. */
+    private queueManifold(
+        kind: number,
+        handle1: number,
+        handle2: number,
+        sub1: number,
+        sub2: number,
+        count: number,
+        manifold: Jolt.ContactManifold,
+        sensor: boolean
+    ): void {
+        const normal = manifold.get_mWorldSpaceNormal();
+        const capacity = sensor ? 0 : this.eventQueue.pointCapacity;
+        const available = capacity > 0 ? manifold.get_mRelativeContactPointsOn1().size() : 0;
+        const points = available < capacity ? available : capacity;
+        const index = this.eventQueue.push(
+            kind,
+            handle1,
+            handle2,
+            sub1,
+            sub2,
+            count,
+            normal.GetX(),
+            normal.GetY(),
+            normal.GetZ(),
+            manifold.get_mPenetrationDepth(),
+            points
+        );
+        for (let i = 0; i < points; i++) {
+            // returns one static temporary per call: read it now, never destroy it
+            const point = manifold.GetWorldSpaceContactPointOn1(i);
+            this.eventQueue.setPoint(index, i, point.GetX(), point.GetY(), point.GetZ());
+        }
+    }
+
+    private onContactRemoved(subShapePairPtr: number): void {
+        const jolt = Raw.module;
+        const pair = jolt.wrapPointer(subShapePairPtr, jolt.SubShapeIDPair);
+        const handle1 = pair.GetBody1ID().GetIndexAndSequenceNumber();
+        const handle2 = pair.GetBody2ID().GetIndexAndSequenceNumber();
+        const sub1 = pair.GetSubShapeID1().GetValue();
+        const sub2 = pair.GetSubShapeID2().GetValue();
+
+        const result = this.contactPairs.remove(handle1, handle2, sub1, sub2);
+        // Already gone: the body was destroyed and `dispose()` closed the pair itself.
+        if (!result.existed) return;
+
+        const state1 = this.bodies.get(handle1);
+        const state2 = this.bodies.get(handle2);
+        setContactCount(state1, handle2, result.count);
+        setContactCount(state2, handle1, result.count);
+        // only the *last* sub-shape manifold closing is an exit
+        if (result.count > 0) return;
+
+        const mask = (state1?.eventMask ?? 0) | (state2?.eventMask ?? 0) | this.worldEventMask;
+        const bit = result.sensor ? EventBit.sensorExit : EventBit.collisionExit;
+        if ((mask & bit) === 0) return;
+        this.eventQueue.push(
+            result.sensor ? EventKind.sensorExit : EventKind.collisionExit,
+            handle1,
+            handle2,
+            sub1,
+            sub2,
+            0
+        );
+    }
+
+    /**
+     * Close every open pair on a body that is about to be destroyed: peers get their exit, and
+     * nothing stale is left keyed on a handle Jolt will recycle.
+     */
+    closeContactsFor(handle: number, peers: Iterable<number>): void {
+        for (const peer of peers) {
+            const entry = this.contactPairs.removePair(handle, peer);
+            if (!entry) continue;
+            const peerState = this.bodies.get(peer);
+            peerState?.contacts.delete(handle);
+            const mask = (peerState?.eventMask ?? 0) | this.worldEventMask;
+            const bit = entry.sensor ? EventBit.sensorExit : EventBit.collisionExit;
+            if ((mask & bit) === 0) continue;
+            this.eventQueue.push(
+                entry.sensor ? EventKind.sensorExit : EventKind.collisionExit,
+                handle,
+                peer,
+                -1,
+                -1,
+                0
+            );
+        }
+    }
+
+    // Dispatch ===========================================
+    /**
+     * Dispatch everything the step queued. Called from `PhysicsSystem.stepSimulation` between
+     * `Step()` and `afterStep`, so handlers may freely add, move and remove bodies.
+     */
+    flushEvents(): void {
+        if (this.eventQueue.length > 0) {
+            this.payloads.debug = this.debug;
+            this.payloads.reset();
+            this.eventQueue.drain(FLUSH_ORDER, this.dispatchEvent);
+        }
+        // after the sleep/wake events, so a handler that counts them agrees with the totals
+        this.reportActivity();
+    }
+
+    /** Drop queued events without dispatching them (the world is going away). */
+    clearEvents(): void {
+        this.eventQueue.clear();
+    }
+
+    private dispatchEvent = (kind: number, index: number): void => {
+        if (kind === EventKind.sleep || kind === EventKind.wake) {
+            this.dispatchActivation(kind, index);
+            return;
+        }
+        this.dispatchContact(kind, index);
+    };
+
+    private dispatchActivation(kind: number, index: number): void {
+        const type = kind === EventKind.wake ? 'wake' : 'sleep';
+        const handle = this.eventQueue.handle1(index);
+        const state = this.bodies.get(handle);
+        const payload = this.payloads.acquireActivation();
+        payload.handle = handle;
+        payload.body = state;
+        this.worldEvents?.emit(type, payload);
+        state?.events.emit(type, payload);
+        this.payloads.poison(payload);
+    }
+
+    private dispatchContact(kind: number, index: number): void {
+        const type = KIND_EVENT[kind] as
+            | 'collisionEnter'
+            | 'collisionPersist'
+            | 'collisionExit'
+            | 'sensorEnter'
+            | 'sensorExit';
+        const queue = this.eventQueue;
+        const handle1 = queue.handle1(index);
+        const handle2 = queue.handle2(index);
+        const state1 = this.bodies.get(handle1);
+        const state2 = this.bodies.get(handle2);
+        const world = this.worldEvents;
+
+        // World level fires once per pair, with the lower handle as `target`, so a world wide
+        // counter is right without dividing by two.
+        if (world?.has(type)) {
+            const targetIsSecond = handle2 < handle1;
+            const payload = this.buildPayload(type, index, targetIsSecond, state1, state2);
+            world.emit(type, payload);
+            this.payloads.poison(payload);
+        }
+        // Then per body: body 1, then body 2, each with its own target/other/flipped.
+        if (state1?.events.has(type)) {
+            const payload = this.buildPayload(type, index, false, state1, state2);
+            state1.events.emit(type, payload);
+            this.payloads.poison(payload);
+        }
+        if (state2?.events.has(type)) {
+            const payload = this.buildPayload(type, index, true, state1, state2);
+            state2.events.emit(type, payload);
+            this.payloads.poison(payload);
+        }
+    }
+
+    /**
+     * @param flipped true when the handler's body is Jolt's body 2.
+     */
+    private buildPayload(
         type: string,
-        context: string,
-        numContacts?: number,
-        manifold?: Jolt.ContactManifold,
-        settings?: Jolt.ContactSettings
-    ) {
-        // go through the body system and trigger the contact listeners
-        const bodyState1 = this.getBody(body1);
-        const bodyState2 = this.getBody(body2);
-        if (!bodyState1 || !bodyState2) return;
-        // do both bodies
-        for (let i = 0; i < 2; i++) {
-            const body = i === 0 ? bodyState1 : bodyState2;
-            const target =
-                type === 'added'
-                    ? body.contactAddedListeners
-                    : type === 'persisted'
-                      ? body.contactPersistedListeners
-                      : body.contactRemovedListeners;
-            if (target.length)
-                target.forEach((listener) =>
-                    listener(body1, body2, manifold, settings, numContacts, context)
-                );
+        index: number,
+        flipped: boolean,
+        state1: BodyState | undefined,
+        state2: BodyState | undefined
+        // biome-ignore lint/suspicious/noExplicitAny: one builder for both payload shapes
+    ): any {
+        const queue = this.eventQueue;
+        const handle1 = queue.handle1(index);
+        const handle2 = queue.handle2(index);
+        const withManifold = type === 'collisionEnter' || type === 'collisionPersist';
+        // biome-ignore lint/suspicious/noExplicitAny: the two payload shapes share a builder
+        const payload: any = withManifold
+            ? this.payloads.acquireEnter()
+            : this.payloads.acquireBasic();
+
+        fillTarget(
+            payload.target,
+            flipped ? handle2 : handle1,
+            flipped ? state2 : state1,
+            flipped ? queue.sub2(index) : queue.sub1(index)
+        );
+        fillTarget(
+            payload.other,
+            flipped ? handle1 : handle2,
+            flipped ? state1 : state2,
+            flipped ? queue.sub1(index) : queue.sub2(index)
+        );
+        payload.flipped = flipped;
+        payload.contactCount = queue.contactCount(index);
+
+        if (withManifold) {
+            // Jolt's normal points from body 1 toward body 2; ours points from `other` toward
+            // `target`, i.e. the direction `target` moves to separate.
+            const sign = flipped ? 1 : -1;
+            payload.normal.set(
+                queue.normalX(index) * sign,
+                queue.normalY(index) * sign,
+                queue.normalZ(index) * sign
+            );
+            payload.penetration = queue.penetration(index);
+            const points = queue.pointCount(index);
+            payload.pointCount = points;
+            this.payloads.sizePoints(payload, points);
+            for (let i = 0; i < points; i++) queue.readPoint(index, i, payload.points[i]);
         }
+        return payload;
     }
 
-    // Contact Pairing ===================================
-
-    // add contact to body
-    private addContactToBody(body: BodyState, contact: number) {
-        // see if the contact exists, if so increment it
-        //@ts-ignore
-        const current = body.contacts.get(contact);
-        if (current) {
-            //@ts-ignore
-            body.contacts.set(contact, current + 1);
-            return current + 1;
+    // Lifecycle ==========================================
+    /**
+     * Free everything this system allocated on the Jolt heap that isn't a body, and drop all
+     * event state.
+     *
+     * Call order matters: `PhysicsSystem.destroy()` frees the JoltInterface *first*, because
+     * Jolt's PhysicsSystem holds raw pointers to these listeners and freeing an installed
+     * listener is a use after free on the next step. The bodies being gone by then is also what
+     * makes the group filter safe to release: it is ref counted, so dropping our reference frees
+     * it only once no body is still holding a copy of a group that points at it (issue #95).
+     *
+     * Idempotent - React tears `<Physics>` down more than once.
+     *
+     * @param freeListeners false when this world was sharing somebody else's JoltInterface, in
+     * which case that interface is still live and still pointing at these listeners.
+     */
+    destroy(freeListeners = true): void {
+        this.eventQueue.clear();
+        this.contactPairs.clear();
+        this.activeBodyCount = 0;
+        this.lastReportedActive = -1;
+        for (const state of this.bodies.values()) state.events.clear();
+        this.bodies.clear();
+        this.dynamicBodies.clear();
+        this.staticBodies.clear();
+        this.kinematicBodies.clear();
+        this.pendingActions = [];
+        // Our own allocations, not listeners installed on the JoltInterface: these are freed even
+        // when the interface belongs to another world (issue #95).
+        this.collisionGroups.forEach((collisionGroup) => Raw.module.destroy(collisionGroup));
+        this.collisionGroups.clear();
+        if (this.groupFilterTable) {
+            this.groupFilterTable.Release();
+            this.groupFilterTable = undefined;
         }
-        // otherwise set it to 1
-        //@ts-ignore
-        body.contacts.set(contact, 1);
-        return 1;
-    }
-    // remove contact from body
-    private removeContactFromBody(body: BodyState, contact: number) {
-        //@ts-ignore
-        const current = body.contacts.get(contact);
-        if (current) {
-            if (current === 1) {
-                //@ts-ignore
-                body.contacts.delete(contact);
-                return 0;
-            } //@ts-ignore
-            body.contacts.set(contact, current - 1);
-            return current - 1;
+        if (!freeListeners) return;
+        if (this.contactListener) {
+            Raw.module.destroy(this.contactListener);
+            this.contactListener = undefined;
         }
-        return 0;
+        if (this.activationListener) {
+            Raw.module.destroy(this.activationListener);
+            this.activationListener = undefined;
+        }
     }
+}
 
-    private addContactPair(body1Handle: number, body2Handle: number) {
-        const body1 = this.getBody(body1Handle);
-        const body2 = this.getBody(body2Handle);
-        // early bail;
-        if (!body1 || !body2) return 0;
-        // add the contact to both bodies
-        this.addContactToBody(body1, body2Handle);
-        this.addContactToBody(body2, body1Handle);
-        // return the new count
-        return body1.isContacting(body2Handle);
-    }
-    private removeContactPair(body1Handle: number, body2Handle: number) {
-        const body1 = this.getBody(body1Handle);
-        const body2 = this.getBody(body2Handle);
-        // early bail;
-        if (!body1 || !body2) return 0;
-        // remove the contact from both bodies
-        this.removeContactFromBody(body1, body2Handle);
-        this.removeContactFromBody(body2, body1Handle);
-        // return the new count
-        return body1.isContacting(body2Handle);
-    }
+/** Mirror the pair's open sub-shape count onto a body's `contacts` map (drives `isContacting`). */
+function setContactCount(state: BodyState | undefined, peer: number, count: number): void {
+    if (!state) return;
+    if (count > 0) state.contacts.set(peer, count);
+    else state.contacts.delete(peer);
+}
+
+/** Fill one side of a payload in place. An unregistered Jolt body leaves body/object blank. */
+function fillTarget(
+    target: CollisionTarget,
+    handle: number,
+    state: BodyState | undefined,
+    subShapeId = -1
+): void {
+    target.handle = handle;
+    target.body = state;
+    target.object = state?.object;
+    target.index = state?.index;
+    target.subShapeId = subShapeId;
 }
 
 // Jolt Utilities =================================
@@ -686,7 +991,7 @@ export function mergeBodyCreationSettings(
     if (!options) return settings;
     // loop over the object keys and set the settings
     for (const key in options) {
-        // @ts-ignore
+        // @ts-expect-error
         settings[key] = options[key];
     }
     return settings;
@@ -862,7 +1167,7 @@ export function getThreeObjectForBody(body: Jolt.Body, color = '#E07A5F') {
     switch (shape.GetSubType()) {
         case Raw.module.EShapeSubType_Box:
             shape = Raw.module.castObject(shape, Raw.module.BoxShape);
-            //@ts-ignore
+            //@ts-expect-error
             extent = vec3.three(shape.GetHalfExtent()).multiplyScalar(2);
             threeObject = new THREE.Mesh(
                 new THREE.BoxGeometry(extent.x, extent.y, extent.z, 1, 1, 1),
@@ -872,7 +1177,7 @@ export function getThreeObjectForBody(body: Jolt.Body, color = '#E07A5F') {
         case Raw.module.EShapeSubType_Sphere:
             shape = Raw.module.castObject(shape, Raw.module.SphereShape);
             threeObject = new THREE.Mesh(
-                //@ts-ignore
+                //@ts-expect-error
                 new THREE.SphereGeometry(shape.GetRadius(), 32, 32),
                 material
             );
@@ -881,9 +1186,9 @@ export function getThreeObjectForBody(body: Jolt.Body, color = '#E07A5F') {
             shape = Raw.module.castObject(shape, Raw.module.CapsuleShape);
             threeObject = new THREE.Mesh(
                 new THREE.CapsuleGeometry(
-                    //@ts-ignore
+                    //@ts-expect-error
                     shape.GetRadius(),
-                    //@ts-ignore
+                    //@ts-expect-error
                     2 * shape.GetHalfHeightOfCylinder(),
                     20,
                     10
@@ -895,11 +1200,11 @@ export function getThreeObjectForBody(body: Jolt.Body, color = '#E07A5F') {
             shape = Raw.module.castObject(shape, Raw.module.CylinderShape);
             threeObject = new THREE.Mesh(
                 new THREE.CylinderGeometry(
-                    //@ts-ignore
+                    //@ts-expect-error
                     shape.GetRadius(),
-                    //@ts-ignore
+                    //@ts-expect-error
                     shape.GetRadius(),
-                    //@ts-ignore
+                    //@ts-expect-error
                     2 * shape.GetHalfHeight(),
                     20,
                     1

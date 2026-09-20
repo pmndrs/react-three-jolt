@@ -1,11 +1,13 @@
 import {
     createShapeFromSettings,
+    Emitter,
     joltScratch,
     Layer,
     PhysicsSystem,
     quat,
     Raw,
     releaseShape,
+    type Unsubscribe,
     vec3
 } from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
@@ -16,6 +18,17 @@ import {
     VehicleFourWheelSettings,
     WheelState
 } from './wheels';
+
+// biome-ignore lint/suspicious/noExplicitAny: the Jolt constraint callbacks are untyped here
+type VehicleStepCallback = (vehicle: any, deltaTime: number, physicsSystem: any) => void;
+// biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
+type VehicleActionCallback = (action: any) => void;
+type VehicleEventMap = {
+    preStep: VehicleStepCallback;
+    postCollide: VehicleStepCallback;
+    postStep: VehicleStepCallback;
+    action: VehicleActionCallback;
+};
 
 const FL_WHEEL = 0;
 const FR_WHEEL = 1;
@@ -29,16 +42,16 @@ export class VehicleManager {
     constraint: Jolt.VehicleConstraint; //@ts-ignore
     controller: Jolt.WheeledVehicleController;
 
-    // listeners for collision events
-    //@ts-ignore these get added to dynamicly. ts is wrong
-    private preStepListeners = [];
-    //@ts-ignore
-    private postCollideListeners = [];
-    //@ts-ignore
-    private postStepListeners = [];
+    // Listeners for the vehicle constraint callbacks and for actions, all on the one Emitter
+    // primitive (issue #50) so removal never depends on function identity.
+    protected events = new Emitter<VehicleEventMap>();
 
-    //listneer for actions
-    private actionListeners = [];
+    /**
+     * The Jolt step listener driving the constraint's own pre/post step work. `AddStepListener`
+     * stores a raw pointer, so this instance is ours to remove and free - it used to be
+     * constructed anonymously, which made it impossible to do either (issue #140).
+     */
+    protected constraintStepListener?: Jolt.VehicleConstraintStepListener;
 
     //this holds the threejs objects
     threeObject = new THREE.Object3D();
@@ -60,12 +73,6 @@ export class VehicleManager {
 
     /** true once `destroy()` has run */
     protected destroyed = false;
-    /**
-     * The step listener Jolt uses to run the vehicle's own pre/post step work. `AddStepListener`
-     * stores a raw pointer, so this instance is ours to remove and free - it used to be
-     * constructed anonymously, which made it impossible to do either (issue #140).
-     */
-    protected constraintStepListener?: Jolt.PhysicsStepListener;
     /**
      * The callbacks Jolt calls into from the simulation. This used to be a local `const` in
      * `bindListeners`, so its only JavaScript reference was dropped while Jolt kept calling it.
@@ -112,10 +119,9 @@ export class VehicleManager {
 
         if (this.turboTimer) clearTimeout(this.turboTimer);
         this.turboTimer = undefined;
-        this.preStepListeners = [];
-        this.postCollideListeners = [];
-        this.postStepListeners = [];
-        this.actionListeners = [];
+        // constraint-callback and action listeners all live on the one Emitter now
+        // (issue #50/#187), so dropping them is a single clear() rather than emptying four arrays
+        this.events.clear();
 
         // React destroys a parent's effects before its children's, so `<Physics>` may already
         // have freed the JoltInterface - touching jolt after that traps in wasm (issue #82).
@@ -399,66 +405,42 @@ export class VehicleManager {
             Raw.module.wrapPointer(inContext, Raw.module.PhysicsStepListenerContext);
         callbacks.OnPreStepCallback = (vehicle, context) => {
             const ctx = unwrapContext(context);
-            this.triggerListeners('preStepListeners', vehicle, ctx.mDeltaTime, ctx.mPhysicsSystem);
+            this.events.emit('preStep', vehicle, ctx.mDeltaTime, ctx.mPhysicsSystem);
         };
         callbacks.OnPostCollideCallback = (vehicle, context) => {
             const ctx = unwrapContext(context);
-            this.triggerListeners(
-                'postCollideListeners',
-                vehicle,
-                ctx.mDeltaTime,
-                ctx.mPhysicsSystem
-            );
+            this.events.emit('postCollide', vehicle, ctx.mDeltaTime, ctx.mPhysicsSystem);
         };
         callbacks.OnPostStepCallback = (vehicle, context) => {
             const ctx = unwrapContext(context);
-            this.triggerListeners('postStepListeners', vehicle, ctx.mDeltaTime, ctx.mPhysicsSystem);
+            this.events.emit('postStep', vehicle, ctx.mDeltaTime, ctx.mPhysicsSystem);
         };
         callbacks.SetVehicleConstraint(this.constraint);
     }
-    //trigger listeners
-    triggerListeners(listenerType: any, vehicle: any, deltaTime: any, physicsSystem: any) {
-        //@ts-ignore
-        const listeners = this[listenerType];
-        listeners.forEach((listener: any) => {
-            listener(vehicle, deltaTime, physicsSystem);
-        });
-    }
     // for actions
+    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
     triggerActions(action: any) {
-        this.actionListeners.forEach((listener: any) => {
-            listener(action);
-        });
-    }
-    // add a listener to the correct type and return a function to remove the listener
-    private addListener(listenerType: any, listener: any) {
-        //@ts-ignore
-        this[listenerType].push(listener);
-        return () => {
-            //@ts-ignore
-            this[listenerType] = this[listenerType].filter((l: any) => l !== listener);
-        };
+        this.events.emit('action', action);
     }
     //explicit callback shorthands
-    onPreStep(listener: any) {
-        return this.addListener('preStepListeners', listener);
+    onPreStep(listener: VehicleStepCallback): Unsubscribe {
+        return this.events.on('preStep', listener);
     }
-    onPostCollide(listener: any) {
-        return this.addListener('postCollideListeners', listener);
+    onPostCollide(listener: VehicleStepCallback): Unsubscribe {
+        return this.events.on('postCollide', listener);
     }
-    onPostStep(listener: any) {
-        return this.addListener('postStepListeners', listener);
+    onPostStep(listener: VehicleStepCallback): Unsubscribe {
+        return this.events.on('postStep', listener);
     }
     // take an action type and filter it
-    onAction(actionType: string, listener: any) {
-        const newListener = (action: any) => {
+    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
+    onAction(actionType: string, listener: (action: any, manager: VehicleManager) => void) {
+        // Two subscriptions of the same filtered wrapper now unsubscribe independently, because
+        // the handle closes over the entry rather than comparing function identity.
+        // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
+        return this.events.on('action', (action: any) => {
             if (action === actionType) listener(action, this);
-        };
-        //@ts-ignore
-        this.actionListeners.push(newListener);
-        return () => {
-            this.actionListeners = this.actionListeners.filter((l) => l !== newListener);
-        };
+        });
     }
     //* Input Handling ====================================
     move(direction: any) {
