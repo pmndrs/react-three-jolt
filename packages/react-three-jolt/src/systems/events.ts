@@ -24,7 +24,13 @@ export const EventBit = {
      * keep getting their synchronous `ContactSettings` pass even when no user handler is
      * attached to the body.
      */
-    motionSource: 1 << 8
+    motionSource: 1 << 8,
+    /**
+     * Not a user event either: set by `BodyState.setSurfaceMaterials` so a heightfield with
+     * per-quad materials (issue #46) gets its synchronous `ContactSettings` pass - Jolt's
+     * materials carry no friction of their own, so it has to be written from the callback.
+     */
+    surfaceMaterial: 1 << 9
 } as const;
 
 /** Any of the contact driven bits - if none of these are set, contacts cost nothing. */
@@ -34,14 +40,16 @@ export const CONTACT_BITS =
     EventBit.collisionExit |
     EventBit.sensorEnter |
     EventBit.sensorExit |
-    EventBit.motionSource;
+    EventBit.motionSource |
+    EventBit.surfaceMaterial;
 
 /** Bits needed while a contact is being *added* or *persisted* (manifold/settings wrapping). */
 export const MANIFOLD_BITS =
     EventBit.collisionEnter |
     EventBit.collisionPersist |
     EventBit.sensorEnter |
-    EventBit.motionSource;
+    EventBit.motionSource |
+    EventBit.surfaceMaterial;
 
 /** Step events, shared by `PhysicsSystem` and the `useBeforePhysicsStep` / `useAfterPhysicsStep` hooks. */
 export type StepCallback = (deltaTime: number, subframe: number) => void;

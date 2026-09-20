@@ -8,6 +8,7 @@
 import { create, waitFor } from '@react-three/test-renderer';
 import React from 'react';
 import { preload } from 'suspend-react';
+import type * as THREE from 'three';
 import { beforeAll, beforeEach, expect, test, vi } from 'vitest';
 import { Heightfield } from '../src/components/Heightfield';
 import { Physics } from '../src/components/Physics';
@@ -20,7 +21,10 @@ vi.mock('@react-three/drei', () => ({
     useTexture: vi.fn(() => ({}))
 }));
 
-vi.mock('../src/heightField/Generators', () => ({
+// Only the image loader is mocked. The rest of the module is real, because the shape pipeline
+// imports `getValidatedHeightfieldSampleCount` from here to check the grid it is handed.
+vi.mock('../src/heightField/Generators', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../src/heightField/Generators')>()),
     applyHeightmapToPlane: vi.fn()
 }));
 
@@ -200,4 +204,61 @@ test('unmounting mid-load creates no body and does not warn', async () => {
 
     setDebug(false);
     warnSpy.mockRestore();
+});
+
+// ---------------------------------------------------------------------------
+// Generation (#45): `samples` and `generator` need no image, no loader and no await - the
+// body exists as soon as the component has mounted.
+test('a generated heightfield creates its body synchronously, without loading anything', async () => {
+    let bodySystem: BodySystem | undefined;
+    const captureBodySystem = (bs: BodySystem) => {
+        bodySystem = bs;
+    };
+    const { generateHeightfield } = await import('../src/heightField');
+    const { samples } = generateHeightfield({ size: 16, seed: 3 });
+
+    const renderer = await create(
+        <Physics>
+            <BodySystemCapture onReady={captureBodySystem} />
+            <Heightfield samples={samples} size={16} scale={[2, 10, 2]} />
+        </Physics>
+    );
+    await waitFor(() => !!bodySystem);
+
+    expect(totalBodyCount(bodySystem!)).toBe(1);
+    // the image loader was never involved
+    expect(mockApplyHeightmapToPlane).not.toHaveBeenCalled();
+
+    await renderer.update(
+        <Physics>
+            <BodySystemCapture onReady={captureBodySystem} />
+        </Physics>
+    );
+    expect(totalBodyCount(bodySystem!)).toBe(0);
+    await renderer.unmount();
+});
+
+test('a generator callback fills the mesh the physics body is built from', async () => {
+    let bodySystem: BodySystem | undefined;
+    const captureBodySystem = (bs: BodySystem) => {
+        bodySystem = bs;
+    };
+    // a ramp: height rises with z
+    const renderer = await create(
+        <Physics>
+            <BodySystemCapture onReady={captureBodySystem} />
+            <Heightfield generator={(_x, z) => z * 0.5} size={16} />
+        </Physics>
+    );
+    await waitFor(() => !!bodySystem);
+    expect(totalBodyCount(bodySystem!)).toBe(1);
+
+    const [field] = [...bodySystem!.staticBodies.values()];
+    const geometry = (field.object as THREE.Mesh).geometry;
+    const positions = geometry.attributes.position.array as Float32Array;
+    // first vertex is the -z corner (z = -7.5), last is the +z one
+    expect(positions[1]).toBeCloseTo(-7.5 * 0.5, 4);
+    expect(positions[positions.length - 2]).toBeCloseTo(7.5 * 0.5, 4);
+
+    await renderer.unmount();
 });

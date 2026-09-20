@@ -10,6 +10,11 @@ import {
     Vector3
 } from 'three';
 import { Layer } from '../constants';
+import {
+    applySurfaceMaterial,
+    type SurfaceMaterial,
+    SurfaceMaterialTable
+} from '../heightField/materials';
 import { Raw } from '../raw';
 import { devWarn, quat, vec3, withJolt } from '../utils';
 import { BodyState } from './body-state';
@@ -33,7 +38,8 @@ import {
     createShapeSettings,
     type DynamicMeshStrategy,
     describeObject,
-    generateHeightfieldShapeFromThree,
+    describeShape,
+    type HeightfieldShapeDescriptor,
     makeDescriptorDynamicSafe,
     releaseShape,
     ShapeSystem
@@ -42,6 +48,23 @@ import {
 // TYPES ========================================
 export type BodyType = 'dynamic' | 'static' | 'kinematic' | 'rig';
 export type PendingAction = { action: string; handle: number; value: any };
+
+/** Extras `addHeightfield` accepts beyond the mesh itself (issues #45/#46). */
+export interface HeightfieldBodyOptions {
+    /** Friction of the whole field. Per-quad values come from `materials` instead. */
+    friction?: number;
+    /** Restitution (bounciness) of the whole field. */
+    restitution?: number;
+    /**
+     * Surfaces this field is made of. With more than one, `materialIndices` says which quad is
+     * which. Pass a {@link SurfaceMaterialTable} to reuse one across rebuilds.
+     */
+    materials?: SurfaceMaterial[] | SurfaceMaterialTable;
+    /** One index per quad, `(sampleCount - 1)^2` entries, row major. */
+    materialIndices?: ArrayLike<number>;
+    /** Jolt's heightfield block size (default 2). */
+    blockSize?: number;
+}
 
 // We call things "bodySettings" to clarify from shapes or other similar labels
 export interface GenerateBodyOptions {
@@ -430,26 +453,51 @@ export class BodySystem {
         this.kinematicBodies.delete(bodyHandle);
     }
 
-    // There's probably a better pattern, but im making my own function for this
-    public addHeightfield(planeMesh: THREE.Mesh): number {
-        //const position = vec3.threeToJolt(planeMesh.position);
-        // const quaternion = quat.threeToJolt(planeMesh.quaternion);
-        const shapeSettings = generateHeightfieldShapeFromThree(planeMesh);
-        //const position = new Raw.module.Vec3(0, -20, 0); // The image tends towards 'white', so offset it down closer to zero
+    /**
+     * Add a (flat, square) plane mesh as a static heightfield body.
+     *
+     * The heights come from the mesh's vertices, so whatever put them there - a heightmap image,
+     * `generateHeightfield`, your own callback - render and physics see the same numbers.
+     *
+     * `friction`/`restitution` apply to the whole body (issue #46); `materials` +
+     * `materialIndices` give individual quads their own, resolved synchronously inside the
+     * contact listener (see `heightField/materials.ts`).
+     */
+    public addHeightfield(planeMesh: THREE.Mesh, options: HeightfieldBodyOptions = {}): number {
+        const { friction, restitution, materials, materialIndices, blockSize } = options;
+        const descriptor = describeShape(planeMesh, {
+            type: 'heightfield',
+            blockSize
+        }) as HeightfieldShapeDescriptor;
+
+        // one table per body: it owns the jolt-material -> {friction, restitution} mapping the
+        // contact listener resolves through, and it is disposed with the body
+        const table =
+            materials instanceof SurfaceMaterialTable
+                ? materials
+                : materials && materials.length
+                  ? new SurfaceMaterialTable(materials)
+                  : undefined;
+        if (table) {
+            descriptor.materials = table;
+            if (materialIndices) descriptor.materialIndices = materialIndices;
+        }
+
         const quaternion = new Raw.module.Quat(0, 0, 0, 1);
-        const size = shapeSettings.mSampleCount;
-        //@ts-expect-error  yes it does exist
-        const planeWidth = planeMesh.geometry.parameters.width;
-        const scale = planeWidth / size;
-        const offset = -size * scale * 0.5;
+        // Jolt's heightfield grows from its origin in +x/+z, so shift it back by half the field
+        // to line the shape up with the (centred) plane geometry. The extent is one sample less
+        // than the sample count: `sampleCount` samples span `sampleCount - 1` quads.
+        const { sampleCount, scale } = descriptor;
+        const offsetX = -(sampleCount - 1) * scale[0] * 0.5;
+        const offsetZ = -(sampleCount - 1) * scale[2] * 0.5;
         const position = new Raw.module.RVec3(
-            offset + planeMesh.position.x,
+            offsetX + planeMesh.position.x,
             planeMesh.position.y,
-            planeMesh.position.z + offset
+            planeMesh.position.z + offsetZ
         );
 
         // this destroys the shapeSettings and hands back a shape we hold a reference on
-        const shape = createShapeFromSettings(shapeSettings);
+        const shape = createShapeFromSettings(createShapeSettings(descriptor));
         const creationSettings = new Raw.module.BodyCreationSettings(
             shape,
             position,
@@ -457,6 +505,8 @@ export class BodySystem {
             Raw.module.EMotionType_Static,
             Layer.NON_MOVING
         );
+        if (friction !== undefined) creationSettings.mFriction = friction;
+        if (restitution !== undefined) creationSettings.mRestitution = restitution;
         const body = this.bodyInterface.CreateBody(creationSettings);
         // cleanup before returning. The body holds its own reference to the shape and the
         // creation settings copied the transform, so all of this is ours to free.
@@ -464,7 +514,11 @@ export class BodySystem {
         this.jolt.destroy(position);
         this.jolt.destroy(quaternion);
         releaseShape(shape);
-        return this.addExistingBody(planeMesh, body, { bodyType: 'static' });
+
+        const handle = this.addExistingBody(planeMesh, body, { bodyType: 'static' });
+        // `table.mapped` is only true once the shape actually built the material list
+        if (table?.mapped) this.getBody(handle)?.setSurfaceMaterials(table);
+        return handle;
     }
     //* Body Modification ===================================
     // change the mass of a body
@@ -677,6 +731,20 @@ export class BodySystem {
         } else {
             count = this.contactPairs.count(handle1, handle2);
             sensor = this.contactPairs.isSensorPair(handle1, handle2);
+        }
+
+        // Tier A: a heightfield's per-quad friction (issue #46). Jolt's own materials carry no
+        // friction, so the material under this contact is resolved here and written into the
+        // live `ContactSettings` - the only place it can be changed.
+        if (mask & EventBit.surfaceMaterial) {
+            if (!manifold) manifold = jolt.wrapPointer(manifoldPtr, jolt.ContactManifold);
+            if (sub1 < 0) {
+                sub1 = manifold.get_mSubShapeID1().GetValue();
+                sub2 = manifold.get_mSubShapeID2().GetValue();
+            }
+            const settings = jolt.wrapPointer(settingsPtr, jolt.ContactSettings);
+            applyMaterialContact(state1, body1, sub1, body2, settings);
+            applyMaterialContact(state2, body2, sub2, body1, settings);
         }
 
         // Tier A: the conveyor / bounce pad surface velocity writes have to happen here,
@@ -989,6 +1057,26 @@ function setContactCount(state: BodyState | undefined, peer: number, count: numb
     if (!state) return;
     if (count > 0) state.contacts.set(peer, count);
     else state.contacts.delete(peer);
+}
+
+/**
+ * Resolve the surface material under one side of a contact and write it into `ContactSettings`.
+ *
+ * A no-op for every body that has no material table, which is all of them except heightfields
+ * built with `materials` - and the `EventBit.surfaceMaterial` gate means this is not even
+ * reached otherwise.
+ */
+function applyMaterialContact(
+    state: BodyState | undefined,
+    body: Jolt.Body,
+    subShapeId: number,
+    otherBody: Jolt.Body,
+    settings: Jolt.ContactSettings
+): void {
+    const table = state?.surfaceMaterials;
+    if (!table) return;
+    const material = table.resolve(body.GetShape(), subShapeId);
+    if (material) applySurfaceMaterial(material, otherBody, settings);
 }
 
 /** Fill one side of a payload in place. An unregistered Jolt body leaves body/object blank. */
