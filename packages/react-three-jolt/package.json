@@ -48,7 +48,7 @@
     },
     "dependencies": {
         "gamepad.js": "^2.1.0",
-        "jolt-physics": "^0.22.0"
+        "jolt-physics": "^1.1.0"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.14",

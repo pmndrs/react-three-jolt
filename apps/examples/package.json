@@ -15,6 +15,7 @@
         "@react-three/jolt": "0.0.1",
         "@react-three/jolt-addons": "0.0.1",
         "@react-three/jolt-controllers": "0.0.1",
+        "jolt-physics": "^1.1.0",
         "leva": "^0.10.1",
         "maath": "^0.10.8",
         "postprocessing": "^6.39.5",

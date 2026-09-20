@@ -1300,6 +1300,7 @@ __metadata:
     "@vitest/coverage-v8": "npm:^5.0.1"
     camera-controls: "npm:^3.1.2"
     happy-dom: "npm:^20.14.5"
+    jolt-physics: "npm:^1.1.0"
     react: "npm:19.2.8"
     react-dom: "npm:19.2.8"
     rollup: "npm:^4.63.4"
@@ -1334,7 +1335,7 @@ __metadata:
     "@vitest/coverage-v8": "npm:^5.0.1"
     gamepad.js: "npm:^2.1.0"
     happy-dom: "npm:^20.14.5"
-    jolt-physics: "npm:^0.22.0"
+    jolt-physics: "npm:^1.1.0"
     react: "npm:19.2.8"
     react-dom: "npm:19.2.8"
     rollup: "npm:^4.63.4"
@@ -2801,6 +2802,7 @@ __metadata:
     "@types/react-dom": "npm:~19.2.7"
     "@types/three": "npm:^0.186.0"
     "@vitejs/plugin-react": "npm:^6.1.1"
+    jolt-physics: "npm:^1.1.0"
     leva: "npm:^0.10.1"
     maath: "npm:^0.10.8"
     postprocessing: "npm:^6.39.5"
@@ -3518,10 +3520,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"jolt-physics@npm:^0.22.0":
-  version: 0.22.0
-  resolution: "jolt-physics@npm:0.22.0"
-  checksum: 10c0/3cd81811c0c520e0a72feadfa9be6ab92f7c3f51dc3713f424f1a0b5b9bd5c6b6bb386632f0dafd08d733eb856b6ab413878acf2a5b22f52ef352fb00778eaab
+"jolt-physics@npm:^1.1.0":
+  version: 1.1.0
+  resolution: "jolt-physics@npm:1.1.0"
+  checksum: 10c0/9a3b26bc53751d4d5a2bd0575c4fa324423857d8dd113bfe364be7f1d5c2be5bb27d0d47dfe6d17ce0e9326ffa4d9a2b601b5c4931f15109c161a4ef6d8c3849
   languageName: node
   linkType: hard
 

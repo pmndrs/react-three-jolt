@@ -24,7 +24,7 @@ export class Shapecaster {
 	shapeFilter: Jolt.ShapeFilter = new Raw.module.ShapeFilter();
 
 	// shapecast settings
-	shapecast!: Jolt.ShapeCast;
+	shapecast!: Jolt.RShapeCast;
 	shapecastSettings = new Raw.module.ShapeCastSettings();
 	doIgnoreBackfaceTriangles = true;
 	doIgnoreBackfaceConvex = true;
@@ -43,7 +43,7 @@ export class Shapecaster {
 	hasCast = false;
 	active = true;
 	// probably never need this
-	baseOffset = new Raw.module.Vec3(0, 0, 0);
+	baseOffset = new Raw.module.RVec3(0, 0, 0);
 
 	// For debugging. Still not sure this belongs on the class or as a subclass/hook
 	isDebugging = false;
@@ -98,7 +98,7 @@ export class Shapecaster {
 		const scale = vec3.jolt(this.activeScale);
 		const direction = vec3.jolt(this.activeDirection);
 		const shape = this.activeShape;
-		this.shapecast = new Raw.module.ShapeCast(shape, scale, mat4, direction);
+		this.shapecast = new Raw.module.RShapeCast(shape, scale, mat4, direction);
 		// destroy the temp items
 		Raw.module.destroy(mat4);
 		Raw.module.destroy(scale);
@@ -422,7 +422,7 @@ export class ShapecastHit {
 	private joltPhysicsSystem: Jolt.PhysicsSystem;
 	constructor(
 		joltPhysicsSystem: Jolt.PhysicsSystem,
-		shapecast: Jolt.ShapeCast,
+		shapecast: Jolt.RShapeCast,
 		mHit: Jolt.ShapeCastResult,
 		index = 0,
 		bodyID?: Jolt.BodyID
@@ -458,7 +458,7 @@ export class ShapecastHit {
 	get impactNormal(): THREE.Vector3 {
 		const bodyID = new Raw.module.BodyID(this.bodyHandle);
 		const shapeID = new Raw.module.SubShapeID();
-		const position = vec3.jolt(this.position);
+		const position = vec3.rjolt(this.position);
 		let toReturn = new THREE.Vector3();
 		shapeID.SetValue(this.shapeIdValue);
 		const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);

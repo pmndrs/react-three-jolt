@@ -236,14 +236,27 @@ export class VehicleManager {
             //@ts-ignore
             return Math.sqrt(tireFriction * body2.GetFriction()); // This is the default calculation
         };
-        callbacks.OnPreStepCallback = (vehicle, deltaTime, physicsSystem) => {
-            this.triggerListeners('preStepListeners', vehicle, deltaTime, physicsSystem);
+        // jolt-physics 0.26 replaced the (vehicle, deltaTime, physicsSystem) arguments of these
+        // callbacks with (vehicle, PhysicsStepListenerContext*). Unwrap the context so our own
+        // listeners keep receiving the delta time and physics system they always did.
+        const unwrapContext = (inContext: number) =>
+            Raw.module.wrapPointer(inContext, Raw.module.PhysicsStepListenerContext);
+        callbacks.OnPreStepCallback = (vehicle, context) => {
+            const ctx = unwrapContext(context);
+            this.triggerListeners('preStepListeners', vehicle, ctx.mDeltaTime, ctx.mPhysicsSystem);
         };
-        callbacks.OnPostCollideCallback = (vehicle, deltaTime, physicsSystem) => {
-            this.triggerListeners('postCollideListeners', vehicle, deltaTime, physicsSystem);
+        callbacks.OnPostCollideCallback = (vehicle, context) => {
+            const ctx = unwrapContext(context);
+            this.triggerListeners(
+                'postCollideListeners',
+                vehicle,
+                ctx.mDeltaTime,
+                ctx.mPhysicsSystem
+            );
         };
-        callbacks.OnPostStepCallback = (vehicle, deltaTime, physicsSystem) => {
-            this.triggerListeners('postStepListeners', vehicle, deltaTime, physicsSystem);
+        callbacks.OnPostStepCallback = (vehicle, context) => {
+            const ctx = unwrapContext(context);
+            this.triggerListeners('postStepListeners', vehicle, ctx.mDeltaTime, ctx.mPhysicsSystem);
         };
         callbacks.SetVehicleConstraint(this.constraint);
     }
@@ -312,7 +325,7 @@ export class VehicleManager {
     setPosition(position: any) {
         this.physicsSystem.bodyInterface.SetPosition(
             this.carBody.GetID(),
-            vec3.jolt(position),
+            vec3.rjolt(position),
             Raw.module.EActivation_Activate
         );
     }

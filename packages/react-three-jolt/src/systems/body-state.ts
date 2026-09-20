@@ -235,14 +235,14 @@ export class BodyState {
 	// Set the body position
 	// TODO: NOTE. This is how to correctly cleanup a Jolt Vector
 	set position(position) {
-		const newPosition = vec3.jolt(position);
+		const newPosition = vec3.rjolt(position);
 		this.bodyInterface.SetPosition(this.BodyID, newPosition, Raw.module.EActivation_Activate);
 		Raw.module.destroy(newPosition);
 	}
 	// get the position of the body and wrap it in a three vector
-	getPosition(asJolt?: boolean): THREE.Vector3 | Jolt.Vec3 {
-		if (asJolt) return this.bodyInterface.GetPosition(this.BodyID) as Jolt.Vec3;
-		return vec3.joltToThree(this.bodyInterface.GetPosition(this.BodyID) as Jolt.Vec3);
+	getPosition(asJolt?: boolean): THREE.Vector3 | Jolt.RVec3 {
+		if (asJolt) return this.bodyInterface.GetPosition(this.BodyID);
+		return vec3.joltToThree(this.bodyInterface.GetPosition(this.BodyID));
 	}
 	get position(): THREE.Vector3 {
 		return this.getPosition() as THREE.Vector3;
@@ -542,7 +542,7 @@ export class BodyState {
 	}
 	//move kinematic
 	moveKinematic(position: Vector3, rotation: THREE.Quaternion, deltaTime = 0) {
-		const newVec = vec3.jolt(position);
+		const newVec = vec3.rjolt(position);
 		const newQuat = rotation ? quat.jolt(rotation) : new Raw.module.Quat(0, 0, 0, 1);
 
 		this.bodyInterface.MoveKinematic(this.BodyID, newVec, newQuat, deltaTime);

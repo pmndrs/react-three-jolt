@@ -3,7 +3,7 @@ import { useDemo } from "../App";
 import { useMemo, useEffect, useState, Fragment } from "react";
 //import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
-import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
+import InitJolt from "jolt-physics";
 
 import { JoltBolt } from "./Bodies/joltBolt";
 import { BoxContainer } from "./Bodies/BoxContainer";
