@@ -38,7 +38,9 @@ interface RigidBodyProps {
     obstructionTimelimit?: number;
     isSensor?: boolean;
 
-    // groups
+    // Collision groups: the "these two specific objects shouldn't collide" filter. Bodies only
+    // consult it when their `group` matches; `bodySystem.disableCollision(subA, subB)` then turns
+    // off that one sub group pair. Broad categories stay on the object layer. Both are reactive.
     group?: number;
     subGroup?: number;
 
@@ -279,9 +281,12 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         useEffect(() => {
             if (!rigidBodyRef.current) return;
             const body = rigidBodyRef.current as BodyState;
-            if (group) body.group = group;
-            if (subGroup) body.subGroup = subGroup;
-        }, [group, subGroup, rigidBodyRef]);
+            // `!== undefined` rather than truthy: group/sub group 0 are perfectly valid ids.
+            // activeShape is a dependency because a body with <Shape> children isn't created
+            // until the shape mounts, which is after this effect's first run.
+            if (group !== undefined) body.group = group;
+            if (subGroup !== undefined) body.subGroup = subGroup;
+        }, [group, subGroup, activeShape, rigidBodyRef]);
 
         //* DOF -------------------------------------
         useEffect(() => {
