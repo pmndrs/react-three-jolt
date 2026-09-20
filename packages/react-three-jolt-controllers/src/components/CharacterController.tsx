@@ -49,11 +49,14 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             //newCCS.setCapsule(radius, height);
 
             setCharacterSystem(newCCS);
-            // destroy on unload
+            // destroy on unload. `destroy()` frees every jolt object the controller owns and
+            // takes its pre-step listener back off the physics system (issue #138); dropping the
+            // state as well keeps the commands below from driving a destroyed controller.
             return () => {
                 newCCS.destroy();
+                setCharacterSystem(undefined);
             };
-        }, []);
+        }, [physicsSystem, scene]);
 
         // set debugging
         useEffect(() => {
