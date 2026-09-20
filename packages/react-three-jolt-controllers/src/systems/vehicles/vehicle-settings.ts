@@ -102,6 +102,128 @@ export interface TwoWheelWheelSettings extends WheelSettingsTwoWheel {
     back?: WheelSettingsTwoWheel;
 }
 
+//* Secondary physics (issue #41) =============================================================
+//
+// The presentational layer that sits on top of the constraint. None of it touches the
+// simulation: it reads what jolt solved and drives the three objects (and the readouts a game
+// needs for particles, skid marks and engine audio) from that.
+
+/**
+ * A spring damped visual tilt of the chassis *object*, driven by the chassis body's own
+ * acceleration. The physics body is never rotated by this - only the object that is being
+ * synced as the chassis (`bodyObject`, or the generated box).
+ *
+ * Because the manager owns that object's local rotation while this is on, rotate your model
+ * inside a wrapper (or set `bodyRoll: false`) if you need to orient it yourself.
+ */
+export interface BodyRollSettings {
+    /** the most the body may lean sideways, in radians (default 0.1, about 5.7 degrees) */
+    maxAngle?: number;
+    /** the most the body may pitch under acceleration and braking (default `maxAngle / 2`) */
+    maxPitchAngle?: number;
+    /**
+     * The acceleration, in m/s², that produces the full `maxAngle`. Lower it for a floatier
+     * body, raise it for a stiff one. Default 9.81, i.e. one g of lateral acceleration puts the
+     * body at `maxAngle`.
+     */
+    referenceAcceleration?: number;
+    /** spring constant pulling the tilt towards its target (default 120) */
+    stiffness?: number;
+    /** damping of that spring; about `2 * sqrt(stiffness)` is critical (default 20) */
+    damping?: number;
+}
+
+/**
+ * Easing applied to what the wheels *render*, so a wheel does not snap between two suspension
+ * lengths (or two steering angles) the solver happens to land on. The wheel's spin is jolt's
+ * own, integrated from its angular velocity, and is never eased.
+ */
+export interface WheelSmoothingSettings {
+    /**
+     * Time constant, in seconds, for the rendered suspension travel: the rendered position
+     * covers ~63% of the distance to jolt's every `suspension` seconds. 0 renders it raw.
+     * Default 0.04.
+     */
+    suspension?: number;
+    /** the same, for the rendered steering angle. 0 renders it raw. Default 0.05. */
+    steering?: number;
+}
+
+/**
+ * When a wheel counts as skidding. The thresholds are compared against jolt's own per wheel
+ * slip, and are deliberately generous: `slipRatio` of 3 (the wheel spinning at four times the
+ * speed of the ground under it) is an ordinary standing start in a 500 Nm car.
+ */
+export interface SkidSettings {
+    /** the |slipRatio| a wheel has to exceed to be skidding (default 1.5) */
+    longitudinalSlip?: number;
+    /** the |lateralSlip| a wheel has to exceed, in radians (default 0.25, about 14 degrees) */
+    lateralSlip?: number;
+    /**
+     * How fast the vehicle has to be going, in m/s, before *lateral* slip counts (default 0.5).
+     *
+     * Jolt's lateral slip is `atan2(lateral velocity, |longitudinal velocity|)`, so a vehicle
+     * that has come to a stop reports whatever the solver's residual noise divides out to - a
+     * right angle, as often as not. Without this floor a parked car skids forever.
+     */
+    minLateralSpeed?: number;
+    /** the fraction of those thresholds a skidding wheel has to fall back under (default 0.7) */
+    release?: number;
+    /** seconds a wheel has to stay under the release threshold before `skidEnd` (default 0.12) */
+    releaseTime?: number;
+    /** wheels that are not touching anything never skid (default true) */
+    requireContact?: boolean;
+}
+
+export type ResolvedBodyRollSettings = Required<BodyRollSettings>;
+export type ResolvedWheelSmoothingSettings = Required<WheelSmoothingSettings>;
+export type ResolvedSkidSettings = Required<SkidSettings>;
+
+export const defaultBodyRollSettings: ResolvedBodyRollSettings = {
+    maxAngle: 0.1,
+    maxPitchAngle: 0.05,
+    referenceAcceleration: 9.81,
+    stiffness: 120,
+    damping: 20
+};
+
+export const defaultWheelSmoothingSettings: ResolvedWheelSmoothingSettings = {
+    suspension: 0.04,
+    steering: 0.05
+};
+
+export const defaultSkidSettings: ResolvedSkidSettings = {
+    longitudinalSlip: 1.5,
+    lateralSlip: 0.25,
+    minLateralSpeed: 0.5,
+    release: 0.7,
+    releaseTime: 0.12,
+    requireContact: true
+};
+
+/** `false` turns the feature off; `undefined` means "the defaults", so all three are on. */
+export function resolveBodyRoll(
+    settings?: BodyRollSettings | false
+): ResolvedBodyRollSettings | undefined {
+    if (settings === false) return undefined;
+    const merged = { ...defaultBodyRollSettings, ...settings };
+    // the pitch default follows maxAngle rather than the constant above
+    if (settings?.maxPitchAngle === undefined) merged.maxPitchAngle = merged.maxAngle / 2;
+    return merged;
+}
+
+export function resolveWheelSmoothing(
+    settings?: WheelSmoothingSettings | false
+): ResolvedWheelSmoothingSettings | undefined {
+    if (settings === false) return undefined;
+    return { ...defaultWheelSmoothingSettings, ...settings };
+}
+
+export function resolveSkid(settings?: SkidSettings | false): ResolvedSkidSettings | undefined {
+    if (settings === false) return undefined;
+    return { ...defaultSkidSettings, ...settings };
+}
+
 /** Everything both vehicle types understand. */
 export interface VehicleSettingsBase {
     type?: VehicleType;
@@ -130,6 +252,14 @@ export interface VehicleSettingsBase {
      * also be supplied per wheel through `wheels.<corner>.object`.
      */
     wheelObjects?: (THREE.Object3D | null | undefined)[];
+
+    //* secondary physics (issue #41) ---------------------------------------------------------
+    /** the visual body roll and pitch of the chassis object. `false` turns it off. */
+    bodyRoll?: BodyRollSettings | false;
+    /** easing of the rendered suspension travel and steering angle. `false` turns it off. */
+    wheelSmoothing?: WheelSmoothingSettings | false;
+    /** when a wheel counts as skidding, and so when `skidStart`/`skidEnd` fire. */
+    skid?: SkidSettings | false;
 }
 
 export interface FourWheelVehicleSettings extends VehicleSettingsBase {

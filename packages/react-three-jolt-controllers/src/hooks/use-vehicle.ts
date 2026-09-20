@@ -5,10 +5,13 @@ import { useEffect, useRef, useState } from 'react';
 import type * as THREE from 'three';
 import type { VehicleManager } from '../systems/vehicles/vehicle-manager';
 import type {
+    BodyRollSettings,
+    SkidSettings,
     Vector,
     VehicleSettings,
     VehicleType,
-    WheelSettings
+    WheelSettings,
+    WheelSmoothingSettings
 } from '../systems/vehicles/vehicle-settings';
 import { wheelOrderByType } from '../systems/vehicles/vehicle-settings';
 import { VehicleSystem } from '../systems/vehicles/vehicle-system';
@@ -53,6 +56,14 @@ export interface UseVehicleOptions {
     debug?: boolean;
     /** add the vehicle's three object to the scene (default true) */
     addToScene?: boolean;
+
+    //* secondary physics (issue #41) ---------------------------------------------------------
+    /** the chassis object's visual lean under acceleration. `false` turns it off. */
+    bodyRoll?: BodyRollSettings | false;
+    /** easing of the rendered suspension travel and steering angle. `false` turns it off. */
+    wheelSmoothing?: WheelSmoothingSettings | false;
+    /** when a wheel counts as skidding. `false` turns skid detection off. */
+    skid?: SkidSettings | false;
 }
 
 const defaultNames: Record<VehicleType, string> = { fourWheel: 'car', twoWheel: 'bike' };
@@ -98,6 +109,11 @@ export function buildVehicleSettings(
     }
     const bodyObject = resolveObject3D(options.bodyObject);
     if (bodyObject) settings.bodyObject = bodyObject;
+    // issue #41: the secondary physics options are top level props as well as settings keys,
+    // because they are the ones a game tweaks from a debug panel
+    if (options.bodyRoll !== undefined) settings.bodyRoll = options.bodyRoll;
+    if (options.wheelSmoothing !== undefined) settings.wheelSmoothing = options.wheelSmoothing;
+    if (options.skid !== undefined) settings.skid = options.skid;
     return settings as VehicleSettings;
 }
 
