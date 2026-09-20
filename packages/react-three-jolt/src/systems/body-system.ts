@@ -11,7 +11,7 @@ import {
 } from 'three';
 import { Layer } from '../constants';
 import { Raw } from '../raw';
-import { devWarn, quat, vec3 } from '../utils';
+import { devWarn, quat, vec3, withJolt } from '../utils';
 import { BodyState } from './body-state';
 import {
     AutoShape,
@@ -655,9 +655,11 @@ export function generateBodySettings(
         let size: any = options?.size || new THREE.Vector3(1, 1, 1);
         const mass = options?.mass || 200;
         if (isObject) size = new THREE.Box3().setFromObject(object).getSize(new Vector3());
-        const boxSize = vec3.jolt(size);
-        settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(boxSize, mass);
-        jolt.destroy(boxSize);
+        // `vec3.jolt` always allocates a vector we own; `SetMassAndInertiaOfSolidBox` copies it,
+        // so scope it rather than leaking one Vec3 per dynamic trimesh body.
+        withJolt(size, (v) =>
+            settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(v, mass)
+        );
     }
     // destroy the position and quaternion
     jolt.destroy(position);

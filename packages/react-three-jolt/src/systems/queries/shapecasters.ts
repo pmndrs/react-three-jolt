@@ -458,19 +458,24 @@ export class ShapecastHit {
     get impactNormal(): THREE.Vector3 {
         const bodyID = new Raw.module.BodyID(this.bodyHandle);
         const shapeID = new Raw.module.SubShapeID();
+        // `vec3.rjolt` always allocates a vector we own (issue #76), so it has to be released
+        // here - this getter is read per hit, per frame, by the camera rig.
         const position = vec3.rjolt(this.position);
         let toReturn = new THREE.Vector3();
         shapeID.SetValue(this.shapeIdValue);
         const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
         if (body) {
+            // `GetWorldSpaceSurfaceNormal` returns "by value", which in the WebIDL binder
+            // means a pointer to a static temporary the binder owns - read it out immediately
+            // and never destroy it.
             const joltNormal = body.GetWorldSpaceSurfaceNormal(shapeID, position);
             toReturn = vec3.three(joltNormal);
-            //Raw.module.destroy(joltNormal);
         }
         // destroy remaining jolt items
+        // TODO: bodyID / shapeID are still leaked here, see the memory audit
         //Raw.module.destroy(shapeID);
         // Raw.module.destroy(bodyID);
-        //Raw.module.destroy(position);
+        Raw.module.destroy(position);
         return toReturn;
     }
     //TODO Fix this to work with the bodyID Handle after removing BodyID

@@ -15,7 +15,7 @@ import { MathUtils, Quaternion, Vector3 } from 'three';
 import { Layer, NUM_OBJECT_LAYERS } from '../constants';
 import { Raw } from '../raw';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
-import { anyVec3, devWarn, quat, vec3 } from '../utils';
+import { anyVec3, devWarn, joltScratch, quat, vec3 } from '../utils';
 import { BodyState } from './body-state';
 import { BodySystem } from './body-system';
 import { ConstraintSystem } from './constraint-system';
@@ -341,9 +341,12 @@ export class PhysicsSystem {
     //* Utility methods ----------------------------
     // Set Gravity
     setGravity(gravity: number | THREE.Vector3): void {
+        // `SetGravity` takes a Vec3Arg and copies it. This used to allocate two WASM vectors per
+        // call (the `new Vec3` below and the one `vec3.jolt` made of it) and destroy neither; it
+        // runs from a useEffect on every `gravity` prop change.
         const newGravity: anyVec3 =
-            typeof gravity === 'number' ? new Raw.module.Vec3(0, -gravity, 0) : gravity;
-        this.physicsSystem.SetGravity(vec3.jolt(newGravity));
+            typeof gravity === 'number' ? new THREE.Vector3(0, -gravity, 0) : gravity;
+        this.physicsSystem.SetGravity(joltScratch.vec3(newGravity));
         if (this.debug) console.log('gravity set', typeof gravity, vec3.three(newGravity));
     }
 }
