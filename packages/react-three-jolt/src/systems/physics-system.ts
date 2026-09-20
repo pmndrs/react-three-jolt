@@ -205,8 +205,11 @@ export class PhysicsSystem {
         this.events.clear();
         this.legacyStepSubs.clear();
         this.bodySystem.clearEvents();
-        // check if it exists in the global
-        if (Raw.joltInterfaces.has(pid)) {
+        // When `maxInterfaces` is exceeded the constructor reuses somebody else's JoltInterface
+        // rather than making one. Such a world does not own it, and must not free the listeners
+        // installed on it either - another PhysicsSystem is still stepping it.
+        const owned = Raw.joltInterfaces.get(pid) === this.joltInterface;
+        if (owned) {
             // The JoltInterface goes FIRST. Jolt's PhysicsSystem holds raw pointers to the
             // contact and activation listeners, so freeing an installed listener before the
             // interface is a use after free on the next step.
@@ -215,7 +218,7 @@ export class PhysicsSystem {
             // console.log('*** PhysicsSystem:' + pid + ' destroyed ***');
         }
         // ...and only now the listener objects it was pointing at, plus the body maps.
-        this.bodySystem.destroy();
+        this.bodySystem.destroy(owned);
         // every body, constraint and shape went with the interface
         this.destroyed = true;
     }

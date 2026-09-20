@@ -808,8 +808,11 @@ export class BodySystem {
      * Call order matters: `PhysicsSystem.destroy()` frees the JoltInterface *first*, because
      * Jolt's PhysicsSystem holds raw pointers to these listeners and freeing an installed
      * listener is a use after free on the next step.
+     *
+     * @param freeListeners false when this world was sharing somebody else's JoltInterface, in
+     * which case that interface is still live and still pointing at these listeners.
      */
-    destroy(): void {
+    destroy(freeListeners = true): void {
         this.eventQueue.clear();
         this.contactPairs.clear();
         this.activeBodyCount = 0;
@@ -820,6 +823,7 @@ export class BodySystem {
         this.staticBodies.clear();
         this.kinematicBodies.clear();
         this.pendingActions = [];
+        if (!freeListeners) return;
         if (this.contactListener) {
             Raw.module.destroy(this.contactListener);
             this.contactListener = undefined;
