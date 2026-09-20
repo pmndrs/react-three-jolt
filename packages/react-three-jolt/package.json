@@ -28,23 +28,28 @@
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
-            "types": "./dist/index.d.ts",
-            "import": "./dist/index.mjs",
-            "require": "./dist/index.cjs",
+            "import": {
+                "types": "./dist/index.d.mts",
+                "default": "./dist/index.mjs"
+            },
+            "require": {
+                "types": "./dist/index.d.cts",
+                "default": "./dist/index.cjs"
+            },
             "default": "./dist/index.mjs"
         },
         "./package.json": "./package.json"
     },
     "sideEffects": false,
     "files": [
-        "dist/**",
+        "dist/index.*",
         "README.md",
         "LICENSE",
         "CHANGELOG.md"
     ],
     "scripts": {
         "test": "vitest run --coverage",
-        "build": "tsc && rollup --config rollup.config.mjs",
+        "build": "tsc --noEmit && tsc -p tsconfig.build.json --emitDeclarationOnly --declarationMap && rollup --config rollup.config.mjs",
         "format": "biome format --write .",
         "lint": "biome check ."
     },
@@ -75,20 +80,23 @@
         "@react-three/test-renderer": "10.0.0-alpha.5",
         "@rollup/plugin-commonjs": "^29.0.3",
         "@rollup/plugin-node-resolve": "^16.0.3",
-        "@rollup/plugin-typescript": "^12.3.0",
         "@types/react": "~19.2.18",
         "@types/react-dom": "~19.2.7",
         "@types/three": "^0.186.0",
+        "@typescript/typescript6": "^6.0.2",
         "@vitest/coverage-v8": "^5.0.1",
+        "esbuild": "^0.28.2",
         "happy-dom": "^20.14.5",
         "jolt-physics": "^1.1.0",
         "react": "19.2.8",
         "react-dom": "19.2.8",
         "rollup": "^4.63.4",
         "rollup-plugin-copy": "^3.5.0",
+        "rollup-plugin-dts": "^6.5.1",
+        "rollup-plugin-esbuild": "^6.2.1",
         "rollup-plugin-filesize": "^10.0.0",
         "three": "^0.186.0",
-        "typescript": "^5.9.3",
+        "typescript": "^7.0.2",
         "vite": "^8.3.0",
         "vitest": "^5.0.1"
     }
