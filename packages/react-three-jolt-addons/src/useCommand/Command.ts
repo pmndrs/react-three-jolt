@@ -1,9 +1,64 @@
-import { CommandCallback } from './Commander';
+import type { CommandCallback, CommandInfo } from './Commander';
+import type { VectorPreset } from './commonCommands';
+
+/** A two axis value, as produced by a `VectorCommand`. */
+export type CommandVector = { x: number; y: number };
+
+/** Every value a command can report. */
+export type CommandValue = string | number | boolean | CommandVector;
+
+/** The payload gamepad.js hands us. It is a plain object, not a DOM event. */
+export type GamepadEventDetail = {
+    index: number;
+    axis?: number;
+    button?: number;
+    value: number;
+    pressed?: boolean;
+};
+export type GamepadInputEvent = {
+    type: string;
+    detail: GamepadEventDetail;
+};
+
+/** Anything that can trigger a command. */
+export type CommandEvent = KeyboardEvent | MouseEvent | GamepadInputEvent;
+
+/** DOM UI events carry a numeric `detail`, gamepad.js' carry the object above. */
+export function isGamepadInputEvent(event?: CommandEvent): event is GamepadInputEvent {
+    return (
+        !!event && 'detail' in event && typeof event.detail === 'object' && event.detail !== null
+    );
+}
+
+/**
+ * Options accepted when creating or reconfiguring a command. Unknown keys are written straight
+ * onto the command instance by `setOptions`, which is how consumers attach their own values
+ * (`sensitivity`, for example).
+ */
+export type CommandOptions = {
+    keys?: string[];
+    buttons?: number[];
+    axis?: number[];
+    asVector?: boolean;
+    /** `VectorCommand` only: name of a preset in `vectorPresets` */
+    preset?: string;
+    /** `VectorCommand` only: overrides merged onto the preset */
+    bindings?: VectorPreset;
+    /** `VectorCommand` only: flip an axis */
+    inverted?: { x?: boolean; y?: boolean };
+    threshold?: number;
+    deadzone?: number;
+    isVariable?: boolean;
+    rate?: number;
+    max?: number;
+    min?: number;
+    active?: boolean;
+    [option: string]: unknown;
+};
 
 export class Command {
     label: string;
-    // TODO: move this type
-    value: string | number | boolean | { x: number; y: number } = 0;
+    value: CommandValue = 0;
     downListeners: CommandCallback[] = [];
     upListeners: CommandCallback[] = [];
     keys: string[] = [];
@@ -31,12 +86,9 @@ export class Command {
     constructor(label: string) {
         this.label = label;
     }
-    handleDown(
-        event: KeyboardEvent | MouseEvent,
-        value?: number | string | boolean | { x: number; y: number }
-    ) {
+    handleDown(event?: CommandEvent, value?: CommandValue) {
         const now = Date.now();
-        let duration;
+        let duration: number | undefined;
         // check if theres a duration and if its above the threshold (Throttling)
         if (
             !this.active ||
@@ -56,40 +108,34 @@ export class Command {
         }
 
         // initalize the value to this minimum
-        // TODO: this looks dirty
-        if (this.isVariable)
-            this.value = value
-                ? //@ts-ignore
-                  value >= this.min
-                    ? value
-                    : this.min
-                : this.min;
-        else this.value = value || this.rate;
+        if (this.isVariable) {
+            const numeric = typeof value === 'number' ? value : undefined;
+            this.value = numeric !== undefined && numeric >= this.min ? numeric : this.min;
+        } else this.value = value ?? this.rate;
 
-        const info = {
+        const info: CommandInfo = {
             event,
             label: this.label,
-            method: event.type,
+            method: event?.type ?? 'update',
             value: this.value,
             command: this,
             isInitial: this.isInitial,
             startTime: this.startTime,
             duration
         };
-        //@ts-ignore
-        this.downListeners.forEach((listener) => listener(info));
+        this.emit(this.downListeners, info);
         // TODO Fix typescript to allow early returns
         return false;
     }
-    handleUp(event: MouseEvent | KeyboardEvent, value?: number | string) {
+    handleUp(event?: CommandEvent, value?: CommandValue) {
         // check if we already stopped due to throttling
         if (!this.running) return false;
         // reset the running value
         this.running = false;
-        this.value = value || 0;
-        const info = {
+        this.value = value ?? 0;
+        const info: CommandInfo = {
             event,
-            method: event.type,
+            method: event?.type ?? 'update',
             label: this.label,
             value: this.value,
             command: this,
@@ -97,18 +143,19 @@ export class Command {
             startTime: this.startTime,
             duration: this.updateDuration()
         };
-        this.upListeners.forEach((listener) => listener(info));
+        this.emit(this.upListeners, info);
         return false;
     }
     // if the value needs to change because of a tick
     handleUpdate() {
         this.isInitial = false;
 
-        if (typeof this.value == 'number') {
+        if (typeof this.value === 'number') {
             const newVal = this.value + this.rate;
             this.value = newVal >= this.min ? (newVal <= this.max ? newVal : this.max) : this.min;
         }
-        const info = {
+        const info: CommandInfo = {
+            label: this.label,
             method: 'update',
             value: this.value,
             command: this,
@@ -116,19 +163,33 @@ export class Command {
             startTime: this.startTime,
             duration: this.updateDuration()
         };
-        //@ts-ignore
-        this.downListeners.forEach((listener) => listener(info));
+        this.emit(this.downListeners, info);
     }
-    // takes in an options object and applies to this
-    setOptions(options: any) {
+
+    /**
+     * Takes in an options object and applies it to this command.
+     *
+     * Note the assignment is by *key*; this used to index by value (`this[options[key]]`) which
+     * silently wrote garbage properties and never set the option that was asked for.
+     */
+    setOptions(options?: CommandOptions) {
         if (!options) return;
         // TODO: should this go into an options object and not direct on the class?
+        const target = this as unknown as Record<string, unknown>;
         Object.keys(options).forEach((key: string) => {
-            //@ts-ignore
-
-            this[options[key]] = options[key];
+            const value = options[key];
+            if (value === undefined) return;
+            // never let an option clobber one of the command's own methods
+            if (typeof target[key] === 'function') return;
+            target[key] = value;
         });
     }
+
+    /** Iterate over a copy so a listener that unsubscribes mid-dispatch can't skip its neighbour. */
+    private emit(listeners: CommandCallback[], info: CommandInfo) {
+        listeners.slice().forEach((listener) => listener(info));
+    }
+
     private updateDuration() {
         this.duration = Date.now() - this.startTime;
         return this.duration;

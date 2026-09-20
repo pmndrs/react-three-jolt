@@ -12,6 +12,11 @@ export default defineConfig({
     test: {
         environment: 'happy-dom',
         setupFiles: ['./test/setup.ts'],
+        // `*.test-d.ts` files assert on types only; the hooks' public signatures are part of
+        // their contract (see #78), so they are checked on every run.
+        typecheck: {
+            enabled: true
+        },
         server: {
             deps: {
                 // drei is esm but pulls in cjs-only deps (detect-gpu); node's named-export
