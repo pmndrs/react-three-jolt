@@ -69,7 +69,16 @@ export class PhysicsSystem {
      * constraints - everything wasm-facing has to check this before calling into jolt.
      */
     public destroyed = false;
-    public debug = false;
+    private _debug = false;
+    /** Log lifecycle info, warn when simulation time is dropped, and poison event payloads. */
+    get debug(): boolean {
+        return this._debug;
+    }
+    set debug(value: boolean) {
+        this._debug = value;
+        // BodySystem does not exist yet while the field initialisers run
+        if (this.bodySystem) this.bodySystem.debug = value;
+    }
     private _interpolate = true;
     /**
      * Interpolate the three.js objects between the last two fixed steps instead of snapping
@@ -175,12 +184,18 @@ export class PhysicsSystem {
         jolt.destroy(settings);
         jolt.destroy(BP_LAYER_NON_MOVING);
         jolt.destroy(BP_LAYER_MOVING);
+        // the broadphase table copied it, same as the other two; this one was being leaked
+        jolt.destroy(BP_LAYER_RIG);
 
         // start the chain of systems/services
         this.constraintSystem = new ConstraintSystem(this);
         this.bodySystem = new BodySystem(this.physicsSystem);
         // so removing a body also removes the constraints attached to it (issue #82)
         this.bodySystem.constraintSystem = this.constraintSystem;
+        // the contact listener needs the world emitter for its zero-cost mask and for
+        // dispatching world level events
+        this.bodySystem.worldEvents = this.events;
+        this.bodySystem.debug = this._debug;
     }
 
     destroy(pid = '0'): void {
@@ -189,6 +204,7 @@ export class PhysicsSystem {
         // world is on its way out.
         this.events.clear();
         this.legacyStepSubs.clear();
+        this.bodySystem.clearEvents();
         // check if it exists in the global
         if (Raw.joltInterfaces.has(pid)) {
             // The JoltInterface goes FIRST. Jolt's PhysicsSystem holds raw pointers to the
@@ -198,6 +214,8 @@ export class PhysicsSystem {
             Raw.joltInterfaces.delete(pid);
             // console.log('*** PhysicsSystem:' + pid + ' destroyed ***');
         }
+        // ...and only now the listener objects it was pointing at, plus the body maps.
+        this.bodySystem.destroy();
         // every body, constraint and shape went with the interface
         this.destroyed = true;
     }
@@ -290,6 +308,7 @@ export class PhysicsSystem {
         this.events.emit('beforeStep', delta, this.currentSubframe);
         this.bodySystem.handlePendingActions();
         this.joltInterface.Step(delta, steps);
+        this.bodySystem.flushEvents();
         this.events.emit('afterStep', delta, this.currentSubframe);
         this.currentSubframe = (this.currentSubframe + 1) % 4;
     }

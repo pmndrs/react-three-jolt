@@ -160,6 +160,32 @@ export class Emitter<M extends EventMap> {
         if (this.depth === 0 && this.dirty) this.compactAll();
     }
 
+    /**
+     * Dispatch and let handlers veto: returns false as soon as any handler returns exactly
+     * `false`, after running all of them. This is how `onContactValidate` gets an answer back
+     * out of a synchronous, inside-the-step dispatch; everything else uses {@link emit}.
+     */
+    emitVeto<K extends keyof M & string>(type: K, ...args: Parameters<M[K]>): boolean {
+        const list = this.lists.get(type);
+        if (!list || list.length === 0) return true;
+        let accepted = true;
+        this.depth++;
+        const length = list.length;
+        for (let i = 0; i < length; i++) {
+            const entry = list[i];
+            if (entry.dead) continue;
+            if (entry.once) this.kill(type, entry);
+            try {
+                if (entry.fn(...args) === false) accepted = false;
+            } catch (error) {
+                console.error(`*** R3/Jolt: "${type}" event handler threw ***`, error);
+            }
+        }
+        this.depth--;
+        if (this.depth === 0 && this.dirty) this.compactAll();
+        return accepted;
+    }
+
     /** Drop every listener, or every listener of one type. */
     clear<K extends keyof M & string>(type?: K): void {
         if (type === undefined) {
