@@ -170,8 +170,12 @@ export class Raycaster {
     // do the cast, runs optional handlers and returns the hits
     // @ts-ignore early bail return triggers TS
     cast(successHandler?: any, failHandler?: any) {
-        // clear the collector
-        if (this.hasCast && this.type !== 'closest') this.collector.Reset();
+        // clear the collector. Every collector type must be reset before reuse, including
+        // "closest": CastRayClosestHitCollisionCollector keeps HadHit()/mHit and its early-out
+        // fraction from the previous cast, so skipping the reset here made a closest-hit
+        // raycaster silently return stale/blocked results after its first hit (issue #60).
+        // Shapecaster already resets unconditionally; match that here.
+        if (this.hasCast) this.collector.Reset();
         this.hasCast = true;
         //clear the hits
         this.hits = [];
@@ -362,7 +366,7 @@ export class Raycaster {
 // probably never to be used but its here if you need it
 //TODO: This might have some bind/apply scope issues
 export class AdvancedRaycaster extends Raycaster {
-    collector: Jolt.CastRayCollectorJS = new Raw.module.CastRayCollectorJS();
+    declare collector: Jolt.CastRayCollectorJS;
     //@ts-ignore
     activeBody: Jolt.Body;
     collisionCount = 0;
@@ -370,7 +374,23 @@ export class AdvancedRaycaster extends Raycaster {
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         super(joltPhysicsSystem, joltInterface);
 
-        //preload the reset with our own
+        // the base constructor's setCollector() already built a "closest" native collector;
+        // free it before swapping in our JS collector instead of leaking it.
+        Raw.module.destroy(this.collector);
+        this.collector = new Raw.module.CastRayCollectorJS();
+
+        // jolt-physics' JSImplementation requires Reset/OnBody/AddHit to exist as the
+        // collector's OWN properties before it is ever passed to CastRay - otherwise embind
+        // throws "a JSImplementation must implement all functions" the first time the engine
+        // calls back into an unimplemented one. Install no-op defaults so a freshly created
+        // AdvancedRaycaster can cast() immediately; onBody()/addHit()/onReset() below let
+        // callers override them.
+        this.collector.Reset = () => {
+            this.collisionCount = 0;
+            this.hits = [];
+        };
+        this.collector.OnBody = () => {};
+        this.collector.AddHit = () => {};
     }
     // pass through for the onBody
     onBody(handler: any) {
@@ -405,7 +425,7 @@ export class AdvancedRaycaster extends Raycaster {
         this.collector.Reset = () => {
             this.collisionCount = 0;
             this.hits = [];
-            handler(this.collector);
+            if (handler) handler(this.collector);
             this.collector.ResetEarlyOutFraction();
         };
     }
@@ -414,11 +434,14 @@ export class AdvancedRaycaster extends Raycaster {
     }
 
     // slight override on the parent class as we have to call override on our
-    // raw handler.
+    // raw handler. Reset happens BEFORE the cast (clearing hits/collisionCount left over from
+    // the previous call), not after - resetting afterwards would wipe out the hits this very
+    // cast just collected before the caller ever sees them.
     //@ts-ignore
     cast(successHandler?: any, failHandler?: any) {
+        if (this.hasCast) this.reset();
+        this.hasCast = true;
         this.rawCast();
-        this.reset();
         if (this.hits.length > 0) {
             if (successHandler) {
                 if (this.type === 'all') {
@@ -461,11 +484,16 @@ export class RaycastHit {
         this.bodyHandle = bodyID
             ? bodyID.GetIndexAndSequenceNumber()
             : mHit.mBodyID.GetIndexAndSequenceNumber();
+        // GetPointOnRay returns a Vec3/RVec3 BY VALUE through jolt-physics' WebIDL binder, which
+        // hands back a pointer to ONE STATIC TEMPORARY per bound function (overwritten on the
+        // next call to GetPointOnRay, shared across every RayCast instance) - never call
+        // Raw.module.destroy() on it, that would free memory the binder still owns and reuses.
+        // vec3.three() copies the components out into a plain THREE.Vector3 immediately, so
+        // there is nothing left for us to (nor should we) free here.
         const joltPosition = ray.GetPointOnRay(mHit.mFraction);
         this.position = vec3.three(joltPosition);
-        // destroy things
-        Raw.module.destroy(joltPosition);
-        // maybe dont do this as its a reference?
+        // mHit.mBodyID/mSubShapeID2 are references into the collector's own result storage, not
+        // ours to destroy either.
         //Raw.module.destroy(mHit);
     }
     //* the more complex  values we set as getters and arent stored on the object
@@ -488,14 +516,19 @@ export class RaycastHit {
         shapeID.SetValue(this.shapeIdValue);
         const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
         if (body) {
+            // GetWorldSpaceSurfaceNormal also returns its Vec3 BY VALUE through the WebIDL
+            // binder - same static-temporary rule as GetPointOnRay above. Do NOT destroy
+            // joltNormal: it isn't ours, and freeing it would corrupt the shared temporary every
+            // other call to this function (on any body) reads and writes.
             const joltNormal = body.GetWorldSpaceSurfaceNormal(shapeID, position);
             toReturn = vec3.three(joltNormal);
-            //Raw.module.destroy(joltNormal);
         }
-        // destroy remaining jolt items
-        //Raw.module.destroy(shapeID);
-        // Raw.module.destroy(bodyID);
-        //Raw.module.destroy(position);
+        // bodyID/shapeID/position ARE fresh allocations we made above with `new Raw.module.X()`,
+        // so - unlike joltNormal - these three are genuinely ours and must be freed: this getter
+        // leaked all three of them on every single call.
+        Raw.module.destroy(shapeID);
+        Raw.module.destroy(bodyID);
+        Raw.module.destroy(position);
         return toReturn;
     }
     //TODO Fix this to work with the bodyID Handle after removing BodyID
@@ -529,6 +562,16 @@ export class Multicaster {
         this.joltInterface = joltInterface;
         this.raycaster = new Raycaster(joltPhysicsSystem, joltInterface);
     }
+    // Cleanup ---------------------------------------
+    // Multicaster owns a Raycaster (and, through it, the ray/settings/filters/collector jolt
+    // allocations) but previously had no destroy() at all, so nothing ever freed it.
+    destroy() {
+        this.raycaster.destroy();
+        this.hits = [];
+        this.positions = [];
+        this.rays = [];
+        this.results = [];
+    }
     //* Getters and Setters ----------------------------
     get origin() {
         return this.raycaster.origin;
@@ -550,6 +593,8 @@ export class Multicaster {
     //@ts-ignore cast with just the positions
     cast(successHandler?: any, failHandler?: any) {
         this.hits = [];
+        // results was appended to forever and never cleared, growing without bound across casts
+        this.results = [];
         this.positions.forEach((position) => {
             //@ts-ignore
             this.raycaster.castFrom(position, (hit: RaycastHit | RaycastHit[]) => {
@@ -571,6 +616,7 @@ export class Multicaster {
     //@ts-ignore cast with the rays
     castRays(successHandler?: any, failHandler?: any) {
         this.hits = [];
+        this.results = [];
         this.rays.forEach((ray) => {
             this.raycaster.castBetween(ray.origin, ray.destination, (hit: any) => {
                 if (Array.isArray(hit)) this.hits.push(...hit);
