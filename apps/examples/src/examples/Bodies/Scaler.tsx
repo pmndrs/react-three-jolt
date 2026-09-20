@@ -7,7 +7,7 @@ type ScalerProps = {
 const Scaler: React.FC<ScalerProps> = memo((props) => {
 	const [scale, setScale] = useState([1, 1, 1]);
 	const [activeColor, setActiveColor] = useState("#B4A6AB");
-	const bodyRef = useRef<BodyState>();
+	const bodyRef = useRef<BodyState | undefined>(undefined);
 	const currentScale = useRef(0);
 	const colors = ["#B4A6AB", "#CDD5D1", "#DDF8E8"];
 	const scales = [

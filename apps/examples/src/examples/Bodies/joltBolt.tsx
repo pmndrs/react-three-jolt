@@ -31,7 +31,7 @@ export function JoltBolt(props: any) {
 	const svg = useLoader(SVGLoader, "/joltBolt.svg");
 	const geometry = useMemo(() => {
 		const shapes = svg.paths.flatMap((path) => {
-			const shape = path.toShapes(true);
+			const shape = path.toShapes();
 			return shape;
 		});
 		const extrudeSettings = {

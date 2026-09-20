@@ -10,24 +10,25 @@
         "format": "biome format --write ."
     },
     "dependencies": {
-        "@react-three/drei": "^9.105.5",
+        "@react-three/drei": "11.0.0-alpha.7",
+        "@react-three/fiber": "10.0.0-alpha.5",
         "@react-three/jolt": "0.0.1",
         "@react-three/jolt-addons": "0.0.1",
         "@react-three/jolt-controllers": "0.0.1",
-        "leva": "^0.9.35",
-        "maath": "^0.10.7",
-        "postprocessing": "^6.35.3",
-        "r3f-perf": "^7.2.1",
-        "react": "^18.2.0",
-        "react-dom": "^18.2.0",
-        "react-router-dom": "^6.22.3",
-        "three": "^0.163.0"
+        "leva": "^0.10.1",
+        "maath": "^0.10.8",
+        "postprocessing": "^6.39.5",
+        "r3f-perf": "^7.2.3",
+        "react": "19.2.8",
+        "react-dom": "19.2.8",
+        "react-router": "^7.18.4",
+        "three": "^0.186.0"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.14",
-        "@types/react": "^18.2.74",
-        "@types/react-dom": "^18.2.24",
-        "@types/three": "^0.163.0",
+        "@types/react": "~19.2.18",
+        "@types/react-dom": "~19.2.7",
+        "@types/three": "^0.186.0",
         "@vitejs/plugin-react": "^6.1.1",
         "typescript": "^5.9.3",
         "vite": "^8.3.0"

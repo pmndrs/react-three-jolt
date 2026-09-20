@@ -3,7 +3,7 @@ import { BodyState, RigidBody } from "@react-three/jolt";
 import { useRef, useEffect } from "react";
 
 export function Teleport(props: any) {
-	const rigidBodyRef = useRef();
+	const rigidBodyRef = useRef<any>(null);
 	const {
 		size = [5, 0.4, 5],
 		position = [0, 0, 0],

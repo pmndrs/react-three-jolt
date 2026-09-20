@@ -29,5 +29,8 @@
     },
     "engines": {
         "node": ">=22"
+    },
+    "resolutions": {
+        "three-stdlib": "^2.36.1"
     }
 }

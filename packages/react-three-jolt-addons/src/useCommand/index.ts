@@ -4,7 +4,7 @@ to commands rather than specifically to keystrokes or gamepad inputs */
 import { useEffect, useSyncExternalStore } from 'react';
 import { Commander, CommandCallback } from './Commander';
 import { CameraControls } from '@react-three/drei';
-import { Vec2 } from 'three';
+import type { Vector2Like } from 'three';
 import { useFrame } from '@react-three/fiber';
 
 // Puts a singleton into global space
@@ -75,7 +75,7 @@ export function useGamepadForCameraControls(
     // pass the other options to the command
 
     // do the rotation
-    function rotate(rotation: Vec2) {
+    function rotate(rotation: Vector2Like) {
         controls.rotate(rotation.x * sensitivity, rotation.y * sensitivity);
     }
 

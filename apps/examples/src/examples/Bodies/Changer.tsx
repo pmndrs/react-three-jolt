@@ -11,7 +11,7 @@ type ChangerProps = {
 const Changer: React.FC<ChangerProps> = memo((props) => {
 	//hold the refs
 	const meshRef = useRef<THREE.Mesh | null>(null);
-	const bodyRef = useRef<BodyState>();
+	const bodyRef = useRef<BodyState | undefined>(undefined);
 
 	// original color: #6200B3
 	const [activeColor, setActiveColor] = useState("#188FA7");

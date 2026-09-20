@@ -82,10 +82,10 @@ export const Shape: React.FC<ShapeProps> = memo(
 		const isScaled = scale || (dynamic && !children);
 
 		const [shape, setShape] = useState<Jolt.Shape>();
-		const shapeSettings = useRef<Jolt.ShapeSettings>();
-		const baseShape = useRef<Jolt.Shape>();
-		const prevShape = useRef<Jolt.Shape>();
-		const prevScale = useRef<number[]>();
+		const shapeSettings = useRef<Jolt.ShapeSettings | undefined>(undefined);
+		const baseShape = useRef<Jolt.Shape | undefined>(undefined);
+		const prevShape = useRef<Jolt.Shape | undefined>(undefined);
+		const prevScale = useRef<number[] | undefined>(undefined);
 
 		// Compound Shape Data
 		// lets try as a ref first
