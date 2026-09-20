@@ -16,6 +16,7 @@ import { afterEach, assert, beforeAll, describe, expect, test } from 'vitest';
 import { initJolt, Raw } from '../src/raw';
 import {
     type AutoShape,
+    addSubShape,
     createMeshForShape,
     createMeshFromShape,
     createShapeFromSettings,
@@ -28,9 +29,14 @@ import {
     generateShapeSettings,
     getShapeSettingsFromGeometry,
     getShapeSettingsFromObject,
+    getSubShapeTransform,
+    isMutableCompoundShape,
+    modifySubShape,
     releaseShape,
+    removeSubShape,
     type ShapeDescriptor,
-    scaleShape
+    scaleShape,
+    subShapeCount
 } from '../src/systems/shape-system';
 import { createMeshFloor } from '../src/utils/meshTools';
 import { installAllocTracker } from './jolt-alloc';
@@ -728,41 +734,233 @@ describe('scaled shapes', () => {
     });
 });
 
-describe('reserved descriptor types', () => {
-    test('mutableCompound explains itself and points at #108', () => {
+describe('unknown descriptor types', () => {
+    test('an unknown type explains itself', () => {
         const allocations = startSpy();
-        expect(() => generateShape({ type: 'mutableCompound', children: [] })).toThrow(
-            /not implemented yet.*#108/
+        expect(() => generateShape({ type: 'nonsense' } as unknown as ShapeDescriptor)).toThrow(
+            /unknown shape descriptor type/
         );
         assert.equal(allocations.total(), 0);
     });
 
-    test('offsetCenterOfMass explains itself and points at #40', () => {
-        const allocations = startSpy();
-        expect(() =>
-            generateShape({
-                type: 'offsetCenterOfMass',
-                centerOfMass: [0, 1, 0],
-                child: { type: 'box', size: [1, 1, 1] }
-            })
-        ).toThrow(/not implemented yet.*#40/);
-        assert.equal(allocations.total(), 0);
-    });
-
-    test('a reserved child inside a compound frees the half built compound', () => {
+    test('a failing child inside a compound frees the half built compound', () => {
         const allocations = startSpy();
         expect(() =>
             generateShape({
                 type: 'staticCompound',
                 children: [
                     { type: 'box', size: [1, 1, 1] },
-                    { type: 'mutableCompound', children: [] }
+                    { type: 'nonsense' } as unknown as ShapeDescriptor
                 ]
             })
-        ).toThrow(/not implemented yet/);
+        ).toThrow(/unknown shape descriptor type/);
         // the compound is destroyed on the error path, which releases (and frees, inside wasm)
         // the box settings it had already taken a reference on - the scratch Vec3/Quat are gone
         expect(allocations.counts()).toEqual({ BoxShapeSettings: 1 });
+    });
+});
+
+//* Mutable compounds (issue #108) ==========================
+describe('mutable compounds', () => {
+    const mutable = (shape: Jolt.Shape) =>
+        Raw.module.castObject(shape, Raw.module.MutableCompoundShape);
+
+    test('a mutableCompound descriptor builds a MutableCompoundShape', () => {
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1], position: [0, 1, 0] },
+                { type: 'sphere', radius: 0.5, position: [0, -1, 0] }
+            ]
+        });
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_MutableCompound);
+        assert.equal(shape.GetRefCount(), 1);
+        assert.equal(subShapeCount(shape), 2);
+        releaseShape(shape);
+    });
+
+    test('a mutable compound with a single child is NOT collapsed into that child', () => {
+        // a static compound is: jolt folds one child into a RotatedTranslatedShape, which would
+        // make it impossible to add a second child later
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [{ type: 'box', size: [1, 1, 1], position: [0, 1, 0] }]
+        });
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_MutableCompound);
+        assert.equal(subShapeCount(shape), 1);
+        releaseShape(shape);
+    });
+
+    test('addSubShape appends a child, grows the bounds, and hands ownership to the compound', () => {
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [{ type: 'box', size: [1, 1, 1] }]
+        });
+        const before = boundsSize(shape);
+
+        const index = addSubShape(shape, { type: 'box', size: [1, 1, 1], position: [0, 3, 0] });
+        assert.equal(index, 1, 'the new child is appended');
+        assert.equal(subShapeCount(shape), 2);
+        // 0.5 below the first box to 3.5 above the second one
+        assert.closeTo(boundsSize(shape)[1], 4, 0.05);
+        assert.isAbove(boundsSize(shape)[1], before[1]);
+        // the compound owns the child: nothing outside holds a reference on it
+        assert.equal(mutable(shape).GetSubShape(1).mShape.GetRefCount(), 1);
+
+        releaseShape(shape);
+    });
+
+    test('removeSubShape drops a child and shrinks the bounds again', () => {
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                { type: 'sphere', radius: 0.5, position: [0, 3, 0] }
+            ]
+        });
+        assert.closeTo(boundsSize(shape)[1], 4, 0.05);
+
+        removeSubShape(shape, 1);
+        assert.equal(subShapeCount(shape), 1);
+        assert.closeTo(boundsSize(shape)[1], 1, 0.05);
+
+        releaseShape(shape);
+    });
+
+    test('modifySubShape moves a child without replacing it', () => {
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                { type: 'box', size: [1, 1, 1], position: [0, 1, 0] }
+            ]
+        });
+        const child = mutable(shape).GetSubShape(1).mShape;
+        assert.closeTo(boundsSize(shape)[1], 2, 0.05);
+
+        modifySubShape(shape, 1, { position: [0, 4, 0] });
+        // same shape object, new placement
+        assert.equal(mutable(shape).GetSubShape(1).mShape.GetSubType(), child.GetSubType());
+        assert.closeTo(boundsSize(shape)[1], 5, 0.05);
+        // the transform reads back in the space it was given in, through the centre of mass shift
+        const transform = getSubShapeTransform(shape, 1);
+        assert.closeTo(transform.position[1], 4, 1e-3);
+
+        releaseShape(shape);
+    });
+
+    test('a rotated child round trips through getSubShapeTransform', () => {
+        const turn = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                {
+                    type: 'box',
+                    size: [2, 0.5, 0.5],
+                    position: [1, 2, -3],
+                    rotation: [turn.x, turn.y, turn.z, turn.w]
+                }
+            ]
+        });
+        const { position, rotation } = getSubShapeTransform(shape, 1);
+        assert.closeTo(position[0], 1, 1e-3);
+        assert.closeTo(position[1], 2, 1e-3);
+        assert.closeTo(position[2], -3, 1e-3);
+        assert.closeTo(rotation[2], turn.z, 1e-3);
+        assert.closeTo(rotation[3], turn.w, 1e-3);
+        releaseShape(shape);
+    });
+
+    test('editing a static compound throws instead of mis-casting it', () => {
+        const shape = generateShape({
+            type: 'staticCompound',
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                { type: 'sphere', radius: 0.5, position: [0, 2, 0] }
+            ]
+        });
+        expect(() => addSubShape(shape, { type: 'box', size: [1, 1, 1] })).toThrow(
+            /not a MutableCompoundShape/
+        );
+        expect(() => removeSubShape(shape, 0)).toThrow(/not a MutableCompoundShape/);
+        assert.isFalse(isMutableCompoundShape(shape));
+        releaseShape(shape);
+    });
+
+    test('add then remove is allocation net zero', () => {
+        const tracker = installAllocTracker(Raw);
+        try {
+            const shape = generateShape({
+                type: 'mutableCompound',
+                children: [{ type: 'box', size: [1, 1, 1] }]
+            });
+            const before = tracker.live();
+            for (let i = 0; i < 5; i++) {
+                const index = addSubShape(shape, {
+                    type: 'sphere',
+                    radius: 0.5,
+                    position: [0, i, 0]
+                });
+                modifySubShape(shape, index, { position: [0, i + 1, 0] });
+                removeSubShape(shape, index);
+            }
+            assert.equal(subShapeCount(shape), 1);
+            assert.equal(
+                tracker.live(),
+                before,
+                `editing left ${JSON.stringify(tracker.liveByType())} behind`
+            );
+            releaseShape(shape);
+        } finally {
+            tracker.uninstall();
+        }
+    });
+
+    test('a body whose shape is a mutable compound edits it through BodyState', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('mutable-compound-test');
+        const shape = generateShape({
+            type: 'mutableCompound',
+            children: [{ type: 'box', size: [1, 1, 1] }]
+        });
+        const handle = system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)), {
+            shape
+        });
+        // the body took its own reference
+        releaseShape(shape);
+        const body = system.bodySystem.getBody(handle)!;
+
+        assert.isTrue(body.isMutableCompound);
+        const massBefore = body.mass;
+
+        const index = body.addSubShape({ type: 'box', size: [1, 1, 1], position: [0, 3, 0] });
+        assert.equal(index, 1);
+        assert.equal(subShapeCount(body.shape), 2);
+        // NotifyShapeChanged(updateMassProperties) recomputed mass from the new shape
+        assert.isAbove(body.mass, massBefore, 'the body kept its old mass properties');
+
+        body.modifySubShape(index, { position: [0, 5, 0] });
+        assert.closeTo(getSubShapeTransform(body.shape, index).position[1], 5, 1e-3);
+
+        body.removeSubShape(index);
+        assert.equal(subShapeCount(body.shape), 1);
+        assert.closeTo(body.mass, massBefore, 1e-3);
+
+        body.destroy(true);
+    });
+
+    test('BodyState rejects editing a body that is not a mutable compound', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('mutable-compound-reject-test');
+        const body = system.bodySystem.getBody(
+            system.bodySystem.addBody(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)))
+        )!;
+        assert.isFalse(body.isMutableCompound);
+        expect(() => body.addSubShape({ type: 'box', size: [1, 1, 1] })).toThrow(
+            /not a MutableCompoundShape/
+        );
+        body.destroy(true);
     });
 });
 
@@ -827,7 +1025,17 @@ describe('every descriptor type is allocation neutral', () => {
                 ]
             }
         ],
-        ['scaled', { type: 'scaled', scale: [2, 2, 2], child: { type: 'box', size: [1, 1, 1] } }]
+        ['scaled', { type: 'scaled', scale: [2, 2, 2], child: { type: 'box', size: [1, 1, 1] } }],
+        [
+            'mutableCompound',
+            {
+                type: 'mutableCompound',
+                children: [
+                    { type: 'box', size: [1, 1, 1], position: [0, 1, 0] },
+                    { type: 'sphere', radius: 0.5 }
+                ]
+            }
+        ]
     ];
 
     for (const [name, descriptor] of descriptors) {

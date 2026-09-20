@@ -18,7 +18,7 @@ import {
 } from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { Raw } from '../raw';
-import { type anyVec3, devWarn, vec3 } from '../utils';
+import { type anyQuat, type anyVec3, devWarn, quat, vec3 } from '../utils';
 
 export class ShapeSystem {
     private physicsSystem: Jolt.PhysicsSystem;
@@ -48,6 +48,10 @@ export class ShapeSystem {
  * `getShapeSettingsFromObject` and `generateShapeSettings` - is now a thin wrapper over
  * `describeShape` + `createShapeSettings`, so there is exactly one place that knows how a
  * three.js geometry maps onto a Jolt shape and exactly one place that allocates.
+ *
+ * A `mutableCompound` descriptor (issue #108) is the one shape that can be changed after it
+ * exists: `addSubShape` / `removeSubShape` / `modifySubShape` edit it in place. Everything else
+ * is immutable once built - "changing" it means describing it again and generating a new shape.
  * ========================================================================== */
 
 /**
@@ -173,7 +177,12 @@ export interface StaticCompoundShapeDescriptor extends ShapeDescriptorBase {
     type: 'staticCompound';
     children: ShapeDescriptor[];
 }
-/** Reserved for issue #108 (`MutableCompoundShape`). `generateShape` throws for now. */
+/**
+ * A compound whose children can be added, removed and moved at runtime (issue #108).
+ * Build it like a `staticCompound`, then edit the resulting shape with `addSubShape`,
+ * `removeSubShape` and `modifySubShape` (or `BodyState`'s methods of the same names, which also
+ * tell the body its mass properties and bounds moved).
+ */
 export interface MutableCompoundShapeDescriptor extends ShapeDescriptorBase {
     type: 'mutableCompound';
     children: ShapeDescriptor[];
@@ -952,8 +961,7 @@ export function createShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSett
         case 'staticCompound':
             return createCompoundShapeSettings(descriptor.children, false);
         case 'mutableCompound':
-            // issue #108: jolt 1.1 exports MutableCompoundShape, but nothing here maintains one
-            return notImplemented('mutableCompound', 'issue #108');
+            return createCompoundShapeSettings(descriptor.children, true);
         case 'scaled': {
             // ScaledShapeSettings takes a reference on the inner settings: destroying the scaled
             // settings frees them, so the inner ones are never destroyed here.
@@ -987,6 +995,162 @@ export function createShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSett
  */
 export function generateShape(descriptor: ShapeDescriptor): Jolt.Shape {
     return createShapeFromSettings(createShapeSettings(descriptor));
+}
+
+/* ============================================================================
+ * Mutable compounds - editing a compound at runtime (issue #108)
+ *
+ * A `{ type: 'mutableCompound' }` descriptor builds a `MutableCompoundShape`: the same thing as
+ * a static compound, except its children can be added, removed and moved after the shape exists.
+ * Everything below edits such a shape in place; nothing here rebuilds it.
+ *
+ * Ownership: `MutableCompoundShape::AddShape` takes its own reference on the child shape and
+ * `RemoveShape` releases it. `addSubShape` therefore drops the reference `generateShape` handed
+ * it as soon as the compound has one, and `removeSubShape` must NOT destroy or release anything -
+ * the compound owns its children and frees them itself.
+ *
+ * A body holding the compound caches its bounds and mass properties, so after any of these the
+ * body must be told: that is `BodyState.addSubShape` / `removeSubShape` / `modifySubShape`, which
+ * wrap these and call `BodyInterface::NotifyShapeChanged`.
+ * ========================================================================== */
+
+/** Where a sub shape sits inside its parent compound. Both parts are optional in a modify. */
+export type SubShapeTransform = {
+    position?: anyVec3;
+    rotation?: anyQuat;
+};
+
+/** True when `shape` is a compound whose children can be edited at runtime. */
+export const isMutableCompoundShape = (shape?: Jolt.Shape | null): boolean =>
+    !!shape && shape.GetSubType() === Raw.module.EShapeSubType_MutableCompound;
+
+/**
+ * Narrow a shape to a `MutableCompoundShape`. Throws (rather than handing back a bad cast) when
+ * the shape is a static compound or anything else: `castObject` does not check.
+ */
+export const asMutableCompoundShape = (shape?: Jolt.Shape | null): Jolt.MutableCompoundShape => {
+    if (!isMutableCompoundShape(shape))
+        throw new Error(
+            'react-three-jolt: this shape is not a MutableCompoundShape, so its children cannot ' +
+                "be edited at runtime. Build it from a `{ type: 'mutableCompound' }` descriptor " +
+                '(or a `<Shape dynamic>`) instead of a static compound.'
+        );
+    return Raw.module.castObject(shape as Jolt.Shape, Raw.module.MutableCompoundShape);
+};
+
+/**
+ * A shape's centre of mass as plain numbers.
+ *
+ * `GetCenterOfMass()` hands back a pointer to a static temporary that the next by-value call
+ * overwrites, and `NotifyShapeChanged` needs the value from *before* the edit, so it has to be
+ * copied out rather than held.
+ */
+export const readCenterOfMass = (shape: Jolt.Shape): Vec3Tuple => {
+    const center = shape.GetCenterOfMass();
+    return [center.GetX(), center.GetY(), center.GetZ()];
+};
+
+/** How many children a compound (mutable or static) currently has. */
+export const subShapeCount = (shape: Jolt.Shape): number =>
+    Raw.module.castObject(shape, Raw.module.CompoundShape).GetNumSubShapes();
+
+/**
+ * Read a sub shape's placement back out in the same space `addSubShape` takes it.
+ *
+ * Jolt stores the position relative to the *compound's* centre of mass and shifted by the child's
+ * own (`SubShape::SetTransform` does `positionCOM = position - compoundCOM + rotation * childCOM`),
+ * so this undoes both to give back the local position the caller passed in.
+ */
+export const getSubShapeTransform = (
+    compound: Jolt.Shape,
+    index: number
+): { position: Vec3Tuple; rotation: QuatTuple } => {
+    const mutable = asMutableCompoundShape(compound);
+    const subShape = mutable.GetSubShape(index);
+    // every one of these getters returns the same kind of static temporary: read it immediately
+    const positionCOM = subShape.GetPositionCOM();
+    const local = new Vector3(positionCOM.GetX(), positionCOM.GetY(), positionCOM.GetZ());
+    const subRotation = subShape.GetRotation();
+    const rotation: QuatTuple = [
+        subRotation.GetX(),
+        subRotation.GetY(),
+        subRotation.GetZ(),
+        subRotation.GetW()
+    ];
+    const childCenter = subShape.mShape.GetCenterOfMass();
+    const child = new Vector3(childCenter.GetX(), childCenter.GetY(), childCenter.GetZ());
+    const compoundCenter = mutable.GetCenterOfMass();
+
+    local
+        .add(new Vector3(compoundCenter.GetX(), compoundCenter.GetY(), compoundCenter.GetZ()))
+        .sub(child.applyQuaternion(new THREE.Quaternion(...rotation)));
+    return { position: toTuple(local), rotation };
+};
+
+/**
+ * Add a child to a mutable compound and return its index.
+ *
+ * The child is built from `descriptor` (its `position`/`rotation` are its placement inside the
+ * compound, exactly as in a static compound) and is owned by the compound afterwards.
+ */
+export function addSubShape(
+    compound: Jolt.Shape,
+    descriptor: ShapeDescriptor,
+    index?: number
+): number {
+    const jolt = Raw.module;
+    const mutable = asMutableCompoundShape(compound);
+    // one reference, ours, handed over to the compound below
+    const child = generateShape(descriptor);
+    const position = vec3.jolt(descriptor.position ?? [0, 0, 0]);
+    const rotation = quat.jolt(descriptor.rotation ?? [0, 0, 0, 1]);
+    let added: number;
+    try {
+        // AddShape copies the transform and takes its own reference on the shape
+        added =
+            index === undefined
+                ? mutable.AddShape(position, rotation, child, descriptor.userData ?? 0)
+                : mutable.AddShape(position, rotation, child, descriptor.userData ?? 0, index);
+    } finally {
+        jolt.destroy(position);
+        jolt.destroy(rotation);
+        // the compound holds the child now (or, if AddShape threw, nothing does and this frees it)
+        releaseShape(child);
+    }
+    mutable.AdjustCenterOfMass();
+    return added;
+}
+
+/**
+ * Drop the child at `index`. The remaining children keep their order, so every index above
+ * `index` shifts down by one.
+ *
+ * The compound releases the child itself: do not `releaseShape`/`destroy` it here.
+ */
+export function removeSubShape(compound: Jolt.Shape, index: number): void {
+    const mutable = asMutableCompoundShape(compound);
+    mutable.RemoveShape(index);
+    mutable.AdjustCenterOfMass();
+}
+
+/** Move and/or turn the child at `index`. Anything left out of `transform` is kept as it is. */
+export function modifySubShape(
+    compound: Jolt.Shape,
+    index: number,
+    transform: SubShapeTransform
+): void {
+    const jolt = Raw.module;
+    const mutable = asMutableCompoundShape(compound);
+    const current = getSubShapeTransform(mutable, index);
+    const position = vec3.jolt(transform.position ?? current.position);
+    const rotation = quat.jolt(transform.rotation ?? current.rotation);
+    try {
+        mutable.ModifyShape(index, position, rotation);
+    } finally {
+        jolt.destroy(position);
+        jolt.destroy(rotation);
+    }
+    mutable.AdjustCenterOfMass();
 }
 
 /**

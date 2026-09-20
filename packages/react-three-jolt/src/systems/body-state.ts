@@ -13,7 +13,19 @@ import { Raw } from '../raw';
 
 import { anyVec3, joltScratch, quat, vec3 } from '../utils';
 import { type BodySystem, getThreeObjectForBody } from './body-system';
-import { releaseShape, scaleShape } from './shape-system';
+import {
+    addSubShape,
+    asMutableCompoundShape,
+    isMutableCompoundShape,
+    modifySubShape,
+    readCenterOfMass,
+    releaseShape,
+    removeSubShape,
+    type ShapeDescriptor,
+    type SubShapeTransform,
+    scaleShape,
+    type Vec3Tuple
+} from './shape-system';
 
 // Initital body object copied from r3/rapier's state object
 export class BodyState {
@@ -222,6 +234,79 @@ export class BodyState {
         this.bodyInterface.SetShape(this.BodyID, shape, false, Raw.module.EActivation_Activate);
         // update the debug object if it exists
         if (this.debugMesh) this.updateDebugMesh();
+    }
+
+    //* Mutable compounds (issue #108) ========================
+    /**
+     * True when this body's shape is a `MutableCompoundShape`, i.e. when `addSubShape`,
+     * `removeSubShape` and `modifySubShape` can be used on it. Build one with a
+     * `{ type: 'mutableCompound' }` descriptor or a `<Shape dynamic>`.
+     */
+    get isMutableCompound() {
+        return isMutableCompoundShape(this.shape);
+    }
+    /** The body's shape as a `MutableCompoundShape`. Throws when it is anything else. */
+    get mutableCompound(): Jolt.MutableCompoundShape {
+        return asMutableCompoundShape(this.shape);
+    }
+
+    /**
+     * Tell Jolt the shape this body holds changed underneath it.
+     *
+     * Editing a `MutableCompoundShape` in place does not touch the body, so its broadphase bounds
+     * and its mass properties would both go stale: the body would collide against the shape it
+     * had when it was created. `NotifyShapeChanged` re-inserts it in the broadphase and (with
+     * `updateMassProperties`) recomputes mass and inertia from the new shape.
+     *
+     * @param previousCenterOfMass the shape's centre of mass *before* the edit - Jolt moves the
+     * body so the shape stays where it was. Read it with `readCenterOfMass(body.shape)` before
+     * editing; it defaults to the current one, which is only right if the edit did not move it.
+     */
+    notifyShapeChanged(
+        previousCenterOfMass: Vec3Tuple = readCenterOfMass(this.shape),
+        updateMassProperties = true
+    ) {
+        // NotifyShapeChanged takes the vector by value, so the shared scratch is safe here
+        this.bodyInterface.NotifyShapeChanged(
+            this.BodyID,
+            joltScratch.vec3(previousCenterOfMass),
+            updateMassProperties,
+            Raw.module.EActivation_Activate
+        );
+        if (this.debugMesh) this.updateDebugMesh();
+    }
+
+    /**
+     * Add a shape to this body's mutable compound and return its index.
+     *
+     * The descriptor's `position`/`rotation` place it inside the compound. The compound owns the
+     * new sub shape; drop it again with `removeSubShape(index)`, never by hand.
+     */
+    addSubShape(descriptor: ShapeDescriptor): number {
+        const compound = this.mutableCompound;
+        const previousCenterOfMass = readCenterOfMass(compound);
+        const index = addSubShape(compound, descriptor);
+        this.notifyShapeChanged(previousCenterOfMass);
+        return index;
+    }
+
+    /**
+     * Remove the sub shape at `index`. Every index above it shifts down by one, so a caller
+     * holding several indices should remove from the back.
+     */
+    removeSubShape(index: number) {
+        const compound = this.mutableCompound;
+        const previousCenterOfMass = readCenterOfMass(compound);
+        removeSubShape(compound, index);
+        this.notifyShapeChanged(previousCenterOfMass);
+    }
+
+    /** Move and/or turn the sub shape at `index`; anything left out keeps its current value. */
+    modifySubShape(index: number, transform: SubShapeTransform) {
+        const compound = this.mutableCompound;
+        const previousCenterOfMass = readCenterOfMass(compound);
+        modifySubShape(compound, index, transform);
+        this.notifyShapeChanged(previousCenterOfMass);
     }
 
     //* Debugging ===============================================

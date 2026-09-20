@@ -6,6 +6,12 @@
 // and every superseded shape leaked), and `generateShape` turns it into a Jolt shape this
 // component owns exactly one reference on. A nested <Shape> registers its descriptor with its
 // parent, which builds a compound out of them.
+//
+// `<Shape dynamic>` builds a `MutableCompoundShape` (issue #108): a child mounting, unmounting or
+// moving then edits that compound in place - `addSubShape`/`removeSubShape`/`modifySubShape` -
+// and tells the body its shape changed, instead of throwing the whole compound away and building
+// a new one. Anything that changes a child's *geometry* still rebuilds, because that is a
+// different shape rather than a different placement.
 import type Jolt from 'jolt-physics';
 import React, {
     createContext,
@@ -24,17 +30,22 @@ import * as THREE from 'three';
 import { useForwardedRef, useJolt } from '../../hooks';
 import {
     type AutoShape,
+    addSubShape,
     describeShapeFromOptions,
     descriptorKey,
     generateShape,
+    isMutableCompoundShape,
+    modifySubShape,
+    readCenterOfMass,
     releaseShape,
+    removeSubShape,
     type ShapeDescriptor,
     type ShapeOptions,
     type ShapeType,
     scaleShape,
     stableKey
 } from '../../systems';
-import { devWarn, vec3 } from '../../utils';
+import { vec3 } from '../../utils';
 import { RigidBodyContext } from '../RigidBody';
 
 // creates a Jolt Shape from three.js meshes.
@@ -51,7 +62,11 @@ export interface ShapeProps extends Omit<ShapeOptions, 'children'> {
     /** wraps the generated shape in a `ScaledShape` */
     scale?: number[] | number;
 
-    /** reserved for #108: a mutable (runtime editable) compound */
+    /**
+     * Build a `MutableCompoundShape` (#108) instead of a static one, so nested `<Shape>`s can be
+     * added, removed and moved at runtime without rebuilding the whole compound. Cannot be
+     * changed after the component has mounted.
+     */
     dynamic?: boolean;
     type?: AutoShape | ShapeType;
 }
@@ -106,6 +121,9 @@ export const Shape: React.FC<ShapeProps> = memo(
         });
         // the rigid body context (a nested <Shape> still sees it, so it is read optionally)
         const rigidBody = useContext(RigidBodyContext);
+        // ...and through a ref, so the identity-stable callbacks below can reach it
+        const rigidBodyRef = useRef(rigidBody);
+        rigidBodyRef.current = rigidBody;
         // if we are the child of another shape, we can get the shape context
         const parentShape = useContext(ShapeContext);
 
@@ -116,8 +134,6 @@ export const Shape: React.FC<ShapeProps> = memo(
         if (dynamicOnInit.current !== dynamic) {
             throw new Error('Cannot change dynamic prop after initialization');
         }
-
-        const hasChildren = React.Children.count(children) > 0;
 
         const [shape, setShape] = useState<Jolt.Shape>();
         // the shape as generated from the descriptor, before any scaling
@@ -130,6 +146,9 @@ export const Shape: React.FC<ShapeProps> = memo(
 
         // Compound Shape Data: child descriptors, plus a counter so a change re-runs the effect
         const subShapes = useRef<(ShapeDescriptor | undefined)[]>([]);
+        // #108: for a live mutable compound, which jolt sub shape index each of our slots holds.
+        // Jolt's indices close up when a shape is removed, ours do not, so the two are separate.
+        const joltIndices = useRef<(number | undefined)[]>([]);
         const [subShapeVersion, setSubShapeVersion] = useState(0);
         // our index inside the parent compound, if we have one, and what we last told it
         const indexInParent = useRef<number | undefined>(undefined);
@@ -169,40 +188,129 @@ export const Shape: React.FC<ShapeProps> = memo(
             // content hash of `position` + `rotation`
         }, [transformKey]);
 
+        // read through refs so the runtime edit path below can compose a descriptor without
+        // depending on a memo (its callbacks must stay identity stable)
+        const localDescriptorRef = useRef(localDescriptor);
+        localDescriptorRef.current = localDescriptor;
+        const transformRef = useRef(transform);
+        transformRef.current = transform;
+        const dynamicRef = useRef(dynamic);
+        dynamicRef.current = dynamic;
+
         /** The full description of this node: a compound when it has children, a leaf otherwise. */
-        const resolveDescriptor = useCallback((): ShapeDescriptor => {
+        const composeDescriptor = useCallback((): ShapeDescriptor => {
             const childDescriptors = subShapes.current.filter(Boolean) as ShapeDescriptor[];
             const base: ShapeDescriptor = childDescriptors.length
-                ? // #108 turns this into a `mutableCompound` when `dynamic` is set
-                  { type: 'staticCompound', children: childDescriptors }
-                : localDescriptor;
-            return { ...base, position: transform.position, rotation: transform.rotation };
-            // biome-ignore lint/correctness/useExhaustiveDependencies: subShapeVersion is what
-            // tells us the children in `subShapes` changed
-        }, [localDescriptor, transform, subShapeVersion]);
+                ? {
+                      // #108: a dynamic compound can be edited in place afterwards
+                      type: dynamicRef.current ? 'mutableCompound' : 'staticCompound',
+                      children: childDescriptors
+                  }
+                : localDescriptorRef.current;
+            const { position, rotation } = transformRef.current;
+            return { ...base, position, rotation };
+        }, []);
+
+        const resolveDescriptor = useCallback(
+            () => composeDescriptor(),
+            // biome-ignore lint/correctness/useExhaustiveDependencies: this wrapper exists only
+            // to change identity when the content behind `composeDescriptor`'s refs changes, so
+            // the effects below re-run - `subShapeVersion` is how a child change reaches us
+            [composeDescriptor, localDescriptor, transform, subShapeVersion]
+        );
 
         //* Compound children ---------------------------------
+        /** The shape the body actually holds: the ScaledShape when there is one. */
+        const publishedShape = () => scaledShape.current ?? baseShape.current;
+
+        /**
+         * #108: edit the live `MutableCompoundShape` instead of rebuilding it, and tell the body
+         * about it. Returns false when there is nothing to edit in place (a static compound, or
+         * a compound that has not been built yet), in which case the caller rebuilds.
+         */
+        const editLiveCompound = useCallback(
+            (edit: (compound: Jolt.Shape) => void): boolean => {
+                const compound = baseShape.current;
+                if (!dynamicRef.current || !compound || !isMutableCompoundShape(compound))
+                    return false;
+                // the body is moved so the shape stays put, which needs the centre of mass from
+                // before the edit - and from the shape the *body* holds, wrapper included
+                const published = publishedShape();
+                const previousCenterOfMass = published ? readCenterOfMass(published) : undefined;
+                edit(compound);
+                rigidBodyRef.current?.notifyShapeChanged?.(previousCenterOfMass);
+                // the shape object is the same one, but what it describes is not: keep the
+                // built key and the ref in step so a later rebuild starts from the truth
+                const descriptor = composeDescriptor();
+                builtDescriptorKey.current = descriptorKey(descriptor);
+                ref.current = { descriptor, shape: published };
+                return true;
+            },
+            [composeDescriptor, ref]
+        );
+
+        /** Everything about a child except where it sits: a change here means a new shape. */
+        const shapeIdentity = (descriptor: ShapeDescriptor) => {
+            const { position, rotation, ...rest } = descriptor;
+            return descriptorKey(rest as ShapeDescriptor);
+        };
+
         // callable function to add a shape to the compound shape. return the new index
-        const addShape = useCallback((descriptor: ShapeDescriptor) => {
-            const index = subShapes.current.length;
-            subShapes.current.push(descriptor);
-            setSubShapeVersion((version) => version + 1);
-            return index;
-        }, []);
+        const addShape = useCallback(
+            (descriptor: ShapeDescriptor) => {
+                const index = subShapes.current.length;
+                subShapes.current.push(descriptor);
+                const live = editLiveCompound((compound) => {
+                    joltIndices.current[index] = addSubShape(compound, descriptor);
+                });
+                if (!live) setSubShapeVersion((version) => version + 1);
+                return index;
+            },
+            [editLiveCompound]
+        );
 
-        // modify the shape at the index - the compound is rebuilt from the new descriptors
-        const modifyShape = useCallback((index: number, descriptor: ShapeDescriptor) => {
-            const current = subShapes.current[index];
-            // an unchanged child must not churn the compound (or re-render us for nothing)
-            if (current && descriptorKey(current) === descriptorKey(descriptor)) return;
-            subShapes.current[index] = descriptor;
-            setSubShapeVersion((version) => version + 1);
-        }, []);
+        // modify the shape at the index. A pure move/turn of a live mutable compound's child is
+        // applied in place; anything else rebuilds the compound from the new descriptors.
+        const modifyShape = useCallback(
+            (index: number, descriptor: ShapeDescriptor) => {
+                const current = subShapes.current[index];
+                // an unchanged child must not churn the compound (or re-render us for nothing)
+                if (current && descriptorKey(current) === descriptorKey(descriptor)) return;
+                const movedOnly = !!current && shapeIdentity(current) === shapeIdentity(descriptor);
+                subShapes.current[index] = descriptor;
+                const joltIndex = joltIndices.current[index];
+                const live =
+                    movedOnly &&
+                    joltIndex !== undefined &&
+                    editLiveCompound((compound) =>
+                        modifySubShape(compound, joltIndex, {
+                            position: descriptor.position ?? [0, 0, 0],
+                            rotation: descriptor.rotation ?? [0, 0, 0, 1]
+                        })
+                    );
+                if (!live) setSubShapeVersion((version) => version + 1);
+            },
+            [editLiveCompound]
+        );
 
-        const removeShape = useCallback((index: number) => {
-            subShapes.current[index] = undefined;
-            setSubShapeVersion((version) => version + 1);
-        }, []);
+        const removeShape = useCallback(
+            (index: number) => {
+                subShapes.current[index] = undefined;
+                const joltIndex = joltIndices.current[index];
+                const live =
+                    joltIndex !== undefined &&
+                    editLiveCompound((compound) => {
+                        removeSubShape(compound, joltIndex);
+                        joltIndices.current[index] = undefined;
+                        // jolt closes the gap, so every index above the one we dropped moves down
+                        joltIndices.current = joltIndices.current.map((existing) =>
+                            existing !== undefined && existing > joltIndex ? existing - 1 : existing
+                        );
+                    });
+                if (!live) setSubShapeVersion((version) => version + 1);
+            },
+            [editLiveCompound]
+        );
 
         //* Shape generation ----------------------------------
         /**
@@ -225,6 +333,19 @@ export const Shape: React.FC<ShapeProps> = memo(
             setShape(next ?? base);
         }, [scaleKey]);
 
+        /**
+         * After a (re)build, line our child slots up with jolt's sub shape indices: the compound
+         * is built from the slots that hold a descriptor, in order, so jolt numbers them 0..n.
+         * Only a mutable compound is ever edited by index, but keeping the map in step costs
+         * nothing and means a rebuild always leaves a valid one behind.
+         */
+        const syncJoltIndices = useCallback(() => {
+            let next = 0;
+            joltIndices.current = subShapes.current.map((descriptor) =>
+                descriptor ? next++ : undefined
+            );
+        }, []);
+
         // creates the shape, releasing whatever it replaces. Idempotent: a re-run that does not
         // change the description (a re-render, a StrictMode double mount) does nothing.
         const generateOwnShape = useCallback(() => {
@@ -236,12 +357,13 @@ export const Shape: React.FC<ShapeProps> = memo(
                 releaseShape(baseShape.current);
                 baseShape.current = next;
                 builtDescriptorKey.current = key;
+                syncJoltIndices();
                 // any existing ScaledShape wrapped the shape we just dropped
                 appliedScaleKey.current = undefined;
             }
             if (appliedScaleKey.current !== scaleKey) updateScaleShape();
             ref.current = { descriptor, shape: scaledShape.current ?? baseShape.current };
-        }, [ref, resolveDescriptor, scaleKey, updateScaleShape]);
+        }, [ref, resolveDescriptor, scaleKey, syncJoltIndices, updateScaleShape]);
 
         // when the component mounts - and whenever anything that defines the shape changes -
         // (re)build it. A child of a compound hands its description to the parent instead.
@@ -257,13 +379,8 @@ export const Shape: React.FC<ShapeProps> = memo(
                 registeredKey.current = key;
                 return;
             }
-            if (dynamic && hasChildren)
-                devWarn(
-                    'react-three-jolt: <Shape dynamic> builds a static compound for now; mutable ' +
-                        'compounds land with issue #108.'
-                );
             generateOwnShape();
-        }, [parentShape, resolveDescriptor, generateOwnShape, ref, dynamic, hasChildren]);
+        }, [parentShape, resolveDescriptor, generateOwnShape, ref]);
 
         // Release our references on unmount, and leave the parent compound. This must run on
         // unmount *only*: the parent's context value changes whenever its shape does, and
