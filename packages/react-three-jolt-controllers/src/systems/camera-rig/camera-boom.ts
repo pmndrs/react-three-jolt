@@ -158,6 +158,13 @@ export class CameraBoom {
     whiskerYawVelocity = 0;
 
     /**
+     * `Date.now()` of the last manual look command, or 0 when the player has never looked. The
+     * rig's follow modes read this through {@link timeSinceLook} so automatic rotation never
+     * fights the player's hand (issue #75).
+     */
+    lastLookTime = 0;
+
+    /**
      * Dedicated closest-hit raycaster for the whiskers, built the first time whiskers are turned
      * on and kept (and freed in `destroy()`) for the boom's lifetime: a `Raycaster` is roughly
      * seven wasm allocations, so it is not something to build per frame.
@@ -271,6 +278,10 @@ export class CameraBoom {
     set pitch(value: number) {
         this.cameraSpace.rotation.x = THREE.MathUtils.clamp(value, this.minPitch, this.maxPitch);
         this.handleZoomUpdate();
+    }
+    /** milliseconds since the last manual look command, `Infinity` if there has never been one */
+    get timeSinceLook() {
+        return this.lastLookTime === 0 ? Number.POSITIVE_INFINITY : Date.now() - this.lastLookTime;
     }
 
     //* Options ========================================
@@ -391,6 +402,9 @@ export class CameraBoom {
     // look comand takes x/y vector in -1 to 1 range
     move(lookVector: THREE.Vector2Like) {
         this.lookVector.set(lookVector.x, lookVector.y);
+        // the player's hand is on the camera; the follow modes stand down for
+        // `manualOverrideTimeout` ms afterwards (issue #75)
+        this.lastLookTime = Date.now();
         if (this.updateMode === 'demand') this.handleLookUpdate();
     }
     zoom(factor: number) {
@@ -407,6 +421,7 @@ export class CameraBoom {
     rotate(changeValue: number) {
         //todo make this use slerping like distance
         this.pivot.rotation.y += changeValue;
+        this.lastLookTime = Date.now();
     }
     setRotation(value: number, force?: boolean) {
         this.targetRotation = value;
@@ -541,7 +556,7 @@ export class CameraBoom {
     /** Cast one whisker. Returns the hit fraction along the whisker, or -1 for a clean sweep. */
     private castWhisker(direction: THREE.Vector3): number {
         const caster = this.whiskerCaster;
-        if (!caster || !caster.active) return -1;
+        if (!caster?.active) return -1;
         const ray = caster.ray;
         ray.mOrigin.Set(this.whiskerOrigin.x, this.whiskerOrigin.y, this.whiskerOrigin.z);
         // jolt takes the ray as origin + direction, where the direction carries the length
