@@ -21,11 +21,22 @@
     "linter": {
         "enabled": true,
         "rules": {
+            "a11y": {
+                "noStaticElementInteractions": "warn",
+                "useButtonType": "warn"
+            },
             "complexity": {
                 "noForEach": "off"
             },
+            "correctness": {
+                "noUnreachable": "warn"
+            },
             "suspicious": {
-                "noExplicitAny": "off"
+                "noExplicitAny": "off",
+                "noDoubleEquals": "warn",
+                "noImplicitAnyLet": "warn",
+                "noRedeclare": "warn",
+                "useIterableCallbackReturn": "warn"
             },
             "style": {
                 "noNonNullAssertion": "off"
