@@ -39,6 +39,12 @@ export class PhysicsSystem {
     // Public properties ----------------------------
     public timeStep = 1 / 60;
     public paused = false;
+    /**
+     * True once `destroy()` has freed the JoltInterface. React tears a parent down before
+     * its children, so `<Physics>` unmounting gets here before the hooks that own bodies and
+     * constraints - everything wasm-facing has to check this before calling into jolt.
+     */
+    public destroyed = false;
     public debug = false;
     public interpolate = true;
 
@@ -121,6 +127,8 @@ export class PhysicsSystem {
         // start the chain of systems/services
         this.constraintSystem = new ConstraintSystem(this);
         this.bodySystem = new BodySystem(this.physicsSystem);
+        // so removing a body also removes the constraints attached to it (issue #82)
+        this.bodySystem.constraintSystem = this.constraintSystem;
     }
 
     destroy(pid = '0'): void {
@@ -131,6 +139,8 @@ export class PhysicsSystem {
             Raw.joltInterfaces.delete(pid);
             // console.log('*** PhysicsSystem:' + pid + ' destroyed ***');
         }
+        // every body, constraint and shape went with the interface
+        this.destroyed = true;
     }
     // TODO: Loops and steps seems messy
     onUpdate(delta: number): void {
