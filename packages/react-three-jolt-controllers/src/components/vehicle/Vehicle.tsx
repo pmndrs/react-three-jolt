@@ -5,7 +5,17 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { Object3DSource, UseVehicleOptions, VehicleWheelOptions } from '../../hooks';
 import { resolveObject3D, useVehicle } from '../../hooks';
-import type { Vector, VehicleManager, VehicleSettings, VehicleType } from '../../systems/vehicles/';
+import type {
+    BodyRollSettings,
+    SkidSettings,
+    Vector,
+    VehicleEngineListener,
+    VehicleManager,
+    VehicleSettings,
+    VehicleSkidListener,
+    VehicleType,
+    WheelSmoothingSettings
+} from '../../systems/vehicles/';
 
 export type VehicleProps = {
     children?: React.ReactNode;
@@ -42,6 +52,24 @@ export type VehicleProps = {
     followCamera?: boolean;
     /** called with the manager whenever it is created, and with null when it goes away */
     onVehicle?: (vehicle: VehicleManager | null) => void;
+
+    //* Secondary physics (issue #41) ---------------------------------------------------------
+    /**
+     * The chassis object's spring damped visual lean under acceleration. The physics body is
+     * never tilted by this. `false` turns it off and hands the object's rotation back to you.
+     * Changing the object live re-tunes the spring without rebuilding the vehicle.
+     */
+    bodyRoll?: BodyRollSettings | false;
+    /** Easing of the rendered suspension travel and steering angle. `false` renders them raw. */
+    wheelSmoothing?: WheelSmoothingSettings | false;
+    /** When a wheel counts as skidding, and so when `onSkidStart`/`onSkidEnd` fire. */
+    skid?: SkidSettings | false;
+    /** a wheel started sliding - hook up tyre smoke, a skid mark, a screech */
+    onSkidStart?: VehicleSkidListener;
+    /** that wheel has had grip again for `skid.releaseTime` seconds */
+    onSkidEnd?: VehicleSkidListener;
+    /** the engine readout, once per physics step, for audio and instruments */
+    onEngine?: VehicleEngineListener;
 };
 
 /**
@@ -67,6 +95,12 @@ export function Vehicle(props: VehicleProps) {
         debug,
         followCamera = true,
         onVehicle,
+        bodyRoll,
+        wheelSmoothing,
+        skid,
+        onSkidStart,
+        onSkidEnd,
+        onEngine,
         children
     } = props;
 
@@ -85,9 +119,17 @@ export function Vehicle(props: VehicleProps) {
         bodyObject: bodyObject ?? (useChildren ? childrenRef : undefined),
         wheels,
         wheelObjects,
-        debug
+        debug,
+        bodyRoll,
+        wheelSmoothing,
+        skid
     };
     const vehicle = useVehicle(options);
+
+    // the event props are read through a ref so a fresh inline arrow every render does not
+    // resubscribe the manager's emitter on every render (issue #41 / #187)
+    const handlers = useRef({ onSkidStart, onSkidEnd, onEngine });
+    handlers.current = { onSkidStart, onSkidEnd, onEngine };
 
     // hand the manager to the caller (and take it back on teardown)
     useEffect(() => {
@@ -116,6 +158,36 @@ export function Vehicle(props: VehicleProps) {
         if (!vehicle || debug === undefined) return;
         vehicle.debug = debug;
     }, [vehicle, debug]);
+
+    //* Secondary physics (issue #41) =====================================================
+    // all three are live: a debug panel can re-tune the roll spring, the wheel easing and the
+    // skid thresholds without rebuilding the vehicle
+    const roll = bodyRoll === false ? false : bodyRoll;
+    useEffect(() => {
+        if (!vehicle || roll === undefined) return;
+        vehicle.setBodyRoll(roll);
+    }, [vehicle, roll]);
+    useEffect(() => {
+        if (!vehicle || wheelSmoothing === undefined) return;
+        vehicle.setWheelSmoothing(wheelSmoothing);
+    }, [vehicle, wheelSmoothing]);
+    useEffect(() => {
+        if (!vehicle || skid === undefined) return;
+        vehicle.setSkid(skid);
+    }, [vehicle, skid]);
+
+    // one subscription per event for the vehicle's lifetime; the ref above keeps the latest prop
+    useEffect(() => {
+        if (!vehicle) return;
+        const offs = [
+            vehicle.onSkidStart((event) => handlers.current.onSkidStart?.(event)),
+            vehicle.onSkidEnd((event) => handlers.current.onSkidEnd?.(event)),
+            vehicle.onEngine((state) => handlers.current.onEngine?.(state))
+        ];
+        return () => {
+            for (const off of offs) off();
+        };
+    }, [vehicle]);
 
     // trigger position change
     const [px, py, pz] = Array.isArray(position)

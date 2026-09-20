@@ -184,6 +184,9 @@ export class TwoWheelVehicleManager extends VehicleManager {
             this.constraint.GetController(),
             Raw.module.MotorcycleController
         );
+        // issue #41: a MotorcycleController *is* a WheeledVehicleController, so it has the same
+        // engine and gearbox the readouts are built from
+        this.bindControllerReadouts();
 
         // the constraint has taken everything it needs out of the settings (the wheels and the
         // controller settings are reference counted members, freed with the settings)
