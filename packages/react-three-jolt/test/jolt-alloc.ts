@@ -46,6 +46,37 @@ export type AllocTracker = {
 // such as `castObject` want the genuine article.
 export const DEFAULT_TRACKED_TYPES = ['Vec3', 'RVec3', 'Quat', 'Mat44', 'RMat44'];
 
+/**
+ * Every binder class on the module that can be `destroy()`ed - anything with a `__destroy__` on
+ * its prototype.
+ *
+ * Pass this as `types` when the question is `foreignDestroys() === 0`. With a narrow type list
+ * every `destroy()` of a class the tracker does not know about is counted as foreign, so the
+ * number only means "something freed an object nobody allocated" - which is the signature of
+ * freeing one of Jolt's static value-return temporaries - when the tracker covers everything.
+ *
+ * Note that `live()` cannot balance over this list: several classes are allocated from JS but
+ * freed by C++ ownership (the filter tables a `JoltInterface` takes over, a shape held by a
+ * `RefConst`), so the tracker never sees them go. Use `JoltInterface.prototype.sGetFreeMemory()`
+ * for the whole-heap question and {@link DEFAULT_TRACKED_TYPES} for the balance one.
+ */
+export function allDestroyableTypes(raw: RawHolder): string[] {
+    const module = raw.module as Record<string, unknown>;
+    const names: string[] = [];
+    for (const name of Object.keys(module)) {
+        let value: unknown;
+        try {
+            value = module[name];
+        } catch {
+            continue;
+        }
+        if (typeof value !== 'function') continue;
+        const proto = (value as { prototype?: Record<string, unknown> }).prototype;
+        if (proto && typeof proto.__destroy__ === 'function') names.push(name);
+    }
+    return names;
+}
+
 export type AllocTrackerOptions = {
     /** Constructor names to intercept. Defaults to {@link DEFAULT_TRACKED_TYPES}. */
     types?: string[];

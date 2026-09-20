@@ -13,10 +13,33 @@ the library owns that memory and frees it when components unmount. Read on befor
 `Jolt.*` object directly, which mostly means `useJolt().jolt`, `body.body`, a caster you created
 yourself, or anything reached through `Raw.module`.
 
+## Reaching the module
+
+There is exactly **one jolt-physics module per page** — it owns a single WASM linear memory that
+every body, shape and constraint lives in — so the library keeps it in a module level singleton:
+
+```ts
+import { free, getJoltModule, JoltModule, initJolt } from '@react-three/jolt';
+
+await initJolt(); // <Physics> does this for you
+const jolt = getJoltModule(); // throws a useful error if it isn't loaded yet
+const v = new jolt.Vec3(0, 1, 0);
+free(v); // the documented way to destroy something you own
+```
+
+`JoltModule.module` is the module itself. `JoltModule` used to be called `Raw`, and `Raw` is
+still exported as an alias of the same object, so existing `Raw.module.*` code keeps working.
+
+Each `<Physics>` builds its own `JoltInterface` on that module and registers it under a
+monotonically increasing id (`system.interfaceId`, resolved with `JoltModule.getInterface(id)`,
+counted with `JoltModule.interfaceCount`). There is no cap on how many worlds you can mount, but
+each one costs about 20MB of the fixed 128MB WASM heap, so roughly six fit at once; past that
+`new PhysicsSystem()` throws rather than letting emscripten abort the module.
+
 ## The three rules
 
 1. **If you created it, you free it.** `new Raw.module.Vec3(...)` is a heap allocation; only
-   `Raw.module.destroy(v)` releases it. Losing the reference leaks it forever.
+   `free(v)` / `Raw.module.destroy(v)` releases it. Losing the reference leaks it forever.
 2. **If Jolt gave it to you, don't free it.** Anything returned from a Jolt call — a property, a
    collector's hit, a "by value" return — belongs to Jolt. Copy the numbers out and let go.
 3. **Free it exactly once.** `Raw.module.destroy()` on an already-destroyed object does **not**

@@ -177,7 +177,13 @@ export class CameraRigManager {
         this.applyOptions(options, true);
         // attach to the physics system loop
         this.attachToLoop();
+        // The world tears its disposables down before it frees the JoltInterface, so a rig that
+        // outlives its own component (or is built without one) is still cleaned up (issue #162).
+        this.unregisterFromWorld = physicsSystem.registerDisposable(this);
     }
+
+    /** Drops this rig from the physics system's disposables. Replaced in the constructor. */
+    private unregisterFromWorld: () => void = () => {};
 
     //* Options ========================================
     /**
@@ -229,6 +235,7 @@ export class CameraRigManager {
     destroy() {
         if (this.destroyed) return;
         this.destroyed = true;
+        this.unregisterFromWorld();
 
         this.detachFromLoop();
         // the boom owns a raycaster, a shapecaster and a shape collider - ~25 wasm objects

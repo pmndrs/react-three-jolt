@@ -67,7 +67,7 @@ describe('initJolt: guards a module swap while a Physics world exists', () => {
         ps = new PhysicsSystem('raw-module-selection');
         // sanity: constructing the world really did register an interface, which is the signal
         // initJolt uses to know a world is live.
-        expect(Raw.joltInterfaces.size).toBeGreaterThan(0);
+        expect(Raw.interfaceCount).toBeGreaterThan(0);
 
         const activeModule = Raw.module;
         const otherFactory = vi.fn(async () => ({ fake: true }) as any);
@@ -84,7 +84,7 @@ describe('initJolt: guards a module swap while a Physics world exists', () => {
     test('a different factory is allowed once every world has been destroyed', async () => {
         const p = new PhysicsSystem('raw-module-selection');
         p.destroy('raw-module-selection');
-        expect(Raw.joltInterfaces.size).toBe(0);
+        expect(Raw.interfaceCount).toBe(0);
 
         const otherFactory = vi.fn(async () => ({ fake: true }) as any);
         await initJolt(otherFactory);

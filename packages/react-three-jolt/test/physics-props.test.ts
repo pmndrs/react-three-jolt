@@ -7,7 +7,7 @@
 // The React trees are built with createElement so this file can stay a plain `.ts`.
 //
 // As in jolt-runtime.test.ts there is ONE direct PhysicsSystem for the whole file: they all
-// share the Jolt module, and PhysicsSystem refuses to create more than `maxInterfaces` worlds.
+// share the Jolt module, and each world costs about 20MB of the fixed 128MB wasm heap.
 // The React tests each unmount so they hand their world back.
 
 import { create } from '@react-three/test-renderer';
