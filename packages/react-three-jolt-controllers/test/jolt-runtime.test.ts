@@ -2,9 +2,10 @@
 // CharacterContactListenerJS (jolt-physics 0.32 grew that interface) and VehicleConstraint with
 // VehicleConstraintCallbacksJS (0.26 changed those callback arguments). Neither break is visible
 // to the type checker - embind only throws when Jolt actually calls into JavaScript.
-import { assert, beforeAll, test } from 'vitest';
+
+import { initJolt, PhysicsSystem } from '@react-three/jolt';
 import * as THREE from 'three';
-import { PhysicsSystem, initJolt } from '@react-three/jolt';
+import { assert, beforeAll, test } from 'vitest';
 import { CharacterControllerSystem } from '../src/systems/character-controller';
 import { VehicleSystem } from '../src/systems/vehicles';
 

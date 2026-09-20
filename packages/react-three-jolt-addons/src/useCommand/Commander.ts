@@ -1,7 +1,7 @@
 //@ts-ignore
 import { GamepadListener } from 'gamepad.js';
-import { commonCommands } from './commonCommands';
 import { Command } from './Command';
+import { commonCommands } from './commonCommands';
 import { VectorCommand } from './VectorCommand';
 
 // im not sure yet if I'll include other libraries

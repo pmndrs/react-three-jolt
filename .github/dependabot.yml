@@ -6,6 +6,40 @@
 version: 2
 updates:
   - package-ecosystem: "npm" # See documentation for possible values
-    directory: "/" # Location of package manifests
+    directory: "/" # Location of package manifests (yarn workspaces are discovered from here)
     schedule:
       interval: "weekly"
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # three, react/react-dom and @react-three/* are pinned to specific alpha/rc
+      # ranges while we track r3f v10 / drei v11 / three's latest API - major bumps
+      # here are deliberate, hand-verified upgrades, not something to automate.
+      - dependency-name: "three"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/three"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@react-three/*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        update-types:
+          - "minor"
+          - "patch"

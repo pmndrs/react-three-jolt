@@ -1,9 +1,10 @@
+import { useThree } from '@react-three/fiber';
+import { useConst, useJolt, vec3 } from '@react-three/jolt';
+import { useCommand } from '@react-three/jolt-addons';
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { useConst, useJolt, vec3 } from '@react-three/jolt';
-import { VehicleSystem, VehicleFourWheelManager } from '../../systems/vehicles/';
-import { useThree } from '@react-three/fiber';
-import { useCommand } from '@react-three/jolt-addons';
+import { VehicleFourWheelManager, VehicleSystem } from '../../systems/vehicles/';
+
 type VehicleFourWheelProps = {
     children?: React.ReactNode;
     position?: THREE.Vector3 | number[];

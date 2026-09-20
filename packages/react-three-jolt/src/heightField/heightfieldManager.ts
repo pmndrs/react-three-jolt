@@ -1,5 +1,6 @@
 //this is the main class that works on the main thread
 import * as THREE from 'three';
+
 // setup a single worker regardless of how many heightfields we have
 const worker = new Worker(new URL('./heightfield-worker.ts', import.meta.url), {
     type: 'module'

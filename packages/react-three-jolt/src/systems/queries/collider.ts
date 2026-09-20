@@ -1,9 +1,9 @@
 // does a collision test with a shape. based on raycaster
 //import { PhysicsSystem } from '../physics-system';
-import { Layer } from '../../constants';
-import * as THREE from 'three';
 
 import type Jolt from 'jolt-physics';
+import * as THREE from 'three';
+import { Layer } from '../../constants';
 import { Raw } from '../../raw';
 import { generateJoltMatrix, vec3 } from '../../utils';
 
@@ -140,8 +140,8 @@ export class ShapeCollider {
 
     cast(successHandler?: any, failHandler?: any) {
         // clear the collector
-        //if (this.hasCast && this.type !== 'closest') 
-            this.collector.Reset();
+        //if (this.hasCast && this.type !== 'closest')
+        this.collector.Reset();
         this.hasCast = true;
         // clear the hits
         this.hits = [];
@@ -180,7 +180,7 @@ export class ShapeCollider {
                 return this.hits;
             }
         }
-        if(failHandler) failHandler();
+        if (failHandler) failHandler();
         return false;
     }
 
@@ -206,7 +206,11 @@ export class CollisionResult {
 
     //private joltPhysicsSystem: Jolt.PhysicsSystem;
 
-    constructor(_joltPhysicsSystem: Jolt.PhysicsSystem, shapeMatrix: any, mHit: Jolt.CollideShapeResult) {
+    constructor(
+        _joltPhysicsSystem: Jolt.PhysicsSystem,
+        shapeMatrix: any,
+        mHit: Jolt.CollideShapeResult
+    ) {
         //this.joltPhysicsSystem = joltPhysicsSystem;
         this.shapeMatrix = shapeMatrix;
         this.contactPointOn1 = vec3.three(mHit.mContactPointOn1);

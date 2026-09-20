@@ -2,18 +2,21 @@
 // changing count at all will regenerate everything
 //todo cleanup these general imports
 // ridged body wrapping and mesh components
+
+import { useThree } from '@react-three/fiber';
 import React, {
+    forwardRef,
     memo,
+    ReactNode,
     // MutableRefObject,
     //RefObject,
     useEffect,
     useRef
 } from 'react';
-import { forwardRef, ReactNode } from 'react';
 import * as THREE from 'three';
-import { useThree } from '@react-three/fiber';
-import { useForwardedRef, useJolt, useUnmount } from '../hooks';
 import { BodyState } from '../';
+import { useForwardedRef, useJolt, useUnmount } from '../hooks';
+
 interface InstancedRigidBodyMeshProps {
     children: ReactNode;
     count: number;

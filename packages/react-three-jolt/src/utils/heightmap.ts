@@ -8,7 +8,7 @@ import { ImprovedNoise } from 'three/addons/math/ImprovedNoise.js';
 // this looks like a 4 octave FBM using plain perlin
 export function generateHeight(width: number, height: number): Uint8Array {
     let seed = Math.PI / 4;
-    window.Math.random = function () {
+    window.Math.random = () => {
         const x = Math.sin(seed++) * 10000;
         return x - Math.floor(x);
     };

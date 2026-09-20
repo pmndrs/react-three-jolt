@@ -1,1 +1,1 @@
-export * from "./Shape";
+export * from './Shape';
