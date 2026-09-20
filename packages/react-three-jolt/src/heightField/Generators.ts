@@ -5,6 +5,38 @@ import * as THREE from 'three';
 type DrawableImage = CanvasImageSource & { width: number; height: number };
 const drawableImage = (texture: THREE.Texture): DrawableImage => texture.image as DrawableImage;
 
+// Must match `BLOCK_SIZE` in `systems/shape-system.ts` (generateHeightfieldShapeFromThree) --
+// that's where the Jolt HeightFieldShapeSettings is actually built from the plane this module
+// prepares, and both need to agree on what a valid sample grid looks like.
+const HEIGHTFIELD_BLOCK_SIZE = 2;
+
+// Jolt's HeightFieldShapeSettings (see jrouwe/JoltPhysics HeightFieldShape.h) requires a square
+// grid of samples (mSampleCount x mSampleCount) whose edge length is a multiple of the block
+// size (mBlockSize, default 2) and at least two blocks wide. A power-of-two ratio is only a
+// *performance* recommendation upstream ("...is the most efficient in terms of performance and
+// storage"), not a hard requirement, so we don't reject non-power-of-two sizes that otherwise
+// satisfy the real constraint.
+export function getValidatedHeightfieldSampleCount(
+    vertexCount: number,
+    blockSize: number = HEIGHTFIELD_BLOCK_SIZE
+): number {
+    const size = Math.sqrt(vertexCount);
+    if (!Number.isInteger(size) || size <= 0) {
+        throw new Error(
+            `Heightfield: expected a square grid of samples (equal width/height segments), ` +
+                `but got ${vertexCount} vertices which is not a perfect square.`
+        );
+    }
+    if (size % blockSize !== 0 || size / blockSize < 2) {
+        throw new Error(
+            `Heightfield: sample count per edge (${size}) must be a multiple of the block size ` +
+                `(${blockSize}) and at least ${blockSize * 2}. Adjust the "size" prop so ` +
+                `(size - 1) segments produce a valid sample count.`
+        );
+    }
+    return size;
+}
+
 // Take in a three texture, make a new canvas, and scene, and draw the texture to the canvas
 // then return the canvas
 export function textureToCanvas(texture: THREE.Texture) {
@@ -18,14 +50,40 @@ export function textureToCanvas(texture: THREE.Texture) {
     return canvas;
 }
 
-export async function imageUrlToImageData(url: string, scalingFactor?: number): Promise<ImageData> {
+export async function imageUrlToImageData(
+    url: string,
+    scalingFactor?: number,
+    signal?: AbortSignal
+): Promise<ImageData> {
+    if (signal?.aborted) {
+        throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+    }
     return new Promise((resolve, reject) => {
         const image = new Image();
-        image.onload = () => {
-            const canvas = document.createElement('canvas');
+        // the canvas only exists to sample pixels out of the loaded image; drop the reference
+        // as soon as we're done with it (success, failure, or cancellation) instead of letting
+        // it, and the ImageData it produced, dangle off the closure for the life of the promise.
+        let canvas: HTMLCanvasElement | null = document.createElement('canvas');
 
+        const cleanup = () => {
+            image.onload = null;
+            image.onerror = null;
+            signal?.removeEventListener('abort', onAbort);
+            canvas = null;
+        };
+        const onAbort = () => {
+            cleanup();
+            // stop the in-flight network request
+            image.src = '';
+            reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+        };
+        signal?.addEventListener('abort', onAbort);
+
+        image.onload = () => {
+            if (!canvas) return;
             const context = canvas.getContext('2d');
             if (!context) {
+                cleanup();
                 reject(new Error('No context'));
                 return;
             }
@@ -35,10 +93,12 @@ export async function imageUrlToImageData(url: string, scalingFactor?: number): 
             canvas.height = height;
             context.drawImage(image, 0, 0, width, height);
             const imageData = context.getImageData(0, 0, width, height);
+            cleanup();
             resolve(imageData);
         };
         image.onerror = () => {
-            reject(new Error('Failed to load image'));
+            cleanup();
+            reject(new Error(`Failed to load heightmap image: ${url}`));
         };
         image.src = url;
     });
@@ -84,10 +144,16 @@ export function applyHeightmapImgDataToPlane(
     // const { width, height } = heightmap;
     const { width } = heightmap;
     const geometry = plane instanceof THREE.Mesh ? plane.geometry : plane;
-    const vertices = geometry.attributes.position.array as Float32Array;
+    const vertices = geometry.attributes.position.array;
+    if (!(vertices instanceof Float32Array)) {
+        throw new Error(
+            "Heightfield: expected the plane geometry's position attribute to be a Float32Array."
+        );
+    }
     const vertexCount = vertices.length / 3;
-    // This is the size of the plane, which may not be the same as the image
-    const size = Math.sqrt(vertexCount);
+    // This is the size of the plane, which may not be the same as the image; throws a clear
+    // error if the grid isn't a shape Jolt's HeightFieldShapeSettings can actually accept.
+    const size = getValidatedHeightfieldSampleCount(vertexCount);
     // step is the percentage of image width and plane width
     const factor = Math.floor(width / size);
 
@@ -116,13 +182,17 @@ export function applyHeightmapImgDataToPlane(
 export async function applyHeightmapToPlane(
     plane: THREE.Mesh,
     heightmap: string | THREE.Texture,
-    displacementScale: number
+    displacementScale: number,
+    signal?: AbortSignal
 ) {
     let heightmapImgData: ImageData;
     if (typeof heightmap === 'string') {
-        heightmapImgData = await imageUrlToImageData(heightmap);
+        heightmapImgData = await imageUrlToImageData(heightmap, undefined, signal);
     } else {
         heightmapImgData = textureToImageData(heightmap);
     }
+    // the load above is the only await point; re-check after it in case we were cancelled
+    // while it was in flight, so a superseded/unmounted call never touches the plane.
+    if (signal?.aborted) return;
     applyHeightmapImgDataToPlane(plane, heightmapImgData, displacementScale);
 }
