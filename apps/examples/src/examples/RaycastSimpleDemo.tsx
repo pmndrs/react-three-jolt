@@ -5,6 +5,7 @@ import {
     Raycaster,
     RaycastHit,
     RigidBody,
+    useMouseRaycaster,
     useMulticaster,
     useRaycaster,
     useSetTimeout,
@@ -38,6 +39,7 @@ export function RaycastSimpleDemo() {
             >
                 <JoltMemoryRegistrar />
                 <RaycastSimple />
+                <MouseRaycasterDemo />
             </Physics>
             <directionalLight
                 castShadow
@@ -251,4 +253,21 @@ function RaycastSimple() {
             </RigidBody>
         </>
     );
+}
+
+// issue #47 - useMouseRaycaster fires a raycaster from the mouse/camera every frame. Turning on
+// the raycaster's own marker debugging shows off both the hook AND the issue #48 fix at once: the
+// hit marker's ring/normal-line now orients itself to whatever surface the cursor is over, and
+// stays a single pooled marker (no growing scene graph) as the mouse moves every frame.
+function MouseRaycasterDemo() {
+    const { scene } = useThree();
+    const { raycaster } = useMouseRaycaster();
+
+    useEffect(() => {
+        raycaster.initDebugging(scene);
+        raycaster.lineColor = '#FFB627';
+        raycaster.drawMarkers = true;
+    }, [raycaster, scene]);
+
+    return null;
 }
