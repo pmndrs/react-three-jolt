@@ -313,10 +313,14 @@ export class BodySystem {
     /**
      * Change a body's collision group and/or sub group at runtime. Jolt's Body keeps its own copy
      * of the CollisionGroup, so ours is the source of truth and gets pushed across with
-     * `BodyInterface.SetCollisionGroup`. A sleeping body is woken so the new filtering is applied
-     * on the next step rather than whenever something else happens to touch it.
+     * `BodyInterface.SetCollisionGroup`.
+     *
+     * @param activate (issue #167) when true (the default), a sleeping body is woken so the new
+     * filtering is applied on the next step rather than whenever something else happens to touch
+     * it - `BodyState.group`/`subGroup` default to this and take it from `activateOnChange`.
+     * Pass `false` to change the group without disturbing a sleeping body.
      */
-    setBodyCollisionGroup(bodyHandle: number, group?: number, subGroup?: number) {
+    setBodyCollisionGroup(bodyHandle: number, group?: number, subGroup?: number, activate = true) {
         const bodyState = this.getBody(bodyHandle);
         if (!bodyState) return;
         if (subGroup !== undefined && !this.isValidSubGroup(subGroup, 'setBodyCollisionGroup'))
@@ -335,6 +339,7 @@ export class BodySystem {
         this.bodyInterface.SetCollisionGroup(bodyID, collisionGroup);
         // static bodies are never active, and activating one asserts inside Jolt
         if (
+            activate &&
             !bodyState.body.IsStatic() &&
             this.bodyInterface.IsAdded(bodyID) &&
             !bodyState.body.IsActive()
