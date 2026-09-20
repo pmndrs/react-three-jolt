@@ -9,6 +9,7 @@ import {
     Quaternion,
     Vector3
 } from 'three';
+import type { SurfaceMaterialTable } from '../heightField/materials';
 import { Raw } from '../raw';
 
 import { anyVec3, joltScratch, quat, vec3 } from '../utils';
@@ -64,6 +65,14 @@ export class BodyState {
     motionAngularVector?: THREE.Vector3;
     motionType: 'linear' | 'angular' = 'linear';
     motionAsSurfaceVelocity = false;
+
+    //* Surface materials (issue #46) ========================
+    /**
+     * Per-surface friction/restitution for a shape whose sub-shapes carry Jolt materials - in
+     * practice a heightfield built with `materials`. Set through {@link setSurfaceMaterials};
+     * read inside the contact callback, which is the only place friction can be changed.
+     */
+    surfaceMaterials?: SurfaceMaterialTable;
 
     get isSleeping() {
         return !this.body.IsActive();
@@ -249,6 +258,11 @@ export class BodyState {
         this.events.clear();
         this.legacySubs.clear();
         this.internalMask = 0;
+        // the jolt materials themselves are owned by the shape and go with it; this only frees
+        // the scratch SubShapeID and drops the pointer map (whose pointers are about to be
+        // recycled by jolt anyway)
+        this.surfaceMaterials?.dispose();
+        this.surfaceMaterials = undefined;
     }
     //* Interpolation pose cache ==============================
     /*
@@ -863,6 +877,21 @@ export class BodyState {
             joltScratch.quat(rotation),
             deltaTime
         );
+    }
+
+    /**
+     * Give this body per-surface materials, and tell the contact listener to keep calling us
+     * even when no user handler is attached (the friction write is synchronous, inside
+     * `Step()`, so it cannot be deferred like a normal event).
+     *
+     * The table's Jolt materials belong to the *shape*, not to this body: `dispose()` only drops
+     * the JS side bookkeeping.
+     */
+    setSurfaceMaterials(table: SurfaceMaterialTable | undefined) {
+        this.surfaceMaterials?.dispose();
+        this.surfaceMaterials = table;
+        if (table) this.internalMask |= EventBit.surfaceMaterial;
+        else this.internalMask &= ~EventBit.surfaceMaterial;
     }
 
     //* Motion Source ----------------------------------

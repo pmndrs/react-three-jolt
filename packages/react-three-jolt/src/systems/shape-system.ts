@@ -17,6 +17,8 @@ import {
     Vector3
 } from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+import { getValidatedHeightfieldSampleCount } from '../heightField/Generators';
+import { type SurfaceMaterial, SurfaceMaterialTable } from '../heightField/materials';
 import { Raw } from '../raw';
 import { type anyQuat, type anyVec3, devWarn, joltScratch, quat, vec3 } from '../utils';
 
@@ -172,6 +174,17 @@ export interface HeightfieldShapeDescriptor extends ShapeDescriptorBase {
     /** Distance between samples on x/z (and the height multiplier on y). */
     scale: Vec3Tuple;
     blockSize?: number;
+    /**
+     * Per-surface friction/restitution (issue #46). Built into the shape's
+     * `PhysicsMaterialList`; pass a {@link SurfaceMaterialTable} (rather than a plain array) to
+     * keep the pointer mapping the contact listener resolves friction through.
+     */
+    materials?: SurfaceMaterialTable | SurfaceMaterial[];
+    /**
+     * One material index per **quad**: `(sampleCount - 1)^2` entries, row major. Required when
+     * more than one material is given; ignored otherwise.
+     */
+    materialIndices?: NumberArray;
 }
 export interface StaticCompoundShapeDescriptor extends ShapeDescriptorBase {
     type: 'staticCompound';
@@ -453,9 +466,17 @@ const describeHeightfieldMesh = (mesh: THREE.Mesh, blockSize = 2): HeightfieldSh
     const geometry = mesh.geometry as THREE.PlaneGeometry;
     const positions = geometry.attributes.position.array as ArrayLike<number>;
     const vertexCount = positions.length / 3;
-    const sampleCount = Math.sqrt(vertexCount);
+    // throws a clear error if this isn't a grid Jolt can accept at all
+    const sampleCount = getValidatedHeightfieldSampleCount(vertexCount, blockSize);
     const planeWidth = geometry.parameters.width;
-    const scale = planeWidth / sampleCount;
+    const planeDepth = geometry.parameters.height ?? planeWidth;
+    // `sampleCount` samples span `sampleCount - 1` segments, so the distance *between* samples
+    // is width / (sampleCount - 1). Dividing by sampleCount (what this used to do) stretched
+    // the physics field by one extra sample's worth - a visible render/physics mismatch at the
+    // edges of a coarse field, and the reason `addHeightfield` derives its corner offset from
+    // the same numbers instead of guessing.
+    const scaleX = planeWidth / (sampleCount - 1);
+    const scaleZ = planeDepth / (sampleCount - 1);
 
     const heights: number[] = new Array(vertexCount);
     for (let i = 0; i < vertexCount; i++) heights[i] = positions[i * 3 + 1];
@@ -464,7 +485,7 @@ const describeHeightfieldMesh = (mesh: THREE.Mesh, blockSize = 2): HeightfieldSh
         type: 'heightfield',
         heights,
         sampleCount,
-        scale: [scale, 1, scale],
+        scale: [scaleX, 1, scaleZ],
         blockSize
     };
 };
@@ -853,6 +874,61 @@ const createMeshShapeSettings = (
     return shapeSettings;
 };
 
+/**
+ * Attach a heightfield's materials (issue #46).
+ *
+ * `mMaterialIndices` is one `uint8` per quad - `(sampleCount - 1)^2`, row major - and Jolt only
+ * looks at it when there is more than one material. The `PhysicsMaterialList` is copied into the
+ * settings (and again into the shape), so the list is ours to destroy while the materials inside
+ * it are ref-counted by the shape; see `heightField/materials.ts` for the verified ref counts.
+ */
+const applyHeightfieldMaterials = (
+    shapeSettings: Jolt.HeightFieldShapeSettings,
+    descriptor: HeightfieldShapeDescriptor
+): void => {
+    const { materials, materialIndices, sampleCount } = descriptor;
+    if (!materials) return;
+    const table =
+        materials instanceof SurfaceMaterialTable ? materials : new SurfaceMaterialTable(materials);
+    if (table.size === 0) return;
+
+    const jolt = Raw.module;
+    if (table.size > 1) {
+        const quads = (sampleCount - 1) * (sampleCount - 1);
+        if (!materialIndices || materialIndices.length !== quads)
+            throw new Error(
+                `Heightfield: ${table.size} materials need one material index per quad ` +
+                    `(${quads} for ${sampleCount} samples per edge), got ` +
+                    `${materialIndices?.length ?? 0}.`
+            );
+        // an ArrayUint8 owned by the settings: resize allocates inside it, destroying the
+        // settings frees it
+        shapeSettings.mMaterialIndices.resize(quads);
+        const target = new Uint8Array(
+            jolt.HEAPU8.buffer,
+            jolt.getPointer(shapeSettings.mMaterialIndices.data()),
+            quads
+        );
+        for (let i = 0; i < quads; i++) {
+            const index = materialIndices[i];
+            if (!(index >= 0) || index >= table.size)
+                throw new Error(
+                    `Heightfield: material index ${index} at quad ${i} is outside the ` +
+                        `${table.size} materials given.`
+                );
+            target[i] = index;
+        }
+    }
+
+    const list = table.createList();
+    try {
+        // assignment copies the vector (and takes a reference on every material in it)
+        shapeSettings.mMaterials = list;
+    } finally {
+        jolt.destroy(list);
+    }
+};
+
 const createHeightfieldShapeSettings = (
     descriptor: HeightfieldShapeDescriptor
 ): Jolt.HeightFieldShapeSettings => {
@@ -881,6 +957,13 @@ const createHeightfieldShapeSettings = (
         heightSamples[i] = heights[i];
         // TODO: NOTE, this implementation does not allow holes in the map, which Jolt supports
         //heightSamples[i] = Jolt.HeightFieldShapeConstantValues.prototype.cNoCollisionValue; // Invisible pixels make holes
+    }
+    try {
+        applyHeightfieldMaterials(shapeSettings, descriptor);
+    } catch (error) {
+        // nothing has taken ownership of the settings yet, so they are ours to free
+        jolt.destroy(shapeSettings);
+        throw error;
     }
     return shapeSettings;
 };

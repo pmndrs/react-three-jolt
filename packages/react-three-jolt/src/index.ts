@@ -2,6 +2,7 @@ import * as _fiber from '@react-three/fiber';
 
 export * from './components';
 export * from './constants';
+export * from './heightField';
 export * from './hooks';
 // we have to export raw so the add-ons can access it
 export { initJolt, Raw } from './raw';
