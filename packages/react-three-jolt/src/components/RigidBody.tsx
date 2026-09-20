@@ -13,9 +13,10 @@ import React, {
 } from 'react';
 import * as THREE from 'three';
 import { Object3D } from 'three';
-import { useForwardedRef, useJolt, useUnmount } from '../hooks';
+import { useBodyEvent, useForwardedRef, useJolt, useUnmount } from '../hooks';
 import { AutoShape, BodyState } from '../systems';
 import { BodyType, GenerateBodyOptions } from '../systems/body-system';
+import type { BodyEventMap } from '../systems/events';
 import { vec3 } from '../utils';
 
 interface RigidBodyProps {
@@ -24,11 +25,39 @@ interface RigidBodyProps {
     position?: number[];
     rotation?: number[];
     onlyInitialize?: boolean;
-    onContactAdded?: (body1: number, body2: number) => void;
-    onContactRemoved?: (body1: number, body2: number) => void;
-    onContactPersisted?: (body1: number, body2: number) => void;
-    // sleep listener
-    //wake listener
+
+    //* Events -------------------------------------------
+    /** This body started touching another. Fires once per pair, per body. */
+    onCollisionEnter?: BodyEventMap['collisionEnter'];
+    /** The contact was maintained this step. Free from Jolt, zero cost when unused. */
+    onCollisionPersist?: BodyEventMap['collisionPersist'];
+    /** The last sub-shape manifold between the two bodies closed. */
+    onCollisionExit?: BodyEventMap['collisionExit'];
+    /** Something started overlapping this sensor (set `isSensor`). */
+    onSensorEnter?: BodyEventMap['sensorEnter'];
+    /** Something stopped overlapping this sensor. */
+    onSensorExit?: BodyEventMap['sensorExit'];
+    /** Rapier compatible alias for {@link onSensorEnter}. */
+    onIntersectionEnter?: BodyEventMap['sensorEnter'];
+    /** Rapier compatible alias for {@link onSensorExit}. */
+    onIntersectionExit?: BodyEventMap['sensorExit'];
+    /** The body was deactivated by Jolt's sleeping logic. */
+    onSleep?: BodyEventMap['sleep'];
+    /** The body was activated again. */
+    onWake?: BodyEventMap['wake'];
+    /**
+     * Runs **synchronously inside the physics step**: return `false` to reject the contact
+     * (one-way platforms, team pass-through). Must be fast and must not touch bodies.
+     */
+    onContactValidate?: BodyEventMap['contactValidate'];
+
+    /** @deprecated renamed to {@link onCollisionEnter}; receives the new payload. */
+    onContactAdded?: BodyEventMap['collisionEnter'];
+    /** @deprecated renamed to {@link onCollisionExit}; receives the new payload. */
+    onContactRemoved?: BodyEventMap['collisionExit'];
+    /** @deprecated renamed to {@link onCollisionPersist}; receives the new payload. */
+    onContactPersisted?: BodyEventMap['collisionPersist'];
+
     // this is MOTION Type
     type?: BodyType;
     shape?: AutoShape;
@@ -102,6 +131,16 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 
             debug: propDebug,
 
+            onCollisionEnter,
+            onCollisionPersist,
+            onCollisionExit,
+            onSensorEnter,
+            onSensorExit,
+            onIntersectionEnter,
+            onIntersectionExit,
+            onSleep,
+            onWake,
+            onContactValidate,
             onContactAdded,
             onContactRemoved,
             onContactPersisted,
@@ -122,6 +161,13 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         // States
         const bodyLoaded = useRef(false);
         const [activeShape, setActiveShape] = React.useState<Jolt.Shape>();
+        /**
+         * The body as React state, not just a ref. Effects that subscribe to events have to
+         * depend on the body *instance*: a `ref.current` read in a dep array is not reactive,
+         * which is exactly why the old listener effect never ran on the pass that created the
+         * body and so never registered anything at all.
+         */
+        const [body, setBody] = React.useState<BodyState>();
 
         // this allows us to debug on the physics system or the component specifically
         const debug = propDebug || physicsDebug;
@@ -160,6 +206,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                 if (!body) throw new Error('Body not found');
                 rigidBodyRef.current = body;
                 bodyLoaded.current = true;
+                setBody(body);
 
                 // for cycle reasons some stuff might have gotten missed
                 // try setting the debug
@@ -174,7 +221,10 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
 
         // When destroying we need to do some stuff
         useUnmount(() => {
-            bodySystem.removeBody((rigidBodyRef.current! as BodyState).handle);
+            // A RigidBody whose shape children never resolved has no body at all; this used to
+            // throw on unmount trying to read `.handle` of undefined.
+            const current = rigidBodyRef.current as BodyState | undefined;
+            if (current) bodySystem.removeBody(current.handle);
         });
 
         //*/ Debugging -------------------------------------
@@ -226,23 +276,19 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             }
         }, [onlyInitialize, position, rotation, rigidBodyRef]);
 
-        // add the contact listeners
-        useEffect(() => {
-            const rb = rigidBodyRef.current as BodyState;
-            if (rigidBodyRef.current) {
-                if (onContactAdded) rb.addContactListener(onContactAdded, 'added');
-                if (onContactRemoved) rb.addContactListener(onContactRemoved, 'removed');
-                if (onContactPersisted) rb.addContactListener(onContactPersisted, 'persisted');
-            }
-            // remove the listeners
-            return () => {
-                if (rigidBodyRef.current) {
-                    if (onContactAdded) rb.removeContactListener(onContactAdded);
-                    if (onContactRemoved) rb.removeContactListener(onContactRemoved);
-                    if (onContactPersisted) rb.removeContactListener(onContactPersisted);
-                }
-            };
-        }, [rigidBodyRef.current, onContactAdded, onContactRemoved, onContactPersisted]);
+        //* Events -------------------------------------------
+        // Each of these is an effect whose cleanup is the unsubscribe handle, keyed on the body
+        // instance. Handler identity is deliberately not a dependency (see useBodyEvent), so an
+        // inline arrow does not resubscribe every render, and StrictMode's mount/cleanup/mount
+        // leaves exactly one subscription.
+        useBodyEvent(body, 'collisionEnter', onCollisionEnter ?? onContactAdded);
+        useBodyEvent(body, 'collisionPersist', onCollisionPersist ?? onContactPersisted);
+        useBodyEvent(body, 'collisionExit', onCollisionExit ?? onContactRemoved);
+        useBodyEvent(body, 'sensorEnter', onSensorEnter ?? onIntersectionEnter);
+        useBodyEvent(body, 'sensorExit', onSensorExit ?? onIntersectionExit);
+        useBodyEvent(body, 'sleep', onSleep);
+        useBodyEvent(body, 'wake', onWake);
+        useBodyEvent(body, 'contactValidate', onContactValidate);
 
         //not sure these should be set as useEffects or directly in the body
         useEffect(() => {
@@ -300,7 +346,9 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         //@ts-ignore
         const contextValue: RigidBodyContext = useMemo(() => {
             return {
-                body: rigidBodyRef.current,
+                // the state, not the ref: this is what makes the context update once the body
+                // actually exists
+                body,
                 type,
                 position,
                 rotation,
@@ -308,7 +356,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                 quaternion,
                 setActiveShape
             };
-        }, [rigidBodyRef, type, position, rotation, scale, quaternion]);
+        }, [body, type, position, rotation, scale, quaternion]);
         return (
             <RigidBodyContext.Provider value={contextValue}>
                 <object3D ref={objectRef} {...objectProps}>

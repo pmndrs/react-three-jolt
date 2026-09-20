@@ -15,7 +15,8 @@ import React, {
 } from 'react';
 import * as THREE from 'three';
 import { BodyState } from '../';
-import { useForwardedRef, useJolt, useUnmount } from '../hooks';
+import { useEventCallback, useForwardedRef, useJolt, useUnmount } from '../hooks';
+import type { BodyEventMap } from '../systems/events';
 
 interface InstancedRigidBodyMeshProps {
     children: ReactNode;
@@ -24,10 +25,38 @@ interface InstancedRigidBodyMeshProps {
     color: string | THREE.Color;
     position: any;
     rotation: any;
+
+    //* Events -------------------------------------------
+    // Same names and payloads as `<RigidBody>`; the payload's `target.index` says which
+    // instance it was. Subscribed on every instance body, re-subscribed when `count` changes.
+    onCollisionEnter?: BodyEventMap['collisionEnter'];
+    onCollisionPersist?: BodyEventMap['collisionPersist'];
+    onCollisionExit?: BodyEventMap['collisionExit'];
+    onSensorEnter?: BodyEventMap['sensorEnter'];
+    onSensorExit?: BodyEventMap['sensorExit'];
+    onIntersectionEnter?: BodyEventMap['sensorEnter'];
+    onIntersectionExit?: BodyEventMap['sensorExit'];
+    onSleep?: BodyEventMap['sleep'];
+    onWake?: BodyEventMap['wake'];
 }
 export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = memo(
     forwardRef((props, forwardedRef) => {
-        const { children, count = 150, color = '#D9594C', position, rotation } = props;
+        const {
+            children,
+            count = 150,
+            color = '#D9594C',
+            position,
+            rotation,
+            onCollisionEnter,
+            onCollisionPersist,
+            onCollisionExit,
+            onSensorEnter,
+            onSensorExit,
+            onIntersectionEnter,
+            onIntersectionExit,
+            onSleep,
+            onWake
+        } = props;
         // I put one in the ref to appease typescript
         const holderMeshRef = useRef<THREE.Mesh>(new THREE.Mesh());
         const instancedMeshRef: any = useRef(undefined);
@@ -132,6 +161,52 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
             // update the instance states
             instanceStates.current = instances;
         };
+        //* Events -------------------------------------------
+        // Runs after the effect above, so the instance bodies exist. One subscription per
+        // instance body, all dropped together when `count` changes or the mesh unmounts. The
+        // payload's `target.index` says which instance it was.
+        const enter = useEventCallback(onCollisionEnter);
+        const persist = useEventCallback(onCollisionPersist);
+        const exit = useEventCallback(onCollisionExit);
+        const sensorEnter = useEventCallback(onSensorEnter ?? onIntersectionEnter);
+        const sensorExit = useEventCallback(onSensorExit ?? onIntersectionExit);
+        const sleep = useEventCallback(onSleep);
+        const wake = useEventCallback(onWake);
+        // which handlers are present, as a value - so an inline arrow does not resubscribe
+        const subscribed = [
+            onCollisionEnter,
+            onCollisionPersist,
+            onCollisionExit,
+            onSensorEnter ?? onIntersectionEnter,
+            onSensorExit ?? onIntersectionExit,
+            onSleep,
+            onWake
+        ]
+            .map((handler) => (handler ? 1 : 0))
+            .join('');
+        useEffect(() => {
+            const instances = (instanceStates.current || []) as BodyState[];
+            if (!instances.length) return;
+            const pairs: [keyof BodyEventMap, unknown][] = [
+                ['collisionEnter', onCollisionEnter && enter],
+                ['collisionPersist', onCollisionPersist && persist],
+                ['collisionExit', onCollisionExit && exit],
+                ['sensorEnter', (onSensorEnter ?? onIntersectionEnter) && sensorEnter],
+                ['sensorExit', (onSensorExit ?? onIntersectionExit) && sensorExit],
+                ['sleep', onSleep && sleep],
+                ['wake', onWake && wake]
+            ];
+            const offs: (() => void)[] = [];
+            for (const [type, callback] of pairs) {
+                if (!callback) continue;
+                for (const instance of instances) offs.push(instance.on(type, callback as never));
+            }
+            return () => {
+                for (const off of offs) off();
+            };
+            // biome-ignore lint/correctness/useExhaustiveDependencies: `subscribed` stands in for which handlers are present, `count` for the instance set
+        }, [count, subscribed]);
+
         // cleanup
         useUnmount(() => {
             // remove the instancedMesh from the scene
