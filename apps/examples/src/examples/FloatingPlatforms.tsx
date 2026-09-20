@@ -15,7 +15,7 @@ const IDENTITY_QUAT = new THREE.Quaternion();
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 export function FloatingPlatforms() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
     // keep riders awake and grippy so kinematic platforms actually carry them instead of
     // letting them sleep through the ride or slide straight off - see report for details.
     const defaultBodySettings = {
@@ -25,6 +25,7 @@ export function FloatingPlatforms() {
     };
     return (
         <Physics
+            module={module}
             paused={paused}
             key={physicsKey}
             interpolate={interpolate}
