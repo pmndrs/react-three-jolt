@@ -83,6 +83,21 @@ export class BodySystem {
     staticBodies = new Map<number, BodyState>();
     kinematicBodies = new Map<number, BodyState>();
 
+    /**
+     * Static bodies that were moved since the last frame (issue #61).
+     *
+     * The frame loop only walks bodies that can be awake, so a static body's three.js object
+     * would otherwise keep the pose it was created with. `BodyState`'s position/rotation setters
+     * drop the body in here and `PhysicsSystem.onUpdate` drains it once per frame - so this
+     * costs nothing at all in a scene whose statics never move.
+     */
+    readonly movedStatics = new Set<BodyState>();
+
+    /** Called by {@link BodyState}'s setters; see {@link movedStatics}. */
+    markStaticMoved(state: BodyState) {
+        this.movedStatics.add(state);
+    }
+
     //* Events ======================================
     /** Jolt listener objects, kept so they can be freed. See {@link destroy}. */
     contactListener?: Jolt.ContactListenerJS;
@@ -417,6 +432,8 @@ export class BodySystem {
 
     /** Drop a handle from every map. Jolt recycles handles, so nothing may be left behind. */
     private forget(bodyHandle: number) {
+        const state = this.bodies.get(bodyHandle);
+        if (state) this.movedStatics.delete(state);
         this.bodies.delete(bodyHandle);
         this.dynamicBodies.delete(bodyHandle);
         this.staticBodies.delete(bodyHandle);
@@ -956,6 +973,7 @@ export class BodySystem {
         this.dynamicBodies.clear();
         this.staticBodies.clear();
         this.kinematicBodies.clear();
+        this.movedStatics.clear();
         this.pendingActions = [];
         // Our own allocations, not listeners installed on the JoltInterface: these are freed even
         // when the interface belongs to another world (issue #95).

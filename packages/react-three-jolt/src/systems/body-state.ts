@@ -76,6 +76,17 @@ export class BodyState {
     }
 
     /**
+     * True for a body Jolt will never move on its own (`type="static"`).
+     *
+     * Static bodies *can* still be moved from the outside - see the `position` / `rotation`
+     * setters - they are simply never simulated, never active, and therefore never visited by
+     * the render sync loop.
+     */
+    get isStatic() {
+        return this.body.IsStatic();
+    }
+
+    /**
      * Open sub-shape manifolds per peer handle, maintained by `BodySystem`'s contact listener.
      * Derived state - write through the listener, read through {@link isContacting}.
      */
@@ -482,19 +493,33 @@ export class BodyState {
         */
     }
 
-    // Set the body position
+    /**
+     * Move the body. Works on every motion type, **including static bodies** (issue #61):
+     * `SetPosition` updates the broadphase, and the three.js object is brought along by the
+     * dirty-static drain in `PhysicsSystem.onUpdate`, since the frame loop only walks bodies
+     * that can be awake.
+     *
+     * Moving a static body every frame is an anti pattern - it teleports, so nothing resting on
+     * it is carried, sleeping neighbours are not woken, and contacts are resolved as if the body
+     * had always been there. Use `type="kinematic"` with {@link setKinematicTarget} (or
+     * {@link moveKinematic}) for anything that moves repeatedly; statics are for the occasional
+     * reposition of scenery.
+     */
     // `SetPosition` takes an RVec3Arg and copies it, so the shared scratch vector is safe here
     // and keeps this setter allocation free - it is driven from useFrame by user code.
     set position(position) {
         this.bodyInterface.SetPosition(
             this.BodyID,
             joltScratch.rvec3(position),
-            Raw.module.EActivation_Activate
+            // activating a static body asserts inside Jolt (and means nothing - it is never
+            // simulated), so only ask for activation when there is something to activate
+            this.isStatic ? Raw.module.EActivation_DontActivate : Raw.module.EActivation_Activate
         );
         // A setter is a teleport, not simulation: the cached previous/current poses now bracket
         // a jump the body never travelled, and interpolating across them would smear the object
         // from its old place to its new one over the next frame.
         this.resetPoseCache();
+        this.markMovedIfStatic();
     }
     // get the position of the body and wrap it in a three vector
     getPosition(asJolt?: boolean): THREE.Vector3 | Jolt.RVec3 {
@@ -504,21 +529,31 @@ export class BodyState {
     get position(): THREE.Vector3 {
         return this.getPosition() as THREE.Vector3;
     }
-    // Set the body rotation
+    /** Turn the body. Same rules as the {@link position} setter, statics included (issue #61). */
     // `SetRotation` takes a QuatArg and copies it; shared scratch, no allocation per call.
     set rotation(rotation: THREE.Quaternion) {
         this.bodyInterface.SetRotation(
             this.BodyID,
             joltScratch.quat(rotation),
-            Raw.module.EActivation_Activate
+            this.isStatic ? Raw.module.EActivation_DontActivate : Raw.module.EActivation_Activate
         );
         // see the `position` setter: a teleport must not be slerped across.
         this.resetPoseCache();
+        this.markMovedIfStatic();
     }
     // get the rotation of the body and wrap it in a three quaternion
     get rotation(): THREE.Quaternion {
         return quat.joltToThree(this.body.GetRotation());
     }
+    /**
+     * Static bodies are not in the frame loop's iteration (they can never be awake), so a static
+     * that was just moved has to tell the body system, which hands it to the render sync exactly
+     * once. Costs nothing for every other motion type.
+     */
+    private markMovedIfStatic() {
+        if (this.isStatic) this.bodySystem.markStaticMoved(this);
+    }
+
     // set both position and rotation
     setPositionAndRotation(position: THREE.Vector3, rotation: THREE.Quaternion) {
         this.position = position;

@@ -254,6 +254,12 @@ export class PhysicsSystem {
         // NOTE: using "state" to match rapier logic
         this.bodySystem.dynamicBodies.forEach(this.syncBodyToObject);
         this.bodySystem.kinematicBodies.forEach(this.syncBodyToObject);
+        // Static bodies are never awake, so they are not in the maps above. A static that was
+        // moved from the outside (issue #61) registers itself here and is synced exactly once.
+        if (this.bodySystem.movedStatics.size) {
+            this.bodySystem.movedStatics.forEach(this.syncBodyToObject);
+            this.bodySystem.movedStatics.clear();
+        }
 
         // todo: consider sleeping
         invalidate();
@@ -269,7 +275,10 @@ export class PhysicsSystem {
      * between the last two fixed steps, or the body's live pose. Allocation free.
      */
     private syncBodyToObject = (state: BodyState): void => {
-        if (state.isSleeping) return;
+        // A static body is never "active", so `isSleeping` is always true for one; it only
+        // reaches this through the moved-statics drain above, which is exactly when it does
+        // need a sync (issue #61).
+        if (state.isSleeping && !state.isStatic) return;
 
         // World space physics pose for this frame -> _vector3 / _quaternion
         if (this.frameInterpolating && state.poseCacheValid) {
