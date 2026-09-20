@@ -8,7 +8,7 @@
 
 import { useThree } from '@react-three/fiber';
 import { create } from '@react-three/test-renderer';
-import { act, useEffect, useRef } from 'react';
+import React, { act, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { assert, test } from 'vitest';
 import { Physics } from '../src/components/Physics';

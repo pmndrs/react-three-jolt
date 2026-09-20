@@ -177,7 +177,7 @@ export interface JoltHitArray<THit> {
  * single `mHit`; every `*AllHitCollisionCollector` declares `HadHit()` plus an `mHits` vector;
  * and the `*CollectorJS` variants (see `AdvancedRaycaster`) declare **neither**, because the
  * JS implementation collects hits itself. Everything is therefore optional here, which is what
- * lets one interface cover all three families structurally instead of the four `@ts-ignore`s
+ * lets one interface cover all three families structurally instead of the four suppressions
  * `cast()` used to need - and it forces the `HadHit?.()` guard below, which is the honest
  * runtime check for a JS collector.
  */
@@ -469,7 +469,9 @@ export abstract class CastQueryBase<
     // draw one marker per current hit, pooled by index so repeated casts (with the same or a
     // smaller number of hits) reuse the same marker groups instead of accumulating new ones.
     drawDebuggingMarkers(): void {
-        this.hits.forEach((hit, i) => this.drawMarker(hit, undefined, undefined, i));
+        this.hits.forEach((hit, i) => {
+            this.drawMarker(hit, undefined, undefined, i);
+        });
         // hide (never destroy - they stay pooled for reuse) any markers left over from a
         // previous cast that returned more hits than this one, so an "all" collector going from
         // e.g. 3 hits to 1 doesn't leave 2 stale markers visible.

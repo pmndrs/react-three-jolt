@@ -14,6 +14,7 @@ import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { afterEach, assert, beforeAll, describe, expect, onTestFinished, test } from 'vitest';
 import { initJolt, Raw } from '../src/raw';
+import type { BodyState } from '../src/systems/body-state';
 import {
     type AutoShape,
     addSubShape,
@@ -452,6 +453,11 @@ const localBounds = (shape: Jolt.Shape) => {
         max: [box.mMax.GetX(), box.mMax.GetY(), box.mMax.GetZ()]
     };
 };
+
+// `BodyState.scale` has a wide setter (a number, a tuple, a Vector3) and a THREE.Vector3
+// getter. After `body.scale = 2` TypeScript narrows the *read* type to what was written, so
+// reading it back straight away looks like a number; going through this reads the real getter.
+const scaleOf = (body: BodyState): THREE.Vector3 => body.scale as THREE.Vector3;
 
 const expectBounds = (
     shape: Jolt.Shape,
@@ -1251,7 +1257,7 @@ describe('BodyState.scale goes through the pipeline', () => {
         const applied = scaled.GetScale();
         assert.deepEqual([applied.GetX(), applied.GetY(), applied.GetZ()], [2, 2, 2]);
         expectBounds(scaled, { min: [-1, -1, -1], max: [1, 1, 1] }, 0.02);
-        assert.deepEqual(body.scale.toArray(), [2, 2, 2]);
+        assert.deepEqual(scaleOf(body).toArray(), [2, 2, 2]);
 
         body.destroy(true);
     });
@@ -1265,7 +1271,7 @@ describe('BodyState.scale goes through the pipeline', () => {
         )!;
         box.scale = [2, 3, 4];
         expectBounds(box.body.GetShape(), { min: [-1, -1.5, -2], max: [1, 1.5, 2] }, 0.02);
-        assert.deepEqual(box.scale.toArray(), [2, 3, 4]);
+        assert.deepEqual(scaleOf(box).toArray(), [2, 3, 4]);
 
         // a sphere has a single radius: jolt refuses a non-uniform scale, so we warn and use
         // the largest component uniformly rather than producing a mismatched collider
@@ -1278,7 +1284,7 @@ describe('BodyState.scale goes through the pipeline', () => {
                 system.bodySystem.addBody(new THREE.Mesh(new THREE.SphereGeometry(1, 16, 16)))
             )!;
             sphere.scale = [2, 3, 1];
-            assert.deepEqual(sphere.scale.toArray(), [3, 3, 3]);
+            assert.deepEqual(scaleOf(sphere).toArray(), [3, 3, 3]);
             expectBounds(sphere.body.GetShape(), { min: [-3, -3, -3], max: [3, 3, 3] }, 0.05);
             assert.isTrue(
                 warnings.some((args) => String(args[0]).includes('cannot be scaled non-uniformly')),

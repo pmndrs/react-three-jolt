@@ -92,8 +92,6 @@ function RaycastSimple() {
 
             //* Cast 2 ------------------------------
             // Move the ray (array style)
-            //todo check on this type error
-            //@ts-ignore with anyVec this should be working better
             raycaster.origin = [-5, 1, 4];
             // cast with values
             const hittwo = raycaster.cast();
@@ -112,7 +110,9 @@ function RaycastSimple() {
             //raycaster.cast((hits) => hits.forEach((hit) => drawHit(hit)));
             raycaster.cast();
             // call off raycaster hits internal array
-            raycaster.hits.forEach((hit: RaycastHit) => drawHit(hit));
+            raycaster.hits.forEach((hit: RaycastHit) => {
+                drawHit(hit);
+            });
 
             //* Cast 4 ------------------------------
             // From now on use the default debugger to draw lines
@@ -122,8 +122,6 @@ function RaycastSimple() {
             raycaster.drawPoints = true;
 
             // Move to the 4th cube and cast at the same time
-            //todo check on this type error
-            //@ts-ignore with anyVec this should be working better
             raycaster.castFrom([-5, 1, 14]);
 
             //* Cast 5 ------------------------------
@@ -132,7 +130,7 @@ function RaycastSimple() {
             raycaster.drawMarkers = true;
             // change the ray to be between two SPECIFIC points, NOT a direction
             //todo check on this type error
-            //@ts-ignore with anyVec this should be working better
+            //@ts-expect-error with anyVec this should be working better
             raycaster.castBetween([-5, 0.4, 20], [5, 1.5, 20]);
         }, 500);
     }, [raycaster]);
@@ -185,11 +183,11 @@ function RaycastSimple() {
                 [0, 10, 20]
             ];
             //todo check on this type error
-            //@ts-ignore with anyVec this should be working better
+            //@ts-expect-error with anyVec this should be working better
             multicaster.positions = positions;
             // set the directions to be the same for each
             //todo check on this type error
-            //@ts-ignore with anyVec this should be working better
+            //@ts-expect-error with anyVec this should be working better
             multicaster.direction = [0, -11, 0];
             // turn on the debugger
             multicaster.raycaster.initDebugging(scene);

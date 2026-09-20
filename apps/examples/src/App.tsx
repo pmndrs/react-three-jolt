@@ -256,7 +256,6 @@ export const App = () => {
     // when the route changes move the camera
     useEffect(() => {
         // set the camera position
-        //@ts-ignore
         const route = routes[location.pathname.replace('/', '')];
         setCameraProps({
             position: route.position,

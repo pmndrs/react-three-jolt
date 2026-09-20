@@ -22,7 +22,8 @@ import type { BodyEventMap } from '../systems/events';
 import { vec3 } from '../utils';
 
 interface RigidBodyProps {
-    children: ReactNode;
+    /** Optional so `createElement(RigidBody, props, ...children)` typechecks as JSX does. */
+    children?: ReactNode;
     key?: number;
     position?: number[];
     rotation?: number[];
@@ -64,7 +65,11 @@ interface RigidBodyProps {
     type?: BodyType;
     shape?: AutoShape;
     debug?: boolean;
-    ref?: any;
+    /**
+     * Receives the {@link BodyState} once the body exists. `| undefined` because the usual
+     * `useRef<BodyState>()` produces a `RefObject<BodyState | undefined>`.
+     */
+    ref?: React.Ref<BodyState | undefined>;
     allowObstruction?: boolean;
     obstructionTimelimit?: number;
     isSensor?: boolean;
@@ -113,7 +118,7 @@ export interface RigidBodyContext {
     type: BodyType | undefined;
     // These four are the RigidBody's own props passed straight through, so they are the props'
     // `number[]` shape - not THREE.Vector3/Quaternion, which is what this interface used to
-    // claim behind a `@ts-ignore` on the value it was assigned (issue #11).
+    // claim behind a blanket suppression on the value it was assigned (issue #11).
     position: number[] | undefined;
     rotation: number[] | undefined;
     scale: number[] | undefined;

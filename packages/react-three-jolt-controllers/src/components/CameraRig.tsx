@@ -44,7 +44,7 @@ export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, re
 
     // bind the look command for look and zoom
     useLookCommand(
-        (lookVector: any) => {
+        (lookVector) => {
             cameraRig.moveBoom(lookVector);
         },
         (zoomLevel: number) => {

@@ -35,6 +35,12 @@ export type CameraFollowMode = 'free' | 'movement' | 'lookAt';
  * new `THREE.PerspectiveCamera` under the same name (`fov`, `near`, `far`, `zoom`, ...), which
  * is why the index signature is here rather than a closed list.
  */
+/** What {@link CameraRigManager.createRigPoint} accepts. */
+export interface RigPointOptions {
+    /** debug mesh colour @default '#767B91' */
+    color?: THREE.ColorRepresentation;
+}
+
 export interface CameraOptions {
     /** Where the camera starts, in whichever rig space it is added to. */
     position?: anyVec3;
@@ -164,7 +170,9 @@ export class CameraRigManager {
     private isDebugging = true;
     set debug(value: boolean) {
         this.isDebugging = value;
-        this.points.forEach((point) => (point.object.visible = value));
+        this.points.forEach((point) => {
+            point.object.visible = value;
+        });
     }
     get debug() {
         return this.isDebugging;
@@ -266,7 +274,9 @@ export class CameraRigManager {
         this.constraints.clear();
 
         // remove the cameras
-        this.cameras.forEach((camera) => camera.removeFromParent());
+        this.cameras.forEach((camera) => {
+            camera.removeFromParent();
+        });
         this.cameras.clear();
         this.activeCamera = undefined;
         // camera-change listeners live on the Emitter now (issue #50/#187)
@@ -521,7 +531,7 @@ export class CameraRigManager {
 
     //TODO move this to the body system
     //create rig points
-    createRigPoint(name: string, options?: any): BodyState {
+    createRigPoint(name: string, options?: RigPointOptions): BodyState {
         const {
             color = '#767B91'
             // type = 'sphere',
@@ -563,7 +573,10 @@ const disposeMesh = (object: THREE.Object3D) => {
     if (!mesh.isMesh) return;
     mesh.geometry?.dispose();
     const material = mesh.material;
-    if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
+    if (Array.isArray(material))
+        material.forEach((entry) => {
+            entry.dispose();
+        });
     else material?.dispose();
 };
 

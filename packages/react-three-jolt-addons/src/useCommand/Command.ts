@@ -202,7 +202,9 @@ export class Command {
 
     /** Iterate over a copy so a listener that unsubscribes mid-dispatch can't skip its neighbour. */
     private emit(listeners: CommandCallback[], info: CommandInfo) {
-        listeners.slice().forEach((listener) => listener(info));
+        listeners.slice().forEach((listener) => {
+            listener(info);
+        });
     }
 
     private updateDuration() {

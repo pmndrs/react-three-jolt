@@ -30,8 +30,41 @@ interface CharacterFilters {
     shapeFilter: Jolt.ShapeFilter;
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-export type CharacterActionCallback = (action: any, payload?: any) => void;
+/**
+ * Everything that can reach an action listener (issue #209).
+ *
+ * Every typed {@link CharacterEventMap} event is *also* emitted as an action of the same name,
+ * and a handful of names below exist only as actions - they carry a payload but no dedicated
+ * event. `on(action, fn)` filters on one of these.
+ *
+ * `'exausted'` is a misspelling kept for one release; listen for `'exhausted'`.
+ */
+export type CharacterActionName = keyof CharacterEventMap | CharacterActionOnlyName;
+
+/** Action names with no matching entry in {@link CharacterEventMap}. */
+export type CharacterActionOnlyName =
+    | 'falling'
+    | 'crouched'
+    | 'running'
+    | 'exhausted'
+    /** @deprecated misspelling of `'exhausted'` */
+    | 'exausted';
+
+/**
+ * A controller action listener: `(name, payload)`.
+ *
+ * The payload differs per action (a speed, a jump count, a boolean, ...), so it is `unknown`
+ * and the handler narrows it. Use `controller.events.on(type, fn)` for a typed payload.
+ */
+export type CharacterActionCallback = (action: CharacterActionName, payload?: unknown) => void;
+
+/**
+ * Any callable, used only as the identity key of the deprecated `removeActionListener(fn)`.
+ *
+ * `never[]` parameters make it a supertype of every concrete listener signature without being
+ * the banned `Function`, which types nothing and permits `new listener()`.
+ */
+type ActionListenerKey = (...args: never[]) => unknown;
 
 /**
  * One contact between the character and a body, forwarded from Jolt's
@@ -164,7 +197,7 @@ export class CharacterControllerSystem {
      */
     readonly events = new Emitter<CharacterEventMap>(CHARACTER_EVENT_BITS);
     /** Back compat so the deprecated `removeActionListener(fn)` still finds its handles. */
-    private legacyActionSubs = new Map<Function, Unsubscribe[]>();
+    private legacyActionSubs = new Map<ActionListenerKey, Unsubscribe[]>();
 
     // configurable options
 
@@ -613,10 +646,10 @@ export class CharacterControllerSystem {
     get groundVelocity(): THREE.Vector3 {
         return vec3.three(this.character.GetGroundVelocity());
     }
-    get groundMaterial(): any {
+    get groundMaterial(): Jolt.PhysicsMaterial {
         return this.character.GetGroundMaterial();
     }
-    get groundBodyHandle(): any {
+    get groundBodyHandle(): number {
         return this.character.GetGroundBodyID().GetIndexAndSequenceNumber();
         //TODO do we need to destroy the bodyID?
     }
@@ -1103,11 +1136,9 @@ export class CharacterControllerSystem {
      */
     private emitEvent<K extends keyof CharacterEventMap>(
         type: K,
-        // biome-ignore lint/suspicious/noExplicitAny: forwarded straight to the emitter
-        ...args: any[]
+        ...args: Parameters<CharacterEventMap[K]>
     ): void {
-        // biome-ignore lint/suspicious/noExplicitAny: see above
-        this.events.emit(type, ...(args as any));
+        this.events.emit(type, ...args);
         this.triggerActionListeners(type, args[0]);
     }
     //* Movement Functions ========================================
@@ -1176,7 +1207,7 @@ export class CharacterControllerSystem {
         const groundVelocity = this.groundVelocity;
         const gravity = vec3.joltToThree(this.physicsSystem.physicsSystem.GetGravity());
 
-        let newVelocity: any;
+        let newVelocity: THREE.Vector3;
         const movingTowardsGround = currentVerticalVelocity.y - groundVelocity.y < 0.1;
 
         // notify the user we are falling
@@ -1290,7 +1321,7 @@ export class CharacterControllerSystem {
             this.isJumping = false;
         }, 100);
     }
-    startRunning(speed?: any) {
+    startRunning(speed?: number) {
         if (this.destroyed) return;
         if (!this.allowRunning || this.isExhausted || this.isCrouched) return;
         const newSpeed = speed || this.characterSpeed * 2;
@@ -1336,17 +1367,19 @@ export class CharacterControllerSystem {
         this.legacyActionSubs.delete(listener);
         for (const off of subs) off();
     };
-    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-    triggerActionListeners = (action: any, payload?: any) => {
+    triggerActionListeners = (action: CharacterActionName, payload?: unknown) => {
         if (this.isDebugging && this.debugVerbose)
             console.log('Character Controller:', action, payload);
         this.events.emit('action', action, payload);
     };
-    // watch function takes an action and a callback and adds the correct listener
-    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-    on = (action: any, callback: (action: any, payload?: any) => void): Unsubscribe =>
-        // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-        this.events.on('action', (a: any, payload?: any) => {
+    /**
+     * Subscribe to one named action. Returns the unsubscribe.
+     *
+     * This is the action-filtered API; `controller.events.on(type, fn)` is the typed one, and
+     * both see the same things (see {@link CharacterActionName}).
+     */
+    on = (action: CharacterActionName, callback: CharacterActionCallback): Unsubscribe =>
+        this.events.on('action', (a, payload) => {
             if (a === action) callback(a, payload);
         });
 

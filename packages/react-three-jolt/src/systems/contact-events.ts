@@ -397,8 +397,19 @@ type SubShapeSlots = {
     _resolver: SubShapeResolver | undefined;
 };
 
-type PooledEnter = CollisionEnterPayload & SubShapeSlots & { _store: Vector3[] };
-type PooledBasic = CollisionPayload & SubShapeSlots;
+export type PooledEnter = CollisionEnterPayload & SubShapeSlots & { _store: Vector3[] };
+export type PooledBasic = CollisionPayload & SubShapeSlots;
+
+/**
+ * Every payload shape the pool hands out, seen through one optional-property view.
+ *
+ * `poison()` runs over contact payloads (with or without a manifold) and activation payloads
+ * alike, checking for each field before touching it - which is exactly what `Partial` of their
+ * union of members describes, and is what it used to say `any` for.
+ */
+export type PoisonablePayload = Partial<
+    CollisionEnterPayload & SubShapeSlots & ActivationPayload & { _store: Vector3[] }
+>;
 
 /**
  * Resolve one side's sub shape, once. Reading `payload.targetSubShape` is what triggers the
@@ -533,8 +544,7 @@ export class PayloadPool {
      * Development only: make a payload that outlived its dispatch obviously broken. Cheap
      * enough to be unconditional in debug and never runs otherwise.
      */
-    // biome-ignore lint/suspicious/noExplicitAny: works on every payload shape
-    poison(payload: any): void {
+    poison(payload: PoisonablePayload | undefined): void {
         if (!this.debug || !payload) return;
         if (payload.normal) payload.normal.set(Number.NaN, Number.NaN, Number.NaN);
         if (payload.penetration !== undefined) payload.penetration = Number.NaN;

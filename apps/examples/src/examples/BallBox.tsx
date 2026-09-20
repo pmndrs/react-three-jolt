@@ -20,14 +20,14 @@ export function BallBox() {
     //* disable controls
     useEffect(() => {
         if (!controls) return;
-        //@ts-ignore
+        //@ts-expect-error r3f types `controls` as unknown
         controls.rotate(0, 0, false);
         setTimeout(() => {
-            //@ts-ignore
+            //@ts-expect-error r3f types `controls` as unknown
             controls.enabled = false;
         }, 100);
         return () => {
-            //@ts-ignore
+            //@ts-expect-error r3f types `controls` as unknown
             controls!.enabled = true;
         };
     }, [controls, camera]);
@@ -85,7 +85,7 @@ export function BallBox() {
     //* Changing gravity with device ----------------------------
 
     const promptUser = () => {
-        //@ts-ignore
+        //@ts-expect-error iOS only, not in lib.dom
         DeviceMotionEvent.requestPermission()
             .then((permissionState: PermissionState) => {
                 console.log('Permission state', permissionState);
@@ -108,7 +108,7 @@ export function BallBox() {
 
     // attach event listener to device orientation with removal on return
     useEffect(() => {
-        //@ts-ignore
+        //@ts-expect-error iOS only, not in lib.dom
         if (typeof DeviceMotionEvent.requestPermission === 'function') {
             // we are on an iOS 13+ device
             setShowPrompt(true);

@@ -321,6 +321,8 @@ export class Commander {
         // dont emit if paused
         if (this.paused) return;
 
-        this.stateListeners.slice().forEach((listener) => listener(this.state));
+        this.stateListeners.slice().forEach((listener) => {
+            listener(this.state);
+        });
     }
 }

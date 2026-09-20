@@ -2,7 +2,7 @@
 // designed to be used from the body system although it can be accessed directly
 
 import type Jolt from 'jolt-physics';
-import { Raw } from '../raw';
+import { type JoltClass, Raw } from '../raw';
 import { type anyVec3, vec3 } from '../utils';
 import type { BodyState } from './body-state';
 import type { PhysicsSystem } from './physics-system';
@@ -110,8 +110,8 @@ export interface ConstraintRecord {
  * indistinguishable from the live one. Dropping the cache entries when we free a constraint
  * keeps wrapper identity meaningful (and stops the wrappers accumulating).
  */
-// biome-ignore lint/suspicious/noExplicitAny: `getCache` is a binder internal with no typing
-type BinderClass = new (...args: any[]) => unknown;
+/** What `getCache` (and the constraint class table below) index by. */
+type BinderClass = JoltClass<unknown>;
 interface BinderModule {
     getCache(Class: BinderClass): Record<number, unknown>;
 }
@@ -370,9 +370,9 @@ export class ConstraintSystem {
                 // sixDOF has friction but it's weird.
                 if (options?.friction)
                     // because I'm lazy, im making the user do a full array
-                    options.friction.forEach((value, index) =>
-                        settings.set_mMaxFriction(index, value)
-                    );
+                    options.friction.forEach((value, index) => {
+                        settings.set_mMaxFriction(index, value);
+                    });
                 // if the limiter is a pyramid
                 if (options?.limitShape === 'pyramid')
                     settings.mSwingType = Raw.module.ESwingType_Pyramid;

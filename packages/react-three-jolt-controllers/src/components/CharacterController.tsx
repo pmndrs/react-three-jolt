@@ -1,7 +1,7 @@
-import { useThree } from '@react-three/fiber';
+import { type ThreeElements, useThree } from '@react-three/fiber';
 import { useEventCallback, useForwardedRef, useJolt } from '@react-three/jolt';
 import { type CommandVector, isCommandVector, useCommand } from '@react-three/jolt-addons';
-import React, { forwardRef, memo, useEffect, useRef, useState } from 'react';
+import React, { forwardRef, memo, type ReactNode, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { CharacterEventMap } from '../systems/character-controller';
 import { CharacterControllerSystem } from '../systems/character-controller';
@@ -38,14 +38,11 @@ export function useCharacterEvent<K extends keyof CharacterEventMap>(
     }, [system, enabled, type, callback]);
 }
 
-interface CControllerProps {
-    children?: any;
+interface CControllerProps extends Omit<ThreeElements['object3D'], 'ref' | 'children'> {
+    children?: ReactNode;
     radius?: number;
     height?: number;
     debug?: boolean;
-    rest?: any;
-    position?: any;
-    anchor?: any;
 
     //* Events (issues #79, #80, and the `onAction` half of #50) -------------
     /** Started moving under its own power; the argument is the speed relative to the ground. */
@@ -137,7 +134,6 @@ export const CharacterController: React.FC<CControllerProps> = memo(
                 characterRef.current = null;
                 setCharacterSystem(undefined);
             };
-            // biome-ignore lint/correctness/useExhaustiveDependencies: characterRef is a stable ref
         }, [physicsSystem, scene]);
 
         // set debugging

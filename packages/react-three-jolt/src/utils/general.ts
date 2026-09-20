@@ -164,7 +164,7 @@ export const vec3 = {
         if (vec3.isJolt(a)) vec3.joltCopy(a, b);
         // Everything that is not a Jolt vector goes through threeCopy, which only needs `.set`.
         // A tuple has no `.set`, so a tuple target was silently a no-op before and still is -
-        // the cast documents the narrowing the old `@ts-ignore` was hiding.
+        // the cast documents the narrowing the old suppression was hiding.
         else vec3.threeCopy(a as THREE.Vector3, b);
     }
 };

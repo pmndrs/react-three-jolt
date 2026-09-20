@@ -143,7 +143,10 @@ export function disposeGeneratedObject(object: THREE.Object3D) {
         if (!mesh.isMesh) return;
         mesh.geometry?.dispose();
         const material = mesh.material;
-        if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
+        if (Array.isArray(material))
+            material.forEach((entry) => {
+                entry.dispose();
+            });
         else if (material && material !== getSharedWheelMaterial()) material.dispose();
     });
     object.removeFromParent();

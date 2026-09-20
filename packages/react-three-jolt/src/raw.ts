@@ -114,13 +114,18 @@ export const free = (value: unknown) => {
 // invokes - contact listeners, character contact listeners, the *CollectorJS collectors, vehicle
 // step listeners - and `wrapPointer`/`castObject` are how you turn one back into a usable
 // wrapper object. Issue #144: those two used to be typed as taking the *wrapped* type rather
-// than a pointer, so ~60 call sites carried a `@ts-ignore`. The jolt-physics 1.1.0 typings fixed
+// than a pointer, so ~60 call sites carried a blanket suppression. jolt-physics 1.1.0 fixed
 // the signature; the three wrappers below exist so a call site reads as intent ("this number is
 // a Body") instead of module plumbing, and so there is one documented place stating the lifetime
 // rules that come with each of them.
 
-/** The shape of an emscripten-bound Jolt class, as `wrapPointer`/`castObject` want it. */
-// biome-ignore lint/suspicious/noExplicitAny: a constructor type constraint has to accept any args
+/**
+ * The shape of an emscripten-bound Jolt class, as `wrapPointer`/`castObject` want it.
+ *
+ * embind: the `any[]` is load bearing. A constructor type has to accept *any* argument list to
+ * match every bound class (`Vec3(x, y, z)`, `BodyID(handle)`, `SubShapeID()`, ...); `unknown[]`
+ * would only match constructors whose parameters are themselves `unknown`.
+ */
 export type JoltClass<T> = new (...args: any[]) => T;
 
 /**
