@@ -18,10 +18,10 @@
         "test": "yarn workspaces foreach -A -t run test",
         "build": "yarn workspaces foreach -A -t run build",
         "change": "yarn changeset",
-        "publish": "yarn build && yarn test && changeset publish",
-        "version": "yarn changeset version && yarn install --mode update-lockfile",
         "lint": "biome check .",
-        "format": "biome format --write ."
+        "format": "biome format --write .",
+        "changeset:version": "yarn changeset version && yarn install --mode update-lockfile",
+        "changeset:publish": "yarn build && yarn test && changeset publish"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.14",
