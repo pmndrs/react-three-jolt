@@ -10,6 +10,7 @@
 // the old code's fresh `Vec3`/`Float3`/`IndexedTriangle` per element leaked one WASM object per
 // vertex and per triangle (3078 live objects for the 1984-triangle sphere below).
 
+import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { afterEach, assert, beforeAll, describe, expect, test } from 'vitest';
 import { initJolt, Raw } from '../src/raw';
@@ -18,14 +19,21 @@ import {
     createMeshForShape,
     createMeshFromShape,
     createShapeFromSettings,
+    describeShape,
+    describeShapeFromOptions,
+    descriptorKey,
     generateCompoundShapeSettings,
     generateHeightfieldShapeFromThree,
+    generateShape,
     generateShapeSettings,
     getShapeSettingsFromGeometry,
     getShapeSettingsFromObject,
-    releaseShape
+    releaseShape,
+    type ShapeDescriptor,
+    scaleShape
 } from '../src/systems/shape-system';
 import { createMeshFloor } from '../src/utils/meshTools';
+import { installAllocTracker } from './jolt-alloc';
 
 //* Allocation tracking =====================================
 // Wraps every binder class on the module (they are the ones with a `__destroy__` on their
@@ -405,5 +413,521 @@ describe('shape to three mesh', () => {
 
         Raw.module.destroy(bodySettings);
         assert.equal(allocations.total(), 0);
+    });
+});
+
+//* The descriptor pipeline (issue #107) ====================
+// `GetLocalBounds()` hands back a static AABox temporary: read it, never destroy it.
+const localBounds = (shape: Jolt.Shape) => {
+    const box = shape.GetLocalBounds();
+    return {
+        min: [box.mMin.GetX(), box.mMin.GetY(), box.mMin.GetZ()],
+        max: [box.mMax.GetX(), box.mMax.GetY(), box.mMax.GetZ()]
+    };
+};
+
+const expectBounds = (
+    shape: Jolt.Shape,
+    expected: { min: number[]; max: number[] },
+    tolerance = 1e-3
+) => {
+    const bounds = localBounds(shape);
+    for (let i = 0; i < 3; i++) {
+        assert.closeTo(bounds.min[i], expected.min[i], tolerance, `min[${i}] of ${bounds.min}`);
+        assert.closeTo(bounds.max[i], expected.max[i], tolerance, `max[${i}] of ${bounds.max}`);
+    }
+};
+
+describe('describeShape round trips', () => {
+    // [name, three source, forced type, expected subtype, expected local bounds]
+    const cases: [
+        string,
+        () => THREE.Object3D | THREE.BufferGeometry,
+        AutoShape | undefined,
+        string,
+        { min: number[]; max: number[] }
+    ][] = [
+        [
+            'a box mesh',
+            () => new THREE.Mesh(new THREE.BoxGeometry(1, 2, 3)),
+            undefined,
+            'Box',
+            { min: [-0.5, -1, -1.5], max: [0.5, 1, 1.5] }
+        ],
+        [
+            'a sphere mesh',
+            () => new THREE.Mesh(new THREE.SphereGeometry(2, 32, 32)),
+            undefined,
+            'Sphere',
+            { min: [-2, -2, -2], max: [2, 2, 2] }
+        ],
+        [
+            'a capsule mesh',
+            () => new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 1)),
+            undefined,
+            'Capsule',
+            // jolt's half height excludes the caps: 1/2 + 0.5
+            { min: [-0.5, -1, -0.5], max: [0.5, 1, 0.5] }
+        ],
+        [
+            'a cylinder mesh',
+            () => new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 2)),
+            undefined,
+            'Cylinder',
+            { min: [-0.5, -1, -0.5], max: [0.5, 1, 0.5] }
+        ],
+        [
+            // a cone is a truncated cylinder: it used to become a radius-0 Cylinder (no shape)
+            'a cone mesh',
+            () => new THREE.Mesh(new THREE.ConeGeometry(1, 2)),
+            undefined,
+            'TaperedCylinder',
+            // a tapered shape's local space is centred on its centre of mass, which for a cone
+            // sits a quarter of the way up: the size is still 2 x 2 x 2
+            { min: [-1, -0.5, -1], max: [1, 1.5, 1] }
+        ],
+        [
+            'a bare geometry',
+            () => new THREE.BoxGeometry(2, 2, 2),
+            undefined,
+            'Box',
+            { min: [-1, -1, -1], max: [1, 1, 1] }
+        ],
+        [
+            'a forced convex hull',
+            () => new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2)),
+            'convex',
+            'ConvexHull',
+            { min: [-1, -1, -1], max: [1, 1, 1] }
+        ],
+        [
+            'a forced trimesh',
+            () => new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2)),
+            'trimesh',
+            'Mesh',
+            { min: [-1, -1, -1], max: [1, 1, 1] }
+        ]
+    ];
+
+    for (const [name, makeSource, type, subType, bounds] of cases) {
+        test(`${name} describes, generates a ${subType} and leaks nothing`, () => {
+            const source = makeSource();
+            const allocations = startSpy();
+
+            const descriptor = describeShape(source, { type });
+            // the descriptor is plain data: nothing has been allocated yet
+            assert.equal(allocations.total(), 0, 'describeShape allocated on the wasm heap');
+
+            const shape = generateShape(descriptor);
+            assert.equal(
+                shape.GetSubType(),
+                (Raw.module as any)[`EShapeSubType_${subType}`],
+                `expected a ${subType} shape`
+            );
+            assert.equal(shape.GetRefCount(), 1, 'generateShape must hand back one reference');
+            expectBounds(shape, bounds, 0.02);
+            expect(allocations.counts()).toEqual({});
+
+            releaseShape(shape);
+            assert.equal(allocations.total(), 0);
+        });
+    }
+
+    test('a descriptor survives JSON and still builds the same shape', () => {
+        const descriptor = describeShape(new THREE.Mesh(new THREE.BoxGeometry(1, 2, 3)));
+        const revived: ShapeDescriptor = JSON.parse(JSON.stringify(descriptor));
+        assert.equal(descriptorKey(revived), descriptorKey(descriptor));
+
+        const shape = generateShape(revived);
+        expectBounds(shape, { min: [-0.5, -1, -1.5], max: [0.5, 1, 1.5] }, 0.02);
+        releaseShape(shape);
+    });
+
+    test('an object with several meshes describes a static compound', () => {
+        const group = new THREE.Group();
+        for (let i = 0; i < 3; i++) {
+            const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+            mesh.position.set(i, 0, 0);
+            group.add(mesh);
+        }
+        const descriptor = describeShape(group);
+        assert.equal(descriptor.type, 'staticCompound');
+        assert.equal((descriptor as any).children.length, 3);
+        assert.deepEqual((descriptor as any).children[2].position, [2, 0, 0]);
+
+        const shape = generateShape(descriptor);
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_StaticCompound);
+        releaseShape(shape);
+    });
+});
+
+// A tapered shape's local space is centred on its centre of mass, not on the middle of its
+// height, so the bounds are shifted along y - the *size* is what the descriptor controls.
+const boundsSize = (shape: Jolt.Shape) => {
+    const { min, max } = localBounds(shape);
+    return [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+};
+
+describe('tapered shapes', () => {
+    test('a tapered cylinder descriptor generates a TaperedCylinder', () => {
+        const allocations = startSpy();
+        const shape = generateShape({
+            type: 'taperedCylinder',
+            height: 2,
+            topRadius: 0.25,
+            bottomRadius: 1
+        });
+
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_TaperedCylinder);
+        // 2 * the widest radius across x/z, the full height along y
+        const size = boundsSize(shape);
+        assert.closeTo(size[0], 2, 0.02);
+        assert.closeTo(size[1], 2, 0.02);
+        assert.closeTo(size[2], 2, 0.02);
+        expect(allocations.counts()).toEqual({});
+
+        releaseShape(shape);
+        assert.equal(allocations.total(), 0);
+    });
+
+    test('a zero top radius (a cone) clamps the convex radius instead of failing', () => {
+        const shape = generateShape({
+            type: 'taperedCylinder',
+            height: 1,
+            topRadius: 0,
+            bottomRadius: 0.5
+        });
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_TaperedCylinder);
+        releaseShape(shape);
+    });
+
+    test('a tapered capsule descriptor generates a TaperedCapsule', () => {
+        const shape = generateShape({
+            type: 'taperedCapsule',
+            height: 2,
+            topRadius: 0.25,
+            bottomRadius: 1
+        });
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_TaperedCapsule);
+        // the cylindrical section plus both caps: 1 + 2 + 0.25
+        const size = boundsSize(shape);
+        assert.closeTo(size[0], 2, 0.02);
+        assert.closeTo(size[1], 3.25, 0.02);
+        releaseShape(shape);
+    });
+
+    test('a thin cylinder no longer trips over the default convex radius', () => {
+        // the old code always passed a 0.5 convex radius, which jolt rejects on a 0.1 radius
+        const shape = generateShape({ type: 'cylinder', radius: 0.1, height: 0.2 });
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_Cylinder);
+        releaseShape(shape);
+    });
+});
+
+describe('compound descriptors', () => {
+    test('a compound with rotated children places them correctly and leaks nothing', () => {
+        // a 2 x 0.5 x 0.5 bar turned a quarter turn around z, lifted by 1, and a sphere below it
+        const quarterTurn = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
+        const descriptor: ShapeDescriptor = {
+            type: 'staticCompound',
+            children: [
+                {
+                    type: 'box',
+                    size: [2, 0.5, 0.5],
+                    position: [0, 1, 0],
+                    rotation: [quarterTurn.x, quarterTurn.y, quarterTurn.z, quarterTurn.w]
+                },
+                { type: 'sphere', radius: 0.5, position: [0, -1, 0] }
+            ]
+        };
+
+        const allocations = startSpy();
+        const shape = generateShape(descriptor);
+
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_StaticCompound);
+        // the rotated bar is 0.5 wide and 2 tall now, so it reaches y = 2, and the sphere
+        // reaches y = -1.5 and x/z = +-0.5
+        expectBounds(shape, { min: [-0.5, -1.5, -0.5], max: [0.5, 2, 0.5] }, 0.05);
+        // The sub settings are owned by the compound: AddShape takes a reference and the
+        // compound's C++ destructor releases (and frees) them, inside wasm rather than through
+        // Module.destroy, so the spy cannot see that free. What it can see is that the scratch
+        // Vec3/Quat used for the children's transforms are not left behind.
+        expect(allocations.counts()).toEqual({ BoxShapeSettings: 1, SphereShapeSettings: 1 });
+
+        releaseShape(shape);
+    });
+
+    test('nested compounds work', () => {
+        const shape = generateShape({
+            type: 'staticCompound',
+            children: [
+                {
+                    type: 'staticCompound',
+                    position: [0, 2, 0],
+                    children: [
+                        { type: 'box', size: [1, 1, 1] },
+                        { type: 'sphere', radius: 0.5, position: [1, 0, 0] }
+                    ]
+                },
+                { type: 'box', size: [1, 1, 1] }
+            ]
+        });
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_StaticCompound);
+        // a compound's local space is centred on its centre of mass (so are its children's),
+        // which makes absolute bounds a poor assertion: check the tree instead, plus the size
+        const compound = Raw.module.castObject(shape, Raw.module.StaticCompoundShape);
+        assert.equal(compound.GetNumSubShapes(), 2);
+        const subTypes = [0, 1].map((i) => compound.GetSubShape(i).mShape.GetSubType());
+        assert.include(subTypes, Raw.module.EShapeSubType_StaticCompound, 'the nested compound');
+        assert.include(subTypes, Raw.module.EShapeSubType_Box);
+        // the inner compound sits 2 above the outer box, so the whole thing is ~3 tall
+        assert.closeTo(boundsSize(shape)[1], 3, 0.1);
+        releaseShape(shape);
+    });
+});
+
+describe('scaled shapes', () => {
+    test('scaleShape wraps a shape, takes a reference on it, and scales its bounds', () => {
+        const base = generateShape({ type: 'box', size: [1, 1, 1] });
+        assert.equal(base.GetRefCount(), 1);
+
+        const allocations = startSpy();
+        const scaled = scaleShape(base, [2, 3, 4]);
+
+        assert.equal(scaled.GetSubType(), Raw.module.EShapeSubType_Scaled);
+        // ScaledShape holds a RefConst on the inner shape
+        assert.equal(base.GetRefCount(), 2, 'the scaled shape did not AddRef the inner shape');
+        assert.equal(scaled.GetRefCount(), 1, 'the caller must own exactly one reference');
+        expectBounds(scaled, { min: [-1, -1.5, -2], max: [1, 1.5, 2] }, 0.02);
+        // the scale Vec3 is destroyed again; the ScaledShape itself is reference counted and
+        // deletes itself inside wasm on the last Release, which Module.destroy never sees
+        expect(allocations.counts()).toEqual({ ScaledShape: 1 });
+
+        // dropping our reference on the wrapper gives the inner shape's reference back
+        releaseShape(scaled);
+        assert.equal(base.GetRefCount(), 1, 'the wrapper did not release the inner shape');
+        releaseShape(base);
+    });
+
+    test('a scaled descriptor builds a ScaledShape in one go', () => {
+        const allocations = startSpy();
+        const shape = generateShape({
+            type: 'scaled',
+            scale: [2, 2, 2],
+            child: { type: 'sphere', radius: 0.5 }
+        });
+
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_Scaled);
+        assert.equal(shape.GetRefCount(), 1);
+        expectBounds(shape, { min: [-1, -1, -1], max: [1, 1, 1] }, 0.02);
+        // the inner settings are owned (and freed inside wasm) by the scaled settings, which
+        // createShapeFromSettings destroyed - the spy only sees the destroy it did not get
+        expect(allocations.counts()).toEqual({ SphereShapeSettings: 1 });
+
+        releaseShape(shape);
+    });
+});
+
+describe('reserved descriptor types', () => {
+    test('mutableCompound explains itself and points at #108', () => {
+        const allocations = startSpy();
+        expect(() => generateShape({ type: 'mutableCompound', children: [] })).toThrow(
+            /not implemented yet.*#108/
+        );
+        assert.equal(allocations.total(), 0);
+    });
+
+    test('offsetCenterOfMass explains itself and points at #40', () => {
+        const allocations = startSpy();
+        expect(() =>
+            generateShape({
+                type: 'offsetCenterOfMass',
+                centerOfMass: [0, 1, 0],
+                child: { type: 'box', size: [1, 1, 1] }
+            })
+        ).toThrow(/not implemented yet.*#40/);
+        assert.equal(allocations.total(), 0);
+    });
+
+    test('a reserved child inside a compound frees the half built compound', () => {
+        const allocations = startSpy();
+        expect(() =>
+            generateShape({
+                type: 'staticCompound',
+                children: [
+                    { type: 'box', size: [1, 1, 1] },
+                    { type: 'mutableCompound', children: [] }
+                ]
+            })
+        ).toThrow(/not implemented yet/);
+        // the compound is destroyed on the error path, which releases (and frees, inside wasm)
+        // the box settings it had already taken a reference on - the scratch Vec3/Quat are gone
+        expect(allocations.counts()).toEqual({ BoxShapeSettings: 1 });
+    });
+});
+
+describe('descriptor keys', () => {
+    test('the key ignores key order and tracks values', () => {
+        const a: any = { type: 'box', size: [1, 2, 3], position: [0, 1, 0] };
+        const b: any = { position: [0, 1, 0], size: [1, 2, 3], type: 'box' };
+        assert.equal(descriptorKey(a), descriptorKey(b));
+        assert.notEqual(descriptorKey(a), descriptorKey({ ...a, size: [1, 2, 4] }));
+    });
+
+    test('a mesh key stays small and still changes with the mesh', () => {
+        const sphere = describeShape(new THREE.SphereGeometry(1, 32, 32), { type: 'trimesh' });
+        const key = descriptorKey(sphere);
+        assert.isBelow(key.length, 200, 'long vertex arrays must be hashed, not serialised');
+
+        const moved = describeShape(new THREE.SphereGeometry(1, 32, 32).translate(0, 0.01, 0), {
+            type: 'trimesh'
+        });
+        assert.notEqual(descriptorKey(moved), key);
+    });
+
+    test('the same geometry always produces the same key', () => {
+        const first = describeShape(new THREE.IcosahedronGeometry(1, 2));
+        const second = describeShape(new THREE.IcosahedronGeometry(1, 2));
+        assert.equal(descriptorKey(first), descriptorKey(second));
+    });
+});
+
+describe('every descriptor type is allocation neutral', () => {
+    const descriptors: [string, ShapeDescriptor][] = [
+        ['box', { type: 'box', size: [1, 2, 3] }],
+        ['sphere', { type: 'sphere', radius: 2 }],
+        ['capsule', { type: 'capsule', radius: 0.5, height: 2 }],
+        ['taperedCapsule', { type: 'taperedCapsule', height: 2, topRadius: 0.5, bottomRadius: 1 }],
+        ['cylinder', { type: 'cylinder', radius: 0.5, height: 2 }],
+        [
+            'taperedCylinder',
+            { type: 'taperedCylinder', height: 2, topRadius: 0.5, bottomRadius: 1 }
+        ],
+        [
+            'convex',
+            describeShapeFromOptions('convex', { geometry: new THREE.BoxGeometry(1, 1, 1) })
+        ],
+        [
+            'trimesh',
+            describeShapeFromOptions('trimesh', { geometry: new THREE.SphereGeometry(1, 8, 8) })
+        ],
+        [
+            'heightfield',
+            describeShape(new THREE.Mesh(new THREE.PlaneGeometry(16, 16, 15, 15)), {
+                type: 'heightfield'
+            })
+        ],
+        [
+            'staticCompound',
+            {
+                type: 'staticCompound',
+                children: [
+                    { type: 'box', size: [1, 1, 1], position: [0, 1, 0] },
+                    { type: 'sphere', radius: 0.5 }
+                ]
+            }
+        ],
+        ['scaled', { type: 'scaled', scale: [2, 2, 2], child: { type: 'box', size: [1, 1, 1] } }]
+    ];
+
+    for (const [name, descriptor] of descriptors) {
+        test(`${name}: generate + release is net zero`, () => {
+            // installAllocTracker tracks the value types (Vec3/RVec3/Quat/Mat44/RMat44) the
+            // shape paths use as scratch - the ones a per vertex/per child leak shows up in.
+            const tracker = installAllocTracker(Raw);
+            try {
+                const before = tracker.live();
+                const shape = generateShape(descriptor);
+                releaseShape(shape);
+                assert.equal(
+                    tracker.live(),
+                    before,
+                    `${name} left ${JSON.stringify(tracker.liveByType())} behind`
+                );
+            } finally {
+                tracker.uninstall();
+            }
+        });
+    }
+});
+
+describe('BodyState.scale goes through the pipeline', () => {
+    test('scaling a body wraps its shape once and re-wraps the inner shape after that', async () => {
+        const { PhysicsSystem } = await import('../src/systems/physics-system');
+        const system = new PhysicsSystem('scale-test');
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+        const body = system.bodySystem.getBody(system.bodySystem.addBody(mesh))!;
+
+        const allocations = startSpy();
+        body.scale = [2, 2, 2];
+        const scaled = body.body.GetShape();
+        assert.equal(scaled.GetSubType(), Raw.module.EShapeSubType_Scaled);
+        // only the body holds it: `set scale` released the reference it created
+        assert.equal(scaled.GetRefCount(), 1, 'the body is not the only owner of the new shape');
+        // the scale Vec3 is gone again; the ScaledShape is reference counted, not destroy()ed
+        expect(allocations.counts()).toEqual({ ScaledShape: 1 });
+
+        // scaling again wraps the *inner* shape rather than stacking wrappers
+        body.scale = [3, 3, 3];
+        const rescaled = Raw.module.castObject(body.body.GetShape(), Raw.module.ScaledShape);
+        assert.equal(rescaled.GetSubType(), Raw.module.EShapeSubType_Scaled);
+        assert.equal(rescaled.GetInnerShape().GetSubType(), Raw.module.EShapeSubType_Box);
+        assert.closeTo(rescaled.GetScale().GetX(), 3, 1e-5);
+        assert.equal(rescaled.GetRefCount(), 1);
+
+        body.destroy(true);
+    });
+});
+
+describe('the compatibility wrappers still behave', () => {
+    test('getShapeSettingsFromGeometry still returns settings and a three offset', () => {
+        const geometry = new THREE.BoxGeometry(1, 2, 3).translate(0, 5, 0);
+        const result = getShapeSettingsFromGeometry(geometry)!;
+        assert.instanceOf(result.offset, THREE.Vector3);
+        assert.closeTo(result.offset!.y, 5, 1e-5);
+
+        const shape = createShapeFromSettings(result.shapeSettings!);
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_Box);
+        releaseShape(shape);
+    });
+
+    test('generateShapeSettings without options no longer throws', () => {
+        const shape = createShapeFromSettings(generateShapeSettings('box'));
+        expectBounds(shape, { min: [-0.5, -0.5, -0.5], max: [0.5, 0.5, 0.5] }, 0.02);
+        releaseShape(shape);
+    });
+
+    test('generateShapeSettings accepts a numeric size', () => {
+        const shape = createShapeFromSettings(generateShapeSettings('box', { size: 2 }));
+        expectBounds(shape, { min: [-1, -1, -1], max: [1, 1, 1] }, 0.02);
+        releaseShape(shape);
+    });
+
+    test('the `compound` alias means a static compound', () => {
+        const descriptor = describeShapeFromOptions('compound', {
+            // jolt collapses a one child compound into that child, so use two
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                { type: 'sphere', radius: 0.5, position: [0, 2, 0] }
+            ]
+        });
+        assert.equal(descriptor.type, 'staticCompound');
+        const shape = generateShape(descriptor);
+        assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_StaticCompound);
+        releaseShape(shape);
+    });
+
+    test('generateHeightfieldShapeFromThree matches the descriptor path', () => {
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(32, 32, 31, 31));
+        plane.rotation.x = -Math.PI / 2;
+
+        const legacy = createShapeFromSettings(generateHeightfieldShapeFromThree(plane));
+        const viaDescriptor = generateShape(describeShape(plane, { type: 'heightfield' }));
+
+        assert.equal(legacy.GetSubType(), viaDescriptor.GetSubType());
+        assert.deepEqual(localBounds(legacy), localBounds(viaDescriptor));
+
+        releaseShape(legacy);
+        releaseShape(viaDescriptor);
     });
 });

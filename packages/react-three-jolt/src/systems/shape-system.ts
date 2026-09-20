@@ -18,7 +18,7 @@ import {
 } from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { Raw } from '../raw';
-import { type anyVec3, quat, vec3 } from '../utils';
+import { type anyVec3, devWarn, vec3 } from '../utils';
 
 export class ShapeSystem {
     private physicsSystem: Jolt.PhysicsSystem;
@@ -33,16 +33,202 @@ export class ShapeSystem {
     //getShapeSettingsFromGeometry = (geometry: BufferGeometry, shapeType?: AutoShape) => getShapeSettingsFromGeometry(geometry, shapeType);
 }
 
+/* ============================================================================
+ * The shape pipeline (issue #107)
+ *
+ *   three.js object/geometry --describeShape()--> ShapeDescriptor --generateShape()--> Jolt.Shape
+ *                                  (plain data)                       (owned, refcount 1)
+ *
+ * `ShapeDescriptor` is a plain, serialisable description of a shape: a type tag, its size
+ * parameters, an optional local position/rotation (used when it is a child of a compound) and,
+ * for compounds/decorators, its children. Nothing in it is a WASM object, so it can be compared,
+ * hashed (`descriptorKey`), kept in React state, sent over the wire or written to disk.
+ *
+ * Everything that used to build shapes by hand - `getShapeSettingsFromGeometry`,
+ * `getShapeSettingsFromObject` and `generateShapeSettings` - is now a thin wrapper over
+ * `describeShape` + `createShapeSettings`, so there is exactly one place that knows how a
+ * three.js geometry maps onto a Jolt shape and exactly one place that allocates.
+ * ========================================================================== */
+
+/**
+ * Shape types that can be inferred from (or forced onto) a three.js geometry.
+ * `compound` is accepted as an alias of `staticCompound` for backwards compatibility.
+ */
 export type AutoShape =
     | 'box'
     | 'sphere'
     | 'capsule'
     | 'taperedCapsule'
     | 'cylinder'
+    | 'taperedCylinder'
     | 'convex'
     | 'trimesh'
     | 'compound'
     | 'heightfield';
+
+/** Every descriptor tag the pipeline understands (implemented or reserved). */
+export type ShapeType =
+    | 'box'
+    | 'sphere'
+    | 'capsule'
+    | 'taperedCapsule'
+    | 'cylinder'
+    | 'taperedCylinder'
+    | 'convex'
+    | 'trimesh'
+    | 'heightfield'
+    | 'staticCompound'
+    | 'mutableCompound'
+    | 'scaled'
+    | 'offsetCenterOfMass';
+
+export type Vec3Tuple = [number, number, number];
+/** Quaternion as `[x, y, z, w]` - the order three.js and Jolt both use. */
+export type QuatTuple = [number, number, number, number];
+/** Vertex/index payloads accept typed arrays; `describeShape` always emits plain arrays. */
+export type NumberArray = number[] | ArrayLike<number>;
+
+export interface ShapeDescriptorBase {
+    /**
+     * Local translation of this shape inside its parent compound. Ignored on a root descriptor:
+     * a root shape is positioned by the body, not by the shape (wrapping a root shape in a
+     * `RotatedTranslatedShape` would move its centre of mass, so that stays opt in).
+     */
+    position?: Vec3Tuple;
+    /** Local rotation inside the parent compound, `[x, y, z, w]`. See `position`. */
+    rotation?: QuatTuple;
+    /**
+     * Where the source geometry's centre sits relative to its origin (bounding box/sphere centre
+     * for the box/sphere paths, half the height for capsules/cylinders). Informational: it is
+     * what `getShapeSettingsFromGeometry().offset` has always returned and it is **not** applied
+     * to the generated shape.
+     */
+    offset?: Vec3Tuple;
+    /** User data stored on the sub shape when this descriptor is added to a compound. */
+    userData?: number;
+}
+
+export interface BoxShapeDescriptor extends ShapeDescriptorBase {
+    type: 'box';
+    /** Full extents (three.js `BoxGeometry` semantics); halved for Jolt. */
+    size: Vec3Tuple;
+    convexRadius?: number;
+}
+export interface SphereShapeDescriptor extends ShapeDescriptorBase {
+    type: 'sphere';
+    radius: number;
+}
+export interface CapsuleShapeDescriptor extends ShapeDescriptorBase {
+    type: 'capsule';
+    radius: number;
+    /** Height of the cylindrical section, excluding the caps (three.js semantics). */
+    height: number;
+}
+export interface TaperedCapsuleShapeDescriptor extends ShapeDescriptorBase {
+    type: 'taperedCapsule';
+    /** Height of the cylindrical section, excluding the caps. */
+    height: number;
+    topRadius: number;
+    bottomRadius: number;
+}
+export interface CylinderShapeDescriptor extends ShapeDescriptorBase {
+    type: 'cylinder';
+    radius: number;
+    /** Full height. */
+    height: number;
+    convexRadius?: number;
+}
+export interface TaperedCylinderShapeDescriptor extends ShapeDescriptorBase {
+    type: 'taperedCylinder';
+    /** Full height. */
+    height: number;
+    topRadius: number;
+    bottomRadius: number;
+    convexRadius?: number;
+}
+export interface ConvexShapeDescriptor extends ShapeDescriptorBase {
+    type: 'convex';
+    /** Flat `[x, y, z, x, y, z, ...]` hull points. */
+    points: NumberArray;
+    /** `mMaxConvexRadius`; Jolt's own default is used when omitted. */
+    convexRadius?: number;
+}
+export interface TrimeshShapeDescriptor extends ShapeDescriptorBase {
+    type: 'trimesh';
+    /** Flat `[x, y, z, ...]` vertices. */
+    vertices: NumberArray;
+    /** Flat triangle indices, three per triangle. */
+    indices: NumberArray;
+}
+export interface HeightfieldShapeDescriptor extends ShapeDescriptorBase {
+    type: 'heightfield';
+    /** `sampleCount * sampleCount` height samples, row major. */
+    heights: NumberArray;
+    sampleCount: number;
+    /** Distance between samples on x/z (and the height multiplier on y). */
+    scale: Vec3Tuple;
+    blockSize?: number;
+}
+export interface StaticCompoundShapeDescriptor extends ShapeDescriptorBase {
+    type: 'staticCompound';
+    children: ShapeDescriptor[];
+}
+/** Reserved for issue #108 (`MutableCompoundShape`). `generateShape` throws for now. */
+export interface MutableCompoundShapeDescriptor extends ShapeDescriptorBase {
+    type: 'mutableCompound';
+    children: ShapeDescriptor[];
+}
+export interface ScaledShapeDescriptor extends ShapeDescriptorBase {
+    type: 'scaled';
+    child: ShapeDescriptor;
+    scale: Vec3Tuple;
+}
+/** Reserved for issue #40 (centre of mass control). `generateShape` throws for now. */
+export interface OffsetCenterOfMassShapeDescriptor extends ShapeDescriptorBase {
+    type: 'offsetCenterOfMass';
+    child: ShapeDescriptor;
+    centerOfMass: Vec3Tuple;
+}
+
+export type ShapeDescriptor =
+    | BoxShapeDescriptor
+    | SphereShapeDescriptor
+    | CapsuleShapeDescriptor
+    | TaperedCapsuleShapeDescriptor
+    | CylinderShapeDescriptor
+    | TaperedCylinderShapeDescriptor
+    | ConvexShapeDescriptor
+    | TrimeshShapeDescriptor
+    | HeightfieldShapeDescriptor
+    | StaticCompoundShapeDescriptor
+    | MutableCompoundShapeDescriptor
+    | ScaledShapeDescriptor
+    | OffsetCenterOfMassShapeDescriptor;
+
+/**
+ * Loose, three.js flavoured options - what `<Shape>`'s props and the old `generateShapeSettings`
+ * accept. `describeShapeFromOptions` normalises them into a `ShapeDescriptor`.
+ */
+export type ShapeOptions = {
+    size?: anyVec3 | number;
+    radius?: number;
+    height?: number;
+    topRadius?: number;
+    bottomRadius?: number;
+    convexRadius?: number;
+    /** convex hull points / trimesh vertices, as three vectors, tuples or a flat array */
+    points?: (THREE.Vector3 | Vec3Tuple)[] | NumberArray;
+    vertices?: (THREE.Vector3 | Vec3Tuple)[] | NumberArray;
+    verts?: (THREE.Vector3 | Vec3Tuple)[] | NumberArray;
+    /** trimesh indices, either flat or one array per triangle */
+    indices?: number[][] | NumberArray;
+    indexes?: number[][] | NumberArray;
+    geometry?: BufferGeometry;
+    object?: Object3D;
+    mesh?: THREE.Mesh;
+    blockSize?: number;
+    children?: ShapeDescriptor[];
+};
 
 /* ============================================================================
  * Memory notes (jolt-physics 1.1.0 / emscripten WebIDL binder)
@@ -63,9 +249,12 @@ export type AutoShape =
  * - Statics returned by value (`Vec3::sZero()`, `Quat::sIdentity()`, `AABox::sBiggest()`,
  *   `Shape::GetCenterOfMass()`, ...) are the same kind of static temporary: they are not
  *   allocations and must not be destroyed.
- * - Sub-settings added to a compound (`CompoundShapeSettings::AddShape`) are ref-counted by
- *   the compound. Destroying the compound settings frees them, so callers must not destroy
- *   sub-settings themselves.
+ * - Sub-settings added to a compound (`CompoundShapeSettings::AddShape`) or wrapped by a
+ *   decorator (`ScaledShapeSettings`) are ref-counted by the parent. Destroying the parent
+ *   settings frees them, so callers must not destroy sub-settings themselves.
+ * - Shapes are `RefTarget`s, not `destroy()` targets: `new Raw.module.ScaledShape(...)` starts at
+ *   zero references and deletes itself when the last reference goes away. Everything here hands
+ *   back shapes with exactly one reference, released with `releaseShape`.
  * ========================================================================== */
 
 /**
@@ -111,63 +300,10 @@ export const releaseShape = (shape?: Jolt.Shape | null) => {
     if (shape) shape.Release();
 };
 
-export const getShapeSettingsFromObject = (
-    object: Object3D,
-    // why do I need this here?
-    shapeType?: AutoShape
-) => {
-    const jolt = Raw.module;
-    // TODO: Add types here
-    const shapes: any = [];
+/* ============================================================================
+ * Describing: three.js -> ShapeDescriptor
+ * ========================================================================== */
 
-    object.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-            // adding ignore to meshes skips the shape generator
-            if (child.geometry) {
-                // TODO: Until we understand the offsets we are going to get both here
-                const shapeSettingsAndOffset = getShapeSettingsFromGeometry(
-                    child.geometry,
-                    shapeType
-                );
-
-                if (shapeSettingsAndOffset) {
-                    // the three vectors are kept as-is; the jolt Vec3/Quat are only created
-                    // once, below, because AddShape copies them anyway.
-                    const shape = {
-                        shapeSettings: shapeSettingsAndOffset.shapeSettings,
-                        offset: shapeSettingsAndOffset.offset,
-                        position: child.position,
-                        quaternion: child.quaternion
-                    };
-
-                    shapes.push(shape);
-                }
-            }
-        }
-    });
-
-    // BAIL IF EMPTY
-    // if (shapes.length === 0) return undefined;
-    //console.log('shapes', shapes);
-    // if theres only one, return it
-    if (shapes.length === 1) return shapes[0].shapeSettings;
-    const compoundShapeSettings = new jolt.StaticCompoundShapeSettings();
-
-    // one scratch position/rotation for the whole loop: AddShape copies both
-    const position = new jolt.Vec3(0, 0, 0);
-    const quaternion = new jolt.Quat(0, 0, 0, 1);
-    // Note: offset also available
-    for (const { shapeSettings, position: inPosition, quaternion: inQuaternion } of shapes) {
-        position.Set(inPosition.x, inPosition.y, inPosition.z);
-        quaternion.Set(inQuaternion.x, inQuaternion.y, inQuaternion.z, inQuaternion.w);
-        // the compound takes a reference on the sub-settings; destroying the compound frees them
-        compoundShapeSettings.AddShape(position, quaternion, shapeSettings, 0);
-    }
-    jolt.destroy(position);
-    jolt.destroy(quaternion);
-
-    return compoundShapeSettings;
-};
 // TODO: move this type later
 type PossibleGeometry =
     | BufferGeometry
@@ -175,8 +311,36 @@ type PossibleGeometry =
     | SphereGeometry
     | CapsuleGeometry
     | CylinderGeometry;
+
+export type DescribeShapeOptions = {
+    /** force a shape type instead of inferring one from the geometry */
+    type?: AutoShape | ShapeType;
+    /** convex radius for the box/cylinder paths (clamped to what Jolt accepts) */
+    convexRadius?: number;
+    /** heightfield block size */
+    blockSize?: number;
+};
+
+/** `compound` is the historical name for a static compound. */
+const normaliseShapeType = (type?: AutoShape | ShapeType): ShapeType | undefined => {
+    if (!type) return undefined;
+    return (type === 'compound' ? 'staticCompound' : type) as ShapeType;
+};
+
+/**
+ * three's `ConeGeometry` extends `CylinderGeometry` but keeps its own `{ radius, height }`
+ * parameters (it calls `super(0, radius, ...)`), so reading `radiusTop`/`radiusBottom` blindly
+ * gives `undefined` - and a NaN sized shape.
+ */
+const cylinderParameters = (geometry: CylinderGeometry) => {
+    const parameters = geometry.parameters as CylinderGeometry['parameters'] & { radius?: number };
+    const radiusTop = parameters.radiusTop ?? (parameters.radius !== undefined ? 0 : 1);
+    const radiusBottom = parameters.radiusBottom ?? parameters.radius ?? 1;
+    return { radiusTop, radiusBottom, height: parameters.height ?? 1 };
+};
+
 // check the instanceOf value against known three geometries
-const getShapeTypeFromGeometry = (geometry: PossibleGeometry): AutoShape => {
+const getShapeTypeFromGeometry = (geometry: PossibleGeometry): ShapeType => {
     //hack the switch statement to check the instanceOf value
     switch (true) {
         case geometry instanceof BoxGeometry:
@@ -185,16 +349,393 @@ const getShapeTypeFromGeometry = (geometry: PossibleGeometry): AutoShape => {
             return 'sphere';
         case geometry instanceof CapsuleGeometry:
             return 'capsule';
-        case geometry instanceof CylinderGeometry:
-            return 'cylinder';
+        case geometry instanceof CylinderGeometry: {
+            // a ConeGeometry (or any truncated cone) is a TaperedCylinder in Jolt; CylinderShape
+            // only has one radius, which used to silently turn cones into cylinders.
+            const { radiusTop, radiusBottom } = cylinderParameters(geometry as CylinderGeometry);
+            return radiusTop === radiusBottom ? 'cylinder' : 'taperedCylinder';
+        }
         // if unknown do a convex hull
         case geometry instanceof BufferGeometry:
             return 'convex';
         default:
-            // bail out with sphere
+            // bail out with a hull
             return 'convex';
     }
 };
+
+const toTuple = (vector: THREE.Vector3): Vec3Tuple => [vector.x, vector.y, vector.z];
+
+/** Flatten hull/mesh points given as three vectors, tuples or an already flat array. */
+const flattenPoints = (points: (THREE.Vector3 | Vec3Tuple)[] | NumberArray): number[] => {
+    if (!points || points.length === 0) return [];
+    const first = (points as unknown[])[0];
+    if (typeof first === 'number') return Array.from(points as ArrayLike<number>);
+    const flat: number[] = [];
+    for (const point of points as (THREE.Vector3 | Vec3Tuple)[]) {
+        if (Array.isArray(point)) flat.push(point[0], point[1], point[2]);
+        else flat.push(point.x, point.y, point.z);
+    }
+    return flat;
+};
+
+/** Flatten triangle indices given per triangle (`[[0,1,2], ...]`) or already flat. */
+const flattenIndices = (indices: number[][] | NumberArray): number[] => {
+    if (!indices || indices.length === 0) return [];
+    const first = (indices as unknown[])[0];
+    if (typeof first === 'number') return Array.from(indices as ArrayLike<number>);
+    const flat: number[] = [];
+    for (const triangle of indices as number[][]) flat.push(triangle[0], triangle[1], triangle[2]);
+    return flat;
+};
+
+const describeTrimeshGeometry = (geometry: PossibleGeometry): TrimeshShapeDescriptor => {
+    const positions = geometry.getAttribute('position');
+    const vertices: number[] = new Array(positions.count * 3);
+    for (let i = 0; i < positions.count; i++) {
+        vertices[i * 3] = positions.getX(i);
+        vertices[i * 3 + 1] = positions.getY(i);
+        vertices[i * 3 + 2] = positions.getZ(i);
+    }
+    // a non-indexed geometry is just triangle soup: vertex i, i+1, i+2
+    const source = geometry.index?.array;
+    const indices: number[] = source
+        ? Array.from(source)
+        : Array.from({ length: positions.count }, (_, i) => i);
+    return { type: 'trimesh', vertices, indices };
+};
+
+const describeConvexGeometry = (
+    geometry: PossibleGeometry,
+    convexRadius?: number
+): ConvexShapeDescriptor => {
+    // generate a new geometry to hold the simplified geo
+    const simplifiedGeo = geometry.clone();
+    // not sure this is needed.
+    //TODO: Check and cleanup if we need normals. if not merge from root geo
+    simplifiedGeo.computeVertexNormals();
+    // merge points
+    const mergedPoints = BufferGeometryUtils.mergeVertices(simplifiedGeo);
+    const points = Array.from(mergedPoints.getAttribute('position').array as ArrayLike<number>);
+    // the two throwaway three geometries are ours, drop them
+    mergedPoints.dispose();
+    simplifiedGeo.dispose();
+    const descriptor: ConvexShapeDescriptor = { type: 'convex', points };
+    if (convexRadius !== undefined) descriptor.convexRadius = convexRadius;
+    return descriptor;
+};
+
+// A heightfield samples the y of a (flat, square) plane geometry's vertices.
+const describeHeightfieldMesh = (mesh: THREE.Mesh, blockSize = 2): HeightfieldShapeDescriptor => {
+    const geometry = mesh.geometry as THREE.PlaneGeometry;
+    const positions = geometry.attributes.position.array as ArrayLike<number>;
+    const vertexCount = positions.length / 3;
+    const sampleCount = Math.sqrt(vertexCount);
+    const planeWidth = geometry.parameters.width;
+    const scale = planeWidth / sampleCount;
+
+    const heights: number[] = new Array(vertexCount);
+    for (let i = 0; i < vertexCount; i++) heights[i] = positions[i * 3 + 1];
+
+    return {
+        type: 'heightfield',
+        heights,
+        sampleCount,
+        scale: [scale, 1, scale],
+        blockSize
+    };
+};
+
+/**
+ * Describe a single three.js geometry.
+ *
+ * The type is inferred from the geometry class (`BoxGeometry` -> box, `SphereGeometry` ->
+ * sphere, ...) unless `options.type` forces one. Sizes come from the geometry's own parameters
+ * where three.js has them and from its bounding volume otherwise.
+ */
+export const describeGeometry = (
+    geometry: PossibleGeometry,
+    options: DescribeShapeOptions = {}
+): ShapeDescriptor => {
+    const shapeType = normaliseShapeType(options.type) ?? getShapeTypeFromGeometry(geometry);
+
+    switch (shapeType) {
+        case 'box': {
+            geometry.computeBoundingBox();
+            const { boundingBox } = geometry;
+            let size: Vector3;
+            // if the geometry is a box, use it's parameters not the bounding box
+            if (geometry instanceof BoxGeometry) {
+                const { width, height, depth } = geometry.parameters;
+                size = new Vector3(width, height, depth);
+            } else size = boundingBox!.getSize(new Vector3());
+
+            const descriptor: BoxShapeDescriptor = {
+                type: 'box',
+                size: toTuple(size),
+                offset: toTuple(boundingBox!.getCenter(new Vector3()))
+            };
+            if (options.convexRadius !== undefined) descriptor.convexRadius = options.convexRadius;
+            return descriptor;
+        }
+        case 'sphere': {
+            geometry.computeBoundingSphere();
+            const { boundingSphere } = geometry;
+            return {
+                type: 'sphere',
+                radius: boundingSphere!.radius,
+                // a copy: `boundingSphere.center` belongs to the geometry
+                offset: toTuple(boundingSphere!.center)
+            };
+        }
+        case 'capsule': {
+            // three renamed CapsuleGeometry.parameters.length to .height in r168 (same value:
+            // the height of the middle section, excluding the caps)
+            const { radius, height } = (geometry as CapsuleGeometry).parameters;
+            return { type: 'capsule', radius, height, offset: [0, height / 2, 0] };
+        }
+        case 'taperedCapsule': {
+            const { radius, height } = (geometry as CapsuleGeometry).parameters;
+            return {
+                type: 'taperedCapsule',
+                height,
+                topRadius: radius,
+                bottomRadius: radius,
+                offset: [0, height / 2, 0]
+            };
+        }
+        case 'cylinder': {
+            // Jolt's CylinderShape has a single radius, so a tapered three cylinder keeps its
+            // widest radius here - use `taperedCylinder` for the real thing.
+            const { radiusTop, radiusBottom, height } = cylinderParameters(
+                geometry as CylinderGeometry
+            );
+            const descriptor: CylinderShapeDescriptor = {
+                type: 'cylinder',
+                radius: Math.max(radiusTop, radiusBottom),
+                height,
+                offset: [0, height / 2, 0]
+            };
+            if (options.convexRadius !== undefined) descriptor.convexRadius = options.convexRadius;
+            return descriptor;
+        }
+        case 'taperedCylinder': {
+            const { radiusTop, radiusBottom, height } = cylinderParameters(
+                geometry as CylinderGeometry
+            );
+            const descriptor: TaperedCylinderShapeDescriptor = {
+                type: 'taperedCylinder',
+                height,
+                topRadius: radiusTop,
+                bottomRadius: radiusBottom,
+                offset: [0, height / 2, 0]
+            };
+            if (options.convexRadius !== undefined) descriptor.convexRadius = options.convexRadius;
+            return descriptor;
+        }
+        case 'convex':
+            return describeConvexGeometry(geometry, options.convexRadius);
+        case 'trimesh':
+            return describeTrimeshGeometry(geometry);
+        case 'heightfield':
+            return describeHeightfieldMesh(new THREE.Mesh(geometry), options.blockSize);
+        default:
+            // compounds and decorators have no single-geometry meaning; a mesh is the safe answer
+            return describeTrimeshGeometry(geometry);
+    }
+};
+
+/**
+ * Describe a three.js object: every mesh below it (including the object itself) becomes one
+ * child descriptor carrying that mesh's local position/rotation. A single mesh is described
+ * directly rather than wrapped in a one-child compound.
+ */
+export const describeObject = (
+    object: Object3D,
+    options: DescribeShapeOptions = {}
+): ShapeDescriptor => {
+    const children: ShapeDescriptor[] = [];
+    object.traverse((child) => {
+        // adding ignore to meshes skips the shape generator
+        if (!(child instanceof THREE.Mesh) || !child.geometry) return;
+        const descriptor = describeGeometry(child.geometry, options);
+        descriptor.position = toTuple(child.position);
+        descriptor.rotation = [
+            child.quaternion.x,
+            child.quaternion.y,
+            child.quaternion.z,
+            child.quaternion.w
+        ];
+        children.push(descriptor);
+    });
+
+    // if theres only one, return it - its transform belongs to the body, not to the shape
+    if (children.length === 1) return children[0];
+    return { type: 'staticCompound', children };
+};
+
+/**
+ * The one entry point: describe a three.js object or geometry as a `ShapeDescriptor`.
+ *
+ * ```ts
+ * const descriptor = describeShape(mesh);                 // infer from the geometry
+ * const descriptor = describeShape(mesh, { type: 'convex' });
+ * const shape = generateShape(descriptor);                // owned, refcount 1
+ * ```
+ */
+export function describeShape(
+    source: Object3D | PossibleGeometry,
+    options: DescribeShapeOptions = {}
+): ShapeDescriptor {
+    if (source instanceof BufferGeometry) return describeGeometry(source, options);
+    if (normaliseShapeType(options.type) === 'heightfield' && source instanceof THREE.Mesh)
+        return describeHeightfieldMesh(source, options.blockSize);
+    return describeObject(source, options);
+}
+
+/**
+ * Normalise the loose `{ radius, height, size, points, geometry, ... }` options that `<Shape>`
+ * and the old `generateShapeSettings` take into a `ShapeDescriptor`.
+ */
+export function describeShapeFromOptions(
+    type: AutoShape | ShapeType = 'box',
+    options: ShapeOptions = {}
+): ShapeDescriptor {
+    const shapeType = normaliseShapeType(type) as ShapeType;
+    // anything holding a geometry (or an object) is described by the three.js path
+    if (options.geometry && shapeType !== 'heightfield')
+        return describeGeometry(options.geometry, {
+            type: shapeType,
+            convexRadius: options.convexRadius
+        });
+    if (options.object) return describeObject(options.object, { type: shapeType });
+
+    switch (shapeType) {
+        case 'sphere':
+            return { type: 'sphere', radius: options.radius ?? 1 };
+        case 'capsule':
+            return { type: 'capsule', radius: options.radius ?? 1, height: options.height ?? 1 };
+        case 'taperedCapsule':
+            return {
+                type: 'taperedCapsule',
+                height: options.height ?? 1,
+                // historical option names: `radius` is the bottom radius, `topRadius` the top one
+                topRadius: options.topRadius ?? 0.5,
+                bottomRadius: options.bottomRadius ?? options.radius ?? 1
+            };
+        case 'cylinder':
+            return {
+                type: 'cylinder',
+                radius: options.radius ?? 1,
+                height: options.height ?? 1,
+                convexRadius: options.convexRadius ?? 0.5
+            };
+        case 'taperedCylinder':
+            return {
+                type: 'taperedCylinder',
+                height: options.height ?? 1,
+                topRadius: options.topRadius ?? 0.5,
+                bottomRadius: options.bottomRadius ?? options.radius ?? 1,
+                convexRadius: options.convexRadius
+            };
+        case 'convex': {
+            const descriptor: ConvexShapeDescriptor = {
+                type: 'convex',
+                points: flattenPoints(options.points ?? options.vertices ?? options.verts ?? [])
+            };
+            if (options.convexRadius !== undefined) descriptor.convexRadius = options.convexRadius;
+            return descriptor;
+        }
+        case 'trimesh':
+            return {
+                type: 'trimesh',
+                vertices: flattenPoints(options.vertices ?? options.verts ?? options.points ?? []),
+                indices: flattenIndices(options.indices ?? options.indexes ?? [])
+            };
+        case 'heightfield': {
+            const mesh =
+                options.mesh ?? (options.geometry ? new THREE.Mesh(options.geometry) : undefined);
+            if (!mesh)
+                throw new Error(
+                    'react-three-jolt: a heightfield needs a `mesh` (or `geometry`) to sample'
+                );
+            return describeHeightfieldMesh(mesh, options.blockSize);
+        }
+        case 'staticCompound':
+        case 'mutableCompound':
+            return { type: shapeType, children: options.children ?? [] };
+        default: {
+            // a bare number means a cube of that size; anything vector shaped is x/y/z
+            const size =
+                typeof options.size === 'number'
+                    ? new Vector3(options.size, options.size, options.size)
+                    : vec3.three(options.size ?? [1, 1, 1]);
+            const descriptor: BoxShapeDescriptor = { type: 'box', size: toTuple(size) };
+            if (options.convexRadius !== undefined) descriptor.convexRadius = options.convexRadius;
+            return descriptor;
+        }
+    }
+}
+
+/* ============================================================================
+ * Descriptor keys - a stable identity for React deps and caches
+ * ========================================================================== */
+
+// FNV-1a over the raw bytes of every number, so 1 and 1.0000001 hash differently. Long vertex
+// arrays are hashed rather than stringified: a 2k triangle mesh would otherwise turn into a
+// megabyte of JSON on every render.
+const hashScratch = new Float64Array(1);
+const hashBytes = new Uint8Array(hashScratch.buffer);
+const hashNumbers = (values: ArrayLike<number>): string => {
+    let hash = 2166136261;
+    for (let i = 0; i < values.length; i++) {
+        hashScratch[0] = values[i];
+        for (let b = 0; b < 8; b++) {
+            hash ^= hashBytes[b];
+            hash = Math.imul(hash, 16777619);
+        }
+    }
+    return `${values.length}#${(hash >>> 0).toString(36)}`;
+};
+
+const HASH_THRESHOLD = 32;
+
+const stableStringify = (value: unknown): string => {
+    if (value === null || value === undefined) return 'null';
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'null';
+    if (typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+    if (ArrayBuffer.isView(value)) return `"${hashNumbers(value as unknown as ArrayLike<number>)}"`;
+    if (Array.isArray(value)) {
+        if (value.length > HASH_THRESHOLD && typeof value[0] === 'number')
+            return `"${hashNumbers(value as number[])}"`;
+        return `[${value.map(stableStringify).join(',')}]`;
+    }
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    const body = keys
+        .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+        .join(',');
+    return `{${body}}`;
+};
+
+/**
+ * A stable string identity for any plain value: key order does not matter and long number arrays
+ * are hashed rather than serialised. Meant for React effect dependencies and caches.
+ *
+ * Only pass plain data - a three.js object or a WASM handle will be walked field by field.
+ */
+export const stableKey = (value: unknown): string => stableStringify(value);
+
+/**
+ * A stable string identity for a descriptor: the same description always produces the same key,
+ * whatever order its keys were written in. Long vertex/index arrays are hashed so the key stays
+ * small for meshes. Meant for React effect dependencies and shape caches.
+ */
+export const descriptorKey = (descriptor: ShapeDescriptor): string => stableStringify(descriptor);
+
+/* ============================================================================
+ * Generating: ShapeDescriptor -> Jolt
+ * ========================================================================== */
 
 /**
  * Fill a `ConvexHullShapeSettings`' point list from a flat xyz array.
@@ -220,18 +761,20 @@ const pushHullPoints = (points: ArrayLike<number>, hull: Jolt.ConvexHullShapeSet
  * a `PhysicsMaterial` pushed into the list cannot be freed by hand (the list owns a reference).
  */
 const createMeshShapeSettings = (
-    getVertex: (index: number, out: Jolt.Float3) => void,
-    vertexCount: number,
-    getTriangle: (index: number, out: Jolt.IndexedTriangle) => void,
-    triangleCount: number
+    vertices: ArrayLike<number>,
+    indices: ArrayLike<number>
 ): Jolt.MeshShapeSettings => {
     const jolt = Raw.module;
+    const vertexCount = Math.floor(vertices.length / 3);
+    const triangleCount = Math.floor(indices.length / 3);
 
     const verts = new jolt.VertexList();
     verts.reserve(vertexCount);
     const vertex = new jolt.Float3(0, 0, 0);
     for (let i = 0; i < vertexCount; i++) {
-        getVertex(i, vertex);
+        vertex.x = vertices[i * 3];
+        vertex.y = vertices[i * 3 + 1];
+        vertex.z = vertices[i * 3 + 2];
         // push_back copies, so the same scratch Float3 serves every vertex
         verts.push_back(vertex);
     }
@@ -241,7 +784,10 @@ const createMeshShapeSettings = (
     tris.reserve(triangleCount);
     const triangle = new jolt.IndexedTriangle(0, 0, 0, 0);
     for (let i = 0; i < triangleCount; i++) {
-        getTriangle(i, triangle);
+        triangle.set_mIdx(0, indices[i * 3]);
+        triangle.set_mIdx(1, indices[i * 3 + 1]);
+        triangle.set_mIdx(2, indices[i * 3 + 2]);
+        triangle.set_mMaterialIndex(0);
         tris.push_back(triangle);
     }
     jolt.destroy(triangle);
@@ -256,7 +802,225 @@ const createMeshShapeSettings = (
     return shapeSettings;
 };
 
-// We use shape settings because it lets us reuse this fn in compound shape generation
+const createHeightfieldShapeSettings = (
+    descriptor: HeightfieldShapeDescriptor
+): Jolt.HeightFieldShapeSettings => {
+    const jolt = Raw.module;
+    const { heights, sampleCount, scale, blockSize = 2 } = descriptor;
+    const sampleTotal = sampleCount * sampleCount;
+
+    // create the heightfield
+    const shapeSettings = new jolt.HeightFieldShapeSettings();
+    // mOffset/mScale are members of the settings, not allocations - Set() them in place.
+    const offset = descriptor.offset ?? [0, 0, 0];
+    shapeSettings.mOffset.Set(offset[0], offset[1], offset[2]);
+    shapeSettings.mScale.Set(scale[0], scale[1], scale[2]);
+    shapeSettings.mSampleCount = sampleCount;
+    shapeSettings.mBlockSize = blockSize;
+    // mHeightSamples is an ArrayFloat owned by the settings: resize() allocates inside it and
+    // destroying the settings frees it. There is no _malloc here to _free.
+    shapeSettings.mHeightSamples.resize(sampleTotal);
+
+    const heightSamples = new Float32Array(
+        jolt.HEAPF32.buffer,
+        jolt.getPointer(shapeSettings.mHeightSamples.data()),
+        sampleTotal
+    ); // Convert the height samples into a Float32Array
+    for (let i = 0; i < sampleTotal; i++) {
+        heightSamples[i] = heights[i];
+        // TODO: NOTE, this implementation does not allow holes in the map, which Jolt supports
+        //heightSamples[i] = Jolt.HeightFieldShapeConstantValues.prototype.cNoCollisionValue; // Invisible pixels make holes
+    }
+    return shapeSettings;
+};
+
+/** Jolt rejects a convex radius larger than the shape it is meant to round off. */
+const clampConvexRadius = (requested: number | undefined, ...limits: number[]) =>
+    Math.max(0, Math.min(requested ?? 0.05, ...limits));
+
+const notImplemented = (type: string, issue: string): never => {
+    throw new Error(
+        `react-three-jolt: the '${type}' shape descriptor is reserved but not implemented yet (see ${issue})`
+    );
+};
+
+/** Build a compound's settings from child descriptors. */
+const createCompoundShapeSettings = (
+    children: ShapeDescriptor[],
+    dynamic: boolean
+): Jolt.CompoundShapeSettings => {
+    const jolt = Raw.module;
+    const compound = dynamic
+        ? new jolt.MutableCompoundShapeSettings()
+        : new jolt.StaticCompoundShapeSettings();
+    // one scratch position/rotation for the whole loop: AddShape copies both
+    const position = new jolt.Vec3(0, 0, 0);
+    const rotation = new jolt.Quat(0, 0, 0, 1);
+    try {
+        for (const child of children) {
+            const [x, y, z] = child.position ?? [0, 0, 0];
+            const [qx, qy, qz, qw] = child.rotation ?? [0, 0, 0, 1];
+            position.Set(x, y, z);
+            rotation.Set(qx, qy, qz, qw);
+            // the compound takes a reference on the sub-settings; destroying the compound frees
+            // them, so a child is built only once nothing after it can throw
+            const childSettings = createShapeSettings(child);
+            compound.AddShape(position, rotation, childSettings, child.userData ?? 0);
+        }
+    } catch (error) {
+        // whatever was added already is released by the compound's destructor
+        jolt.destroy(compound);
+        throw error;
+    } finally {
+        jolt.destroy(position);
+        jolt.destroy(rotation);
+    }
+    return compound;
+};
+
+/**
+ * Build the `ShapeSettings` for a descriptor. The caller owns the result: hand it to
+ * `createShapeFromSettings` (which destroys it) or destroy it.
+ *
+ * The children of a compound and the inner shape of a decorator are ref-counted by their parent:
+ * destroying the returned settings frees the whole tree, and nothing inside it may be destroyed
+ * by hand.
+ */
+export function createShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSettings {
+    const jolt = Raw.module;
+    switch (descriptor.type) {
+        case 'box': {
+            const [x, y, z] = descriptor.size;
+            const halfExtent = new jolt.Vec3(x / 2, y / 2, z / 2);
+            const convexRadius = clampConvexRadius(
+                descriptor.convexRadius,
+                Math.abs(x) / 2,
+                Math.abs(y) / 2,
+                Math.abs(z) / 2
+            );
+            const settings = new jolt.BoxShapeSettings(halfExtent, convexRadius);
+            // BoxShapeSettings copied the half extent
+            jolt.destroy(halfExtent);
+            return settings;
+        }
+        case 'sphere':
+            return new jolt.SphereShapeSettings(descriptor.radius);
+        case 'capsule':
+            return new jolt.CapsuleShapeSettings(descriptor.height / 2, descriptor.radius);
+        case 'taperedCapsule':
+            return new jolt.TaperedCapsuleShapeSettings(
+                descriptor.height / 2,
+                descriptor.topRadius,
+                descriptor.bottomRadius
+            );
+        case 'cylinder':
+            return new jolt.CylinderShapeSettings(
+                descriptor.height / 2,
+                descriptor.radius,
+                clampConvexRadius(
+                    descriptor.convexRadius,
+                    Math.abs(descriptor.radius),
+                    Math.abs(descriptor.height) / 2
+                )
+            );
+        case 'taperedCylinder':
+            return new jolt.TaperedCylinderShapeSettings(
+                descriptor.height / 2,
+                descriptor.topRadius,
+                descriptor.bottomRadius,
+                clampConvexRadius(
+                    descriptor.convexRadius,
+                    Math.abs(descriptor.topRadius),
+                    Math.abs(descriptor.bottomRadius),
+                    Math.abs(descriptor.height) / 2
+                )
+            );
+        case 'convex': {
+            const hull = new jolt.ConvexHullShapeSettings();
+            pushHullPoints(descriptor.points as ArrayLike<number>, hull);
+            if (descriptor.convexRadius !== undefined)
+                hull.mMaxConvexRadius = descriptor.convexRadius;
+            return hull;
+        }
+        case 'trimesh':
+            return createMeshShapeSettings(
+                descriptor.vertices as ArrayLike<number>,
+                descriptor.indices as ArrayLike<number>
+            );
+        case 'heightfield':
+            return createHeightfieldShapeSettings(descriptor);
+        case 'staticCompound':
+            return createCompoundShapeSettings(descriptor.children, false);
+        case 'mutableCompound':
+            // issue #108: jolt 1.1 exports MutableCompoundShape, but nothing here maintains one
+            return notImplemented('mutableCompound', 'issue #108');
+        case 'scaled': {
+            // ScaledShapeSettings takes a reference on the inner settings: destroying the scaled
+            // settings frees them, so the inner ones are never destroyed here.
+            const inner = createShapeSettings(descriptor.child);
+            const scale = vec3.jolt(descriptor.scale);
+            try {
+                return new jolt.ScaledShapeSettings(inner, scale);
+            } catch (error) {
+                jolt.destroy(inner);
+                throw error;
+            } finally {
+                jolt.destroy(scale);
+            }
+        }
+        case 'offsetCenterOfMass':
+            // issue #40: needs the BodyState/<Shape> scale work before it is useful
+            return notImplemented('offsetCenterOfMass', 'issue #40');
+        default:
+            throw new Error(
+                `react-three-jolt: unknown shape descriptor type '${
+                    (descriptor as ShapeDescriptor).type
+                }'`
+            );
+    }
+}
+
+/**
+ * Descriptor -> `Jolt.Shape`. The returned shape is owned by the caller with a reference count
+ * of exactly 1: hand it to something that takes its own reference (a body, a compound) and then
+ * `releaseShape()` it, or `releaseShape()` it when you are done.
+ */
+export function generateShape(descriptor: ShapeDescriptor): Jolt.Shape {
+    return createShapeFromSettings(createShapeSettings(descriptor));
+}
+
+/**
+ * Wrap an existing shape in a `ScaledShape` (issue #40's building block).
+ *
+ * Ownership: `ScaledShape` holds a `RefConst<Shape>` on `shape`, so it AddRef()s it - the caller
+ * keeps its own reference and releases it independently. The returned shape is owned by the
+ * caller with a reference count of 1, exactly like `generateShape`, and is freed with
+ * `releaseShape` (never `destroy`: it is ref-counted and deletes itself at zero).
+ */
+export function scaleShape(shape: Jolt.Shape, scale: anyVec3): Jolt.Shape {
+    const jolt = Raw.module;
+    const joltScale = vec3.jolt(scale);
+    if (!shape.IsValidScale(joltScale))
+        devWarn(
+            'react-three-jolt: this scale is not valid for this shape (a sphere or capsule cannot ' +
+                'be scaled non-uniformly, a mesh cannot be mirrored); jolt will do what it can.'
+        );
+    // `new` starts a RefTarget at zero references; AddRef makes this one ours
+    const scaled = jolt.castObject(new jolt.ScaledShape(shape, joltScale), jolt.ScaledShape);
+    scaled.AddRef();
+    jolt.destroy(joltScale);
+    return scaled;
+}
+
+/* ============================================================================
+ * Compatibility wrappers
+ *
+ * The three historical entry points describe + build through the pipeline above. They keep their
+ * old signatures and return types so body-system, <Shape>, the character controller, the
+ * vehicles and the examples keep working unchanged.
+ * ========================================================================== */
+
+/** @deprecated prefer `describeShape` + `generateShape`. */
 export const getShapeSettingsFromGeometry = (
     geometry: PossibleGeometry,
     shapeType?: AutoShape
@@ -266,218 +1030,27 @@ export const getShapeSettingsFromGeometry = (
           offset: Vector3 | undefined;
       }
     | undefined => {
-    const jolt = Raw.module;
-    let shapeSettings, offset;
-
-    // if the user passes the shape use that, if not, try to infer it from the geometry
-    if (!shapeType) shapeType = getShapeTypeFromGeometry(geometry);
-    switch (shapeType) {
-        case 'box': {
-            geometry.computeBoundingBox();
-            const { boundingBox } = geometry;
-            let size;
-            // if the geometry is a box, use it's parameters not the bounding box
-            if (geometry instanceof BoxGeometry) {
-                const { width, height, depth } = geometry.parameters;
-                size = new Vector3(width, height, depth);
-            } else size = boundingBox!.getSize(new Vector3());
-
-            const shapeSize = new jolt.Vec3(size.x / 2, size.y / 2, size.z / 2);
-            shapeSettings = new jolt.BoxShapeSettings(shapeSize);
-            // jolt sucks at memory management
-            jolt.destroy(shapeSize);
-
-            offset = boundingBox!.getCenter(new Vector3());
-            break;
-        }
-
-        case 'sphere': {
-            geometry.computeBoundingSphere();
-            const { boundingSphere } = geometry;
-            const radius = boundingSphere!.radius;
-
-            shapeSettings = new jolt.SphereShapeSettings(radius);
-            offset = boundingSphere!.center;
-            break;
-        }
-        case 'capsule': {
-            // values set by parameters
-            // three renamed CapsuleGeometry.parameters.length to .height in r168 (same value:
-            // the height of the middle section, excluding the caps)
-            const { radius, height } = (geometry as CapsuleGeometry).parameters;
-            shapeSettings = new jolt.CapsuleShapeSettings(height / 2, radius);
-            offset = new Vector3(0, height / 2, 0);
-            break;
-        }
-
-        case 'cylinder': {
-            // Jolt Cylinder doesn't take a top and bottom radius, so we'll just use the top radius
-            const { radiusTop, height } = (geometry as CylinderGeometry).parameters;
-
-            shapeSettings = new jolt.CylinderShapeSettings(height / 2, radiusTop, 0.5);
-            offset = new Vector3(0, height / 2, 0);
-            break;
-        }
-        // ConvexHull from points
-        // this won't be determined from geometry automatically, but the user can pass it
-        case 'convex': {
-            // generate a new geometry to hold the simplified geo
-            const simplifiedGeo = geometry.clone();
-            // not sure this is needed.
-            //TODO: Check and cleanup if we need normals. if not merge from root geo
-            simplifiedGeo.computeVertexNormals();
-            // merge points
-            const mergedPoints = BufferGeometryUtils.mergeVertices(simplifiedGeo);
-            const points = mergedPoints.getAttribute('position').array;
-
-            // create the hull and add the points
-            const hull = new jolt.ConvexHullShapeSettings();
-            pushHullPoints(points, hull);
-            shapeSettings = hull;
-
-            // the two throwaway three geometries are ours, drop them
-            mergedPoints.dispose();
-            simplifiedGeo.dispose();
-            break;
-        }
-        // trimesh as default if nothing else passed
-        // using the buffer directly? which is better, array or direct?
-        // base pulled from: https://github.com/sajal353/r3f-jolt/blob/main/src/Jolt/useTrimesh.ts
-        default: {
-            const vertices = geometry.getAttribute('position');
-            // a non-indexed geometry is just triangle soup: vertex i*3 + n
-            const indices = geometry.index?.array;
-            const triangleCount = indices ? indices.length / 3 : vertices.count / 3;
-
-            shapeSettings = createMeshShapeSettings(
-                (i, out) => {
-                    out.x = vertices.getX(i);
-                    out.y = vertices.getY(i);
-                    out.z = vertices.getZ(i);
-                },
-                vertices.count,
-                (i, out) => {
-                    const o = i * 3;
-                    out.set_mIdx(0, indices ? indices[o] : o);
-                    out.set_mIdx(1, indices ? indices[o + 1] : o + 1);
-                    out.set_mIdx(2, indices ? indices[o + 2] : o + 2);
-                    out.set_mMaterialIndex(0);
-                },
-                triangleCount
-            );
-        }
-    }
-
-    return { shapeSettings, offset };
+    const descriptor = describeGeometry(geometry, { type: shapeType });
+    return {
+        shapeSettings: createShapeSettings(descriptor),
+        offset: descriptor.offset ? new Vector3(...descriptor.offset) : undefined
+    };
 };
 
-// create a shape manually
+/** @deprecated prefer `describeShape` + `generateShape`. */
+export const getShapeSettingsFromObject = (
+    object: Object3D,
+    // why do I need this here?
+    shapeType?: AutoShape
+): Jolt.ShapeSettings => createShapeSettings(describeObject(object, { type: shapeType }));
+
+/** @deprecated prefer `describeShapeFromOptions` + `generateShape`. */
 export const generateShapeSettings = (
-    shapeType: AutoShape | 'staticCompound' | 'mutableCompound',
-    options?: any,
-    inSettings?: Jolt.ShapeSettings
-): Jolt.ShapeSettings => {
-    const jolt = Raw.module;
-    let shapeSettings = inSettings;
-    // console.log("Generating shape shapeType", shapeType);
-
-    // Switch based on shapeType to set the shapeSettings
-    switch (shapeType) {
-        // Compound shapes ---------------------------------
-        /*case "staticCompound": {
-			const shapes = options.shapes || [];
-			shapeSettings = generateCompoundShapeSettings(shapes, false);
-			break;
-		}
-		*/
-        // Basic types -------------------------------------
-        case 'sphere': {
-            const radius = options.radius || 1;
-            shapeSettings = new jolt.SphereShapeSettings(radius);
-            break;
-        }
-        case 'capsule': {
-            const radius = options.radius || 1;
-            const height = options.height || 1;
-            shapeSettings = new jolt.CapsuleShapeSettings(height / 2, radius);
-            break;
-        }
-        case 'taperedCapsule': {
-            const radius = options.radius || 1;
-            const height = options.height || 1;
-            const topRadius = options.topRadius || 0.5;
-            shapeSettings = new jolt.TaperedCapsuleShapeSettings(height / 2, radius, topRadius);
-            break;
-        }
-        case 'cylinder': {
-            const radius = options.radius || 1;
-            const height = options.height || 1;
-            shapeSettings = new jolt.CylinderShapeSettings(height / 2, radius, 0.5);
-            break;
-        }
-
-        case 'convex': {
-            // if we passed a geometry pass to getShapeSettingsFromGeometry
-            if (options.geometry) {
-                const settings = getShapeSettingsFromGeometry(options.geometry, 'convex');
-                shapeSettings = settings!.shapeSettings;
-                break;
-            }
-            const points: Vector3[] = options.points || [];
-            const hull = new jolt.ConvexHullShapeSettings();
-            // flatten so the shared helper can reuse a single scratch Vec3
-            const flat = new Float32Array(points.length * 3);
-            points.forEach((point, index) => {
-                flat[index * 3] = point.x;
-                flat[index * 3 + 1] = point.y;
-                flat[index * 3 + 2] = point.z;
-            });
-            pushHullPoints(flat, hull);
-            shapeSettings = hull;
-            break;
-        }
-        // this one is heavy
-        case 'trimesh': {
-            if (options.geometry) {
-                const settings = getShapeSettingsFromGeometry(options.geometry, 'trimesh');
-                shapeSettings = settings!.shapeSettings;
-                break;
-            }
-            const vertices: Vector3[] = options.vertices || [];
-            const indices: number[][] = options.indices || [];
-
-            shapeSettings = createMeshShapeSettings(
-                (i, out) => {
-                    const point = vertices[i];
-                    out.x = point.x;
-                    out.y = point.y;
-                    out.z = point.z;
-                },
-                vertices.length,
-                (i, out) => {
-                    const tri = indices[i];
-                    out.set_mIdx(0, tri[0]);
-                    out.set_mIdx(1, tri[1]);
-                    out.set_mIdx(2, tri[2]);
-                    out.set_mMaterialIndex(0);
-                },
-                indices.length
-            );
-            break;
-        }
-
-        // default to box
-        default: {
-            const size = options.size ? vec3.three(options.size) : new THREE.Vector3(1, 1, 1);
-            const halfExtent = new jolt.Vec3(size.x / 2, size.y / 2, size.z / 2);
-            shapeSettings = new jolt.BoxShapeSettings(halfExtent);
-            // BoxShapeSettings copied the half extent
-            jolt.destroy(halfExtent);
-            break;
-        }
-    }
-    return shapeSettings!;
-};
+    shapeType: AutoShape | ShapeType = 'box',
+    options: ShapeOptions = {},
+    // kept for signature compatibility: the settings have always been rebuilt from scratch
+    _inSettings?: Jolt.ShapeSettings
+): Jolt.ShapeSettings => createShapeSettings(describeShapeFromOptions(shapeType, options));
 
 export type CompoundShapeData = {
     shapeSettings: Jolt.ShapeSettings;
@@ -489,63 +1062,36 @@ export type CompoundShapeData = {
  * Build a compound from already-created sub-settings.
  * The compound takes a reference on every sub-setting, so the caller must NOT destroy them:
  * destroying the returned compound settings frees the whole tree.
+ *
+ * Prefer the descriptor pipeline (`{ type: 'staticCompound', children: [...] }`); this exists
+ * for callers that already hold `ShapeSettings`.
  */
 export const generateCompoundShapeSettings = (shapes: CompoundShapeData[], dynamic = false) => {
     const jolt = Raw.module;
     const compoundShapeSettings = dynamic
-        ? //@ts-ignore for now as it is loaded at runtime. Type will be added soon.
-          new jolt.MutableCompoundShapeSettings()
+        ? new jolt.MutableCompoundShapeSettings()
         : new jolt.StaticCompoundShapeSettings();
+    // one scratch position/rotation for the whole loop: AddShape copies both
+    const position = new jolt.Vec3(0, 0, 0);
+    const rotation = new jolt.Quat(0, 0, 0, 1);
     shapes.forEach(({ shapeSettings, position: inPosition, quaternion: inQuaternion }) => {
-        const position = vec3.jolt(inPosition);
-        const quaternion = quat.jolt(inQuaternion);
-        compoundShapeSettings.AddShape(position, quaternion, shapeSettings, 0);
-        //destroy the memory
-        jolt.destroy(position);
-        jolt.destroy(quaternion);
+        const { x, y, z } = vec3.three(inPosition);
+        position.Set(x, y, z);
+        rotation.Set(inQuaternion.x, inQuaternion.y, inQuaternion.z, inQuaternion.w);
+        compoundShapeSettings.AddShape(position, rotation, shapeSettings, 0);
     });
+    jolt.destroy(position);
+    jolt.destroy(rotation);
     return compoundShapeSettings;
 };
 
 // take a threejs plane that is a heightfield and generate a Jolt heightfield shape
 // this is a WIP
-export const generateHeightfieldShapeFromThree = (heightfieldPlane: THREE.Mesh) => {
-    //TODO: resolve what these props do
-    //const mapScale = 0.35;
-    const BLOCK_SIZE = 2;
-
-    const jolt = Raw.module;
-    const geometry = heightfieldPlane.geometry as THREE.PlaneGeometry;
-    const vertices = geometry.attributes.position.array as Float32Array;
-    const vertexCount = vertices.length / 3;
-    const size = Math.sqrt(vertexCount);
-    const planeWidth = geometry.parameters.width;
-    const scale = planeWidth / size;
-    //const positionVal = -size * scale * 0.5;
-
-    // create the heightfield
-    const shapeSettings = new jolt.HeightFieldShapeSettings();
-    // mOffset/mScale are members of the settings, not allocations - Set() them in place.
-    shapeSettings.mOffset.Set(0, 0, 0);
-    shapeSettings.mScale.Set(scale, 1, scale);
-    shapeSettings.mSampleCount = size;
-    shapeSettings.mBlockSize = BLOCK_SIZE;
-    // mHeightSamples is an ArrayFloat owned by the settings: resize() allocates inside it and
-    // destroying the settings frees it. There is no _malloc here to _free.
-    shapeSettings.mHeightSamples.resize(vertexCount);
-
-    const heightSamples = new Float32Array(
-        jolt.HEAPF32.buffer,
-        jolt.getPointer(shapeSettings.mHeightSamples.data()),
-        vertexCount
-    ); // Convert the height samples into a Float32Array
-    for (let i = 0; i < vertexCount; i++) {
-        heightSamples[i] = vertices[i * 3 + 1];
-        // TODO: NOTE, this implementation does not allow holes in the map, which Jolt supports
-        //heightSamples[i] = Jolt.HeightFieldShapeConstantValues.prototype.cNoCollisionValue; // Invisible pixels make holes
-    }
-    return shapeSettings;
-};
+/** @deprecated prefer `describeShape(mesh, { type: 'heightfield' })` + `generateShape`. */
+export const generateHeightfieldShapeFromThree = (
+    heightfieldPlane: THREE.Mesh
+): Jolt.HeightFieldShapeSettings =>
+    createHeightfieldShapeSettings(describeHeightfieldMesh(heightfieldPlane));
 
 // Take a complex Jolt shape and generate a ThreeJS geometry.
 // Taken from the Jolt JS examples. This used to exist twice, byte for byte, as
