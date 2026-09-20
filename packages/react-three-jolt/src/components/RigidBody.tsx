@@ -45,6 +45,7 @@ interface RigidBodyProps {
     //physics props
     linearDamping?: number;
     angularDamping?: number;
+    /** Friction coefficient. Defaults to the body's creation settings (Jolt defaults to 0.2). */
     friction?: number;
     scale?: number[];
 
@@ -88,6 +89,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             isSensor,
             angularDamping,
             linearDamping,
+            friction,
             group,
             subGroup,
 
@@ -252,6 +254,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             if (mass) bodySystem.setMass(body.handle, mass);
             if (linearDamping) body.linearDamping = linearDamping;
             if (angularDamping) body.angularDamping = angularDamping;
+            if (friction !== undefined) body.friction = friction;
 
             // check if the body is allowing obstruction
             const isAllowing = body.allowObstruction;
@@ -271,6 +274,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             obstructionTimelimit,
             linearDamping,
             angularDamping,
+            friction,
             rigidBodyRef,
             isSensor
         ]);
