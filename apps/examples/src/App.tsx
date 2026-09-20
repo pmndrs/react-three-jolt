@@ -24,6 +24,7 @@ import { BallBox } from './examples/BallBox';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
 import { Constraints } from './examples/Constraints';
 import { CubeHeap } from './examples/CubeHeap';
+import { FloatingPlatforms } from './examples/FloatingPlatforms';
 import { FourWheelDemo } from './examples/FourWheelsWithHeightmap';
 import { HeightfieldDemo } from './examples/Heightfield';
 import { Impulses } from './examples/Impulses';
@@ -137,6 +138,13 @@ const routes: Routes = {
         target: [0, 1, 10],
         background: '#3d405b',
         element: <CubeHeap />
+    },
+    FloatingPlatforms: {
+        label: 'Floating Platforms',
+        position: [0, 30, 60],
+        target: [0, 5, 0],
+        background: '#264653',
+        element: <FloatingPlatforms />
     },
     Vehicle: {
         position: [2, 25, 51],
