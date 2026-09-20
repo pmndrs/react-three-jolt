@@ -20,6 +20,7 @@ import { NavLink, NavLinkProps, Route, Routes, useLocation } from 'react-router'
 import { BallBox } from './examples/BallBox';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
 import { CubeHeap } from './examples/CubeHeap';
+import { FooterFunnel } from './examples/FooterFunnel';
 import { FourWheelDemo } from './examples/FourWheelsWithHeightmap';
 import { HeightfieldDemo } from './examples/Heightfield';
 import { Impulses } from './examples/Impulses';
@@ -156,6 +157,14 @@ const routes: Routes = {
         transition: false,
         background: '#141622',
         element: <BallBox />
+    },
+    FooterFunnel: {
+        label: 'Footer Funnel',
+        position: [0, 2, 40],
+        target: [0, 2, 0],
+        transition: false,
+        background: '#141622',
+        element: <FooterFunnel />
     }
 };
 
