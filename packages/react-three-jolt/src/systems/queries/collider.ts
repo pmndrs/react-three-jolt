@@ -1,11 +1,10 @@
 // does a collision test with a shape. based on raycaster
-//import { PhysicsSystem } from '../physics-system';
 
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
-import { Layer } from '../../constants';
 import { Raw } from '../../raw';
 import { vec3 } from '../../utils';
+import { QueryBase } from './query-base';
 
 type CollideShapeCollector =
     | Jolt.CollideShapeAllHitCollisionCollector
@@ -15,16 +14,7 @@ type CollideShapeCollector =
 
 type CollectorTypeString = 'closest' | 'any' | 'all';
 
-export class ShapeCollider {
-    joltPhysicsSystem: Jolt.PhysicsSystem;
-    joltInterface: Jolt.JoltInterface;
-    // filters
-    bpFilter: Jolt.DefaultBroadPhaseLayerFilter;
-    objectFilter: Jolt.DefaultObjectLayerFilter;
-    // TODO figure out how to do custom body filters
-    bodyFilter: Jolt.BodyFilter = new Raw.module.BodyFilter(); // BodyFilterJS?
-    shapeFilter: Jolt.ShapeFilter = new Raw.module.ShapeFilter();
-
+export class ShapeCollider extends QueryBase {
     collideShapeSettings: Jolt.CollideShapeSettings = new Raw.module.CollideShapeSettings();
     ignoreBackFaces = false;
 
@@ -56,26 +46,15 @@ export class ShapeCollider {
     private scratchPosition: Jolt.RVec3 = new Raw.module.RVec3(0, 0, 0);
     private scratchRotation: Jolt.Quat = new Raw.module.Quat(0, 0, 0, 1);
 
-    private destroyed = false;
-
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
-        this.joltPhysicsSystem = joltPhysicsSystem;
-        this.joltInterface = joltInterface;
+        super(joltPhysicsSystem, joltInterface);
         // `activeShape` is a Jolt reference counted object (RefTarget) and starts life with a
         // refcount of 0 (see the jolt-physics README's "Reference counting objects" section).
         // AddRef() here means the `shape` setter/destroy() below can always treat
         // `activeShape` uniformly with Release(), regardless of whether it's this default shape
         // or one a caller handed us.
         this.activeShape.AddRef();
-        // these two filters mean the ray will cast as if its a dynamic object
-        this.bpFilter = new Raw.module.DefaultBroadPhaseLayerFilter(
-            joltInterface.GetObjectVsBroadPhaseLayerFilter(),
-            Layer.MOVING
-        );
-        this.objectFilter = new Raw.module.DefaultObjectLayerFilter(
-            joltInterface.GetObjectLayerPairFilter(),
-            Layer.MOVING
-        );
+        this.createFilters();
         // make sure centerOfMassTransform reflects the initial (identity) position/rotation
         // instead of whatever `new RMat44()` default-constructs to.
         this.setJoltMatrix();
@@ -83,10 +62,7 @@ export class ShapeCollider {
 
     // Free every Jolt object this collider allocated. Idempotent - safe to call more than once
     // (React unmount + an explicit caller cleanup, for example).
-    destroy() {
-        if (this.destroyed) return;
-        this.destroyed = true;
-
+    protected releaseResources(): void {
         // `activeShape` is reference counted - see the `shape` setter and the constructor. We
         // AddRef()'d whatever shape we're holding, so give that reference back with Release()
         // rather than a hard destroy(), which would free memory a caller (or another owner) might
@@ -96,10 +72,7 @@ export class ShapeCollider {
             this.activeShape = null as unknown as Jolt.Shape;
         }
 
-        Raw.module.destroy(this.bodyFilter);
-        Raw.module.destroy(this.shapeFilter);
-        Raw.module.destroy(this.bpFilter);
-        Raw.module.destroy(this.objectFilter);
+        this.destroyFilters();
         Raw.module.destroy(this.collideShapeSettings);
         Raw.module.destroy(this.collector);
         Raw.module.destroy(this.shapeScale);
