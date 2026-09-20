@@ -62,6 +62,9 @@ export class BodySystem {
 
     // lets defaults be set at the physics system level
     defaultBodySettings: any = {};
+    // Shape used when a body doesn't ask for one. Undefined keeps the per-geometry autodetect
+    // in getShapeTypeFromGeometry. Settable from `<Physics defaultShape="box">`.
+    defaultShape?: AutoShape;
 
     standardGroupFilter = new Raw.module.GroupFilterJS();
     standardCollisionGroup = new Raw.module.CollisionGroup();
@@ -114,6 +117,9 @@ export class BodySystem {
     //* Body Management ================================
     // create a body from an object or shape
     createBody(objectOrShape: Object3D | Jolt.Shape, options: GenerateBodyOptions = {}): Jolt.Body {
+        // fall back to the system wide default shape when the caller didn't pick one
+        if (options.shapeType === undefined && this.defaultShape !== undefined)
+            options = { ...options, shapeType: this.defaultShape };
         let settings = generateBodySettings(objectOrShape, options);
         // if there are properties in the default, merge them with settings
         if (Object.keys(this.defaultBodySettings).length > 0)

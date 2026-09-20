@@ -56,7 +56,27 @@ One way it is different however is much of the logic actually lies in a PhysicsS
 
 #### `gravity`:
 
-Gravity can be a single number 20: that automatically gets turned into [0,-20, 0] and applied to the simulation. You can also pass a vector directly if you have a special gravity you want. 0 also works.
+Gravity can be a single number 20: that automatically gets turned into [0,-20, 0] and applied to the simulation. You can also pass a vector directly if you have a special gravity you want. 0 also works. Defaults to `[0, -9.81, 0]`, and it is reactive — change it at runtime and the world picks it up on the next frame.
+
+#### `interpolate`:
+
+Default `true`. The simulation runs on its own fixed clock, which almost never lines up with your render rate, so without interpolation objects visibly stutter whenever a frame falls between two physics steps. With it on, each object is drawn on the path between the last two steps instead of snapped to the most recent one. It only changes what is _drawn_ — the bodies themselves are untouched — and it is ignored when `timeStep="vary"`, because then every step already lands on a frame.
+
+#### `timeStep`:
+
+Default `1 / 60`. The length of one physics step in seconds. A fixed step is what makes a simulation reproducible: the same inputs give the same results regardless of frame rate. Pass `"vary"` to step with the render delta instead (clamped to 0.5s, 1-2 substeps), which never falls behind but is not deterministic.
+
+#### `maxSubSteps`:
+
+Default `5`. The most fixed steps a single frame is allowed to run. When a frame takes much longer than `timeStep` — a backgrounded tab, a debugger pause, a large asset decode — the leftover simulation time beyond `maxSubSteps * timeStep` is dropped rather than queued. Without that cap each slow frame makes the next one slower still, until the app locks up (the "spiral of death"). Turn on `debug` to log when time is being dropped.
+
+#### `updateLoop` / `updatePriority`:
+
+`updateLoop` is `"follow"` (default) to step from R3F's `useFrame`, in sync with rendering, or `"independent"` to step from its own `requestAnimationFrame` loop. `updatePriority` is passed straight to `useFrame`; as in R3F, any non-zero priority means you take over the render loop yourself. It only applies to `"follow"`.
+
+#### `defaultShape`:
+
+The collision shape to use for bodies that don't ask for one, instead of guessing from each geometry. `<Physics defaultShape="box">` is the Jolt equivalent of rapier's `colliders` prop. Individual `<RigidBody shape="...">` props still win.
 
 #### `debug`:
 
