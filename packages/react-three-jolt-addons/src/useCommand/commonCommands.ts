@@ -1,5 +1,11 @@
 //this is a holder for common commands and their buttons
 
+/** A named keys/buttons preset for a plain `Command`. */
+export type CommonCommand = {
+    keys: string[];
+    buttons: number[];
+};
+
 export const commonCommands = {
     moveForward: {
         keys: ['w', 'W'],
@@ -40,23 +46,22 @@ export const commonCommands = {
     }
 };
 
+/** One direction of a vector preset. */
+export type VectorBinding = {
+    keys: string[];
+    buttons: number[];
+    /** 1 or -1, flips the axis this direction contributes to */
+    orientation?: number;
+};
+
+/**
+ * A vector preset binds directions to keys/buttons. Direction names differ per preset
+ * (`forward`/`backward` for movement, `up`/`down` for looking), and `axis` is the pair of
+ * gamepad axes the preset reads, so it is not a direction.
+ */
 export type VectorPreset = {
-    forward: {
-        keys: string[];
-        buttons: number[];
-    };
-    backward: {
-        keys: string[];
-        buttons: number[];
-    };
-    left: {
-        keys: string[];
-        buttons: number[];
-    };
-    right: {
-        keys: string[];
-        buttons: number[];
-    };
+    [direction: string]: VectorBinding | number[] | undefined;
+    axis?: number[];
 };
 
 // presets for the VectorCommand

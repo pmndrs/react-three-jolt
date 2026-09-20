@@ -65,8 +65,6 @@ export const CharacterController: React.FC<CControllerProps> = memo(
         useCommand(
             'run',
             (info) => {
-                // TODO Check this TS error. isInitial should exist
-                //@ts-ignore
                 if (!info.isInitial) return;
                 // console.log('Start running', info);
                 characterSystem!.startRunning();
@@ -89,7 +87,6 @@ export const CharacterController: React.FC<CControllerProps> = memo(
         useCommand(
             'jump',
             (info) => {
-                //@ts-ignore
                 if (!info.isInitial) return;
                 if (characterSystem) characterSystem.jump();
             },
@@ -121,7 +118,6 @@ export const CharacterController: React.FC<CControllerProps> = memo(
         useCommand(
             'c',
             (info) => {
-                //@ts-ignore this does exist?
                 if (!info.isInitial) return;
                 characterSystem?.setCrouched(true);
             },

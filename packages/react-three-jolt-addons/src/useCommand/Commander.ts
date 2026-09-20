@@ -1,46 +1,100 @@
-//@ts-ignore
+//@ts-expect-error -- gamepad.js ships no type declarations; `GamepadListenerLike` below is the
+// surface we depend on.
 import { GamepadListener } from 'gamepad.js';
-import { Command } from './Command';
-import { commonCommands } from './commonCommands';
+import {
+    Command,
+    type CommandEvent,
+    type CommandOptions,
+    type CommandValue,
+    type GamepadInputEvent
+} from './Command';
+import { type CommonCommand, commonCommands } from './commonCommands';
 import { VectorCommand } from './VectorCommand';
 
 // im not sure yet if I'll include other libraries
 
-export type CommandCallback = (info: {
+// `commandString` is free-form, so look the presets up through a widened view of the table.
+const commonCommandsByName: Record<string, CommonCommand | undefined> = commonCommands;
+
+/** The payload every command listener receives. */
+export type CommandInfo = {
     command: Command;
     label: string;
     method: string;
-    value: string | number | boolean;
+    value: CommandValue;
 
     isInitial: boolean;
 
-    event?: KeyboardEvent | MouseEvent;
+    startTime: number;
+    event?: CommandEvent;
     duration?: number;
-}) => void;
+};
+
+export type CommandCallback = (info: CommandInfo) => void;
+
+/** The flattened state of every active command, keyed by command label. */
+export type CommandState = Record<string, CommandValue>;
+export type CommandStateListener = (state: CommandState) => void;
+
+/** The slice of gamepad.js' `GamepadListener` we depend on. */
+type GamepadListenerLike = {
+    on(event: string, listener: (event: GamepadInputEvent) => void): void;
+    off(event: string, listener: (event: GamepadInputEvent) => void): void;
+    start(): void;
+    /** bound in gamepad.js' constructor, so the property is a stable reference */
+    stop: () => void;
+};
 
 export class Commander {
     commands: Map<string, Command | VectorCommand> = new Map();
     // listeners for state changes
-    stateListeners = [];
+    private stateListeners: CommandStateListener[] = [];
     // state object
-    state = {};
+    state: CommandState = {};
     // state flags
     isDirty = false;
     paused = false;
     debug = false;
 
-    gamepadListener: GamepadListener = new GamepadListener();
+    // Lifecycle ==========================================
+    // The commander owns window listeners and a gamepad polling loop, so it is not allowed to
+    // attach anything until someone retains it, and it must let go of everything when the last
+    // consumer releases it. Constructing one is side effect free.
+    private gamepadListener: GamepadListenerLike | null = null;
+    private connected = false;
+    private refCount = 0;
 
-    constructor() {
-        console.log('gamepad listeners attaching');
-        // add gamepad listeners
-        this.gamepadListener.on('gamepad:connected', (event: any) => {
-            if (this.debug) console.log('gamepad connected', event);
-        });
-        //gamepad
-        this.gamepadListener.on('gamepad:button', this.onButtonChange);
-        this.gamepadListener.on('gamepad:axis', this.onAxisChange);
-        this.gamepadListener.start();
+    /** true while the window/gamepad listeners are attached */
+    get isConnected() {
+        return this.connected;
+    }
+    /** how many live consumers (hooks) currently hold this commander */
+    get consumerCount() {
+        return this.refCount;
+    }
+
+    /**
+     * Register interest in this commander. The first retain attaches the listeners; the returned
+     * release function detaches them again once the last consumer has let go. The release function
+     * is idempotent, so a double invoke (React Strict Mode, a re-run effect) can't unbalance the
+     * count.
+     */
+    retain = () => {
+        this.refCount++;
+        if (this.refCount === 1) this.connect();
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            this.refCount = Math.max(0, this.refCount - 1);
+            if (this.refCount === 0) this.disconnect();
+        };
+    };
+
+    /** Attach the window and gamepad listeners. Idempotent. */
+    connect = () => {
+        if (this.connected || typeof window === 'undefined') return;
+        this.connected = true;
 
         // keyboard
         window.addEventListener('keydown', this.keyEventListener);
@@ -49,14 +103,67 @@ export class Commander {
         // mouse
         window.addEventListener('mousedown', this.mouseEventListener);
         window.addEventListener('mouseup', this.mouseEventListener);
+
+        // gamepad (polls with requestAnimationFrame while running)
+        this.connectGamepad();
+    };
+
+    /** Remove every listener and stop the gamepad poll. Idempotent. */
+    disconnect = () => {
+        if (!this.connected) return;
+        this.connected = false;
+
+        window.removeEventListener('keydown', this.keyEventListener);
+        window.removeEventListener('keyup', this.keyEventListener);
+        window.removeEventListener('mousedown', this.mouseEventListener);
+        window.removeEventListener('mouseup', this.mouseEventListener);
+
+        this.disconnectGamepad();
+    };
+
+    /** Force a full teardown regardless of the retain count. */
+    destroy = () => {
+        this.refCount = 0;
+        this.disconnect();
+    };
+
+    private connectGamepad() {
+        if (this.gamepadListener) return;
+        // gamepad.js throws outright when the browser has no gamepad API (and happy-dom/node
+        // don't), so check before constructing it.
+        if (typeof navigator === 'undefined' || typeof navigator.getGamepads !== 'function') {
+            if (this.debug) console.warn('Commander: no gamepad API, skipping gamepad input');
+            return;
+        }
+        const listener: GamepadListenerLike = new GamepadListener();
+        listener.on('gamepad:connected', (event) => {
+            if (this.debug) console.log('gamepad connected', event);
+        });
+        listener.on('gamepad:button', this.onButtonChange);
+        listener.on('gamepad:axis', this.onAxisChange);
+        listener.start();
+        this.gamepadListener = listener;
+    }
+
+    private disconnectGamepad() {
+        const listener = this.gamepadListener;
+        if (!listener) return;
+        this.gamepadListener = null;
+        // stops the requestAnimationFrame poll loop
+        listener.stop();
+        listener.off('gamepad:button', this.onButtonChange);
+        listener.off('gamepad:axis', this.onAxisChange);
+        // gamepad.js adds a window 'error' listener in its constructor and never removes it.
+        // `stop` is bound there, so this is the same reference it registered.
+        if (typeof window !== 'undefined') window.removeEventListener('error', listener.stop);
     }
 
     // Primary Listeners ==========================
     // Gamepad Axis Events ---
-    onAxisChange = (event: any) => {
+    onAxisChange = (event: GamepadInputEvent) => {
         const { axis, value } = event.detail;
         this.commands.forEach((command) => {
-            if (command.axis.includes(axis)) {
+            if (axis !== undefined && command.axis.includes(axis)) {
                 this.isDirty = true;
                 command.handleDown(event, value);
             }
@@ -65,17 +172,17 @@ export class Commander {
     };
     // Gamepad Button Events ---
     // buttons act just like keys, just a little different when released
-    onButtonChange = (event: any) => {
+    onButtonChange = (event: GamepadInputEvent) => {
         const { button, value, pressed } = event.detail;
         // TODO: Check if this is still needed.
         /* On my xbox controller, the trigger button will send
         a value for less that 0.12 but not mark the trigger as pressed
         I initially thought it was deadzone, but that's not the case.
         the vanilla gamepad object shows the button as not pressed
-        for now we will check if it's not pressed but has a value to pass it 
+        for now we will check if it's not pressed but has a value to pass it
         as a still down event */
         this.commands.forEach((command) => {
-            if (command.buttons.includes(button)) {
+            if (button !== undefined && command.buttons.includes(button)) {
                 this.isDirty = true;
                 if (pressed || (!pressed && value !== 0)) command.handleDown(event, value);
                 else command.handleUp(event);
@@ -96,7 +203,7 @@ export class Commander {
     };
     // Mouse Events ---
     mouseEventListener = (event: MouseEvent) => {
-        const key = 'Mouse' + event.button;
+        const key = `Mouse${event.button}`;
         this.commands.forEach((command) => {
             if (command.keys.includes(key)) {
                 this.isDirty = true;
@@ -109,34 +216,34 @@ export class Commander {
 
     // Commands ========================================
 
-    addCommand = (
-        commandString: string,
-        // TODO: move this to a type
-        options?: { keys?: string[]; buttons?: string[]; asVector?: boolean }
-    ) => {
-        let { keys, buttons, asVector, ...rest } = options || {};
-        const command = asVector
-            ? new VectorCommand(commandString, this, rest)
+    addCommand = (commandString: string, options?: CommandOptions) => {
+        let { keys, buttons } = options || {};
+        const command = options?.asVector
+            ? new VectorCommand(commandString, this, options)
             : new Command(commandString);
         // check if the command is in our common list and pull the keys/buttons
-        //@ts-ignore
-        if (commonCommands[commandString]) {
-            //@ts-ignore
-            keys = keys || commonCommands[commandString].keys;
-            //@ts-ignore
-            buttons = buttons || commonCommands[commandString].buttons;
+        const common = commonCommandsByName[commandString];
+        if (common) {
+            keys = keys || common.keys;
+            buttons = buttons || common.buttons;
         }
         // if no keys or buttons are passed, default to the commandString
         command.keys = keys || [commandString];
-        //@ts-ignore
         command.buttons = buttons || [];
         if (this.debug) console.log('Adding command', commandString, command.keys, command.buttons);
         this.commands.set(commandString, command);
-        return this.getCommand(commandString);
+        return command;
     };
 
     getCommand = (commandString: string) => {
         return this.commands.get(commandString);
+    };
+
+    /** Drop every command and its listeners. */
+    clearCommands = () => {
+        this.commands.clear();
+        this.state = {};
+        this.isDirty = false;
     };
 
     // Listeners ========================================
@@ -168,14 +275,13 @@ export class Commander {
         if (this.paused) return;
         this.commands.forEach((command) => {
             if (command.active) {
-                //@ts-ignore
                 this.state[command.label] = command.value;
             }
         });
     }
 
     // return the state as a snapshot
-    getSnapsot = () => {
+    getSnapshot = (): CommandState => {
         // if this isn't dirty, return the state directly
         if (this.isDirty) {
             //update the state values
@@ -189,15 +295,17 @@ export class Commander {
         return this.state;
     };
 
+    /** @deprecated misspelled; use {@link Commander.getSnapshot} */
+    getSnapsot = (): CommandState => this.getSnapshot();
+
     // add a stateListener
-    subscribe = (callback: any) => {
+    subscribe = (callback: CommandStateListener) => {
         if (this.debug) console.log('adding state listener');
-        //@ts-ignore
         this.stateListeners.push(callback);
-        return this.unsubscribe.bind(this, callback);
+        return () => this.unsubscribe(callback);
     };
     // remove a stateListener
-    unsubscribe = (callback: any) => {
+    unsubscribe = (callback: CommandStateListener) => {
         if (this.debug) console.log('removing state listener');
         this.stateListeners = this.stateListeners.filter((listener) => listener !== callback);
     };
@@ -206,14 +314,6 @@ export class Commander {
         // dont emit if paused
         if (this.paused) return;
 
-        this.stateListeners.forEach((listener: any) => listener(this.state));
+        this.stateListeners.slice().forEach((listener) => listener(this.state));
     }
-
-    destroy = () => {
-        window.removeEventListener('keydown', this.keyEventListener);
-        window.removeEventListener('keyup', this.keyEventListener);
-        window.removeEventListener('mousedown', this.mouseEventListener);
-        window.removeEventListener('mouseup', this.mouseEventListener);
-        this.gamepadListener.stop();
-    };
 }
