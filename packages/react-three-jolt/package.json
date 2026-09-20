@@ -19,6 +19,10 @@
     "bugs": {
         "url": "https://github.com/pmndrs/react-three-jolt/issues"
     },
+    "type": "commonjs",
+    "engines": {
+        "node": ">=22"
+    },
     "main": "./dist/index.cjs",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
@@ -26,13 +30,17 @@
         ".": {
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs",
-            "require": "./dist/index.cjs"
-        }
+            "require": "./dist/index.cjs",
+            "default": "./dist/index.mjs"
+        },
+        "./package.json": "./package.json"
     },
+    "sideEffects": false,
     "files": [
         "dist/**",
         "README.md",
-        "LICENSE"
+        "LICENSE",
+        "CHANGELOG.md"
     ],
     "scripts": {
         "test": "vitest run --coverage",
@@ -41,14 +49,23 @@
         "lint": "biome check ."
     },
     "peerDependencies": {
+        "@react-three/drei": ">=11.0.0-0",
         "@react-three/fiber": ">=10.0.0-0",
+        "jolt-physics": ">=1.1.0",
         "react": ">=19.0 <19.3",
         "react-dom": ">=19.0 <19.3",
         "three": ">=0.185"
     },
+    "peerDependenciesMeta": {
+        "@react-three/drei": {
+            "optional": false
+        },
+        "jolt-physics": {
+            "optional": false
+        }
+    },
     "dependencies": {
-        "gamepad.js": "^2.1.0",
-        "jolt-physics": "^1.1.0"
+        "gamepad.js": "^2.1.0"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.14",
@@ -63,6 +80,7 @@
         "@types/three": "^0.186.0",
         "@vitest/coverage-v8": "^5.0.1",
         "happy-dom": "^20.14.5",
+        "jolt-physics": "^1.1.0",
         "react": "19.2.8",
         "react-dom": "19.2.8",
         "rollup": "^4.63.4",
