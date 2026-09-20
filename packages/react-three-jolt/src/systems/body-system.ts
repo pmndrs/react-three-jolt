@@ -13,6 +13,7 @@ import { Layer } from '../constants';
 import { Raw } from '../raw';
 import { quat, vec3 } from '../utils';
 import { BodyState } from './body-state';
+import type { ConstraintSystem } from './constraint-system';
 import {
     AutoShape,
     createMeshForShape,
@@ -62,6 +63,9 @@ export class BodySystem {
 
     standardGroupFilter = new Raw.module.GroupFilterJS();
     standardCollisionGroup = new Raw.module.CollisionGroup();
+
+    // wired up by PhysicsSystem so removeBody can tear constraints down first
+    constraintSystem?: ConstraintSystem;
 
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem) {
         // set the interfaces
@@ -193,6 +197,11 @@ export class BodySystem {
             // console.log('body already removed');
             return;
         }
+
+        // Constraints hold raw pointers to both of their bodies and jolt dereferences them
+        // while detaching, so every constraint touching this body has to go first or the
+        // next step reads freed memory. (issue #82)
+        this.constraintSystem?.removeConstraintsForBody(bodyHandle);
 
         // remove the body from the simulation
         this.bodyInterface.RemoveBody(bodyID);

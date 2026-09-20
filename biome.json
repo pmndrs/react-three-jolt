@@ -28,9 +28,6 @@
             "complexity": {
                 "noForEach": "off"
             },
-            "correctness": {
-                "noUnreachable": "warn"
-            },
             "suspicious": {
                 "noExplicitAny": "off",
                 "noDoubleEquals": "warn",
