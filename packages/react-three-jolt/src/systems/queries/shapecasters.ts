@@ -437,11 +437,15 @@ export class ShapecastHit {
         this.bodyHandle = bodyID
             ? bodyID.GetIndexAndSequenceNumber()
             : mHit.mBodyID2.GetIndexAndSequenceNumber();
+        // GetPointOnRay returns its Vec3/RVec3 BY VALUE through jolt-physics' WebIDL binder,
+        // which hands back a pointer to ONE STATIC TEMPORARY per bound function (overwritten on
+        // the next call, shared across every shapecast). Destroying it - as this did - frees
+        // memory the binder still owns and immediately reuses, corrupting the next reader.
+        // `vec3.three()` copies the components straight out, so there is nothing to free here.
+        // Same fix as RaycastHit in raycasters.ts; this sibling was missed.
         //@ts-ignore this function was added to jolt.js #155
         const joltPosition = shapecast.GetPointOnRay(mHit.mFraction);
         this.position = vec3.three(joltPosition);
-        // destroy things
-        Raw.module.destroy(joltPosition);
     }
     //* the more complex  values we set as getters and arent stored on the object
     get distance(): number {
