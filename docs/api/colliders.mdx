@@ -1,0 +1,229 @@
+---
+title: Colliders
+description: Named collider components, the args convention, and controlling a body's automatic shape with colliders.
+nav: 5
+---
+
+A `<RigidBody>` builds its collision shape from the meshes inside it. When you want the collider
+to be something other than what is drawn — a trigger volume with no mesh, a simple box standing
+in for a detailed model, several pieces making up one body — you place the colliders yourself.
+
+```tsx
+import { BallCollider, CuboidCollider, RigidBody } from '@react-three/jolt';
+
+<RigidBody colliders={false}>
+    <mesh>
+        <torusKnotGeometry args={[1, 0.35, 128, 32]} />
+        <meshStandardMaterial color="hotpink" />
+    </mesh>
+    {/* two cheap primitives instead of a 8k-triangle hull */}
+    <BallCollider args={[1.35]} />
+    <CuboidCollider args={[1.4, 0.4, 1.4]} />
+</RigidBody>;
+```
+
+Every collider is a thin wrapper over [`<Shape>`](/api/shapes#<shape>): the same descriptor
+pipeline, the same memory ownership, the same [per-sub-shape events](#events). What the wrappers
+add is a typed `args` tuple that matches `@react-three/rapier`, so the most-copied snippet in the
+r3f physics world works here unchanged.
+
+## `args` are half extents
+
+This is the one thing to hold on to. Rapier's convention — which these components follow — is
+**half** extents: `<CuboidCollider args={[0.5, 0.5, 0.5]}>` is a 1×1×1 cube, and the capsule,
+cylinder and cone take a half height. `<Shape>`'s own props keep three.js semantics (`size` is
+the full extent, `height` is the full height), and the conversion happens in the collider
+component and nowhere else.
+
+```tsx
+// the same 1 x 2 x 3 box, twice
+<CuboidCollider args={[0.5, 1, 1.5]} />
+<Shape type="box" size={[1, 2, 3]} />
+```
+
+## The components
+
+| component | `args` | shape |
+| --- | --- | --- |
+| `<CuboidCollider>` | `[hx, hy, hz]` half extents | box |
+| `<BallCollider>` | `[radius]` | sphere |
+| `<CapsuleCollider>` | `[halfHeight, radius]` | capsule — total height `halfHeight * 2 + radius * 2` |
+| `<CylinderCollider>` | `[halfHeight, radius]` | cylinder |
+| `<ConeCollider>` | `[halfHeight, radius]` | tapered cylinder with a top radius of `0` |
+| `<ConvexHullCollider>` | `[points]` | convex hull of a flat `[x, y, z, ...]` array |
+| `<TrimeshCollider>` | `[vertices, indices]` | triangle mesh — **static bodies only** |
+| `<HeightfieldCollider>` | `[samples, size, scale]` | heightfield — **static bodies only** |
+
+Jolt has no cone primitive, so `<ConeCollider>` is a `taperedCylinder` whose top radius is zero.
+That is geometrically the same thing, and it is what the pipeline already knew how to build.
+
+`<TrimeshCollider>` on a **dynamic** body is converted to a convex hull with a warning: Jolt has
+no mesh-vs-mesh collision, so a dynamic mesh body falls through the world. See
+[dynamic trimeshes](/api/shapes#trimeshes).
+
+`<HeightfieldCollider args={[samples, size, scale]}>` takes `size * size` height samples row
+major, `size` samples per edge (Jolt needs `blockSize * 2^n`, and `blockSize` defaults to 2) and
+a `[x, y, z]` scale: the distance between samples on x/z, and the height multiplier on y. To
+build one from a three.js plane instead, use [`<Heightfield>`](/api/shapes#heightfields).
+
+```tsx
+const size = 64;
+const samples = new Float32Array(size * size);
+for (let i = 0; i < samples.length; i++) samples[i] = Math.sin(i * 0.1) * 2;
+
+<RigidBody type="static">
+    <HeightfieldCollider args={[samples, size, [1, 1, 1]]} />
+</RigidBody>;
+```
+
+## Props
+
+Beyond `args`, every collider takes:
+
+| prop | type | notes |
+| --- | --- | --- |
+| `position` | `number[]` | offset **within the body**, not in the world |
+| `rotation` | `[x, y, z]` | euler radians, within the body |
+| `name` | `string` | label carried on the descriptor; comes back on a contact |
+| `userData` | `number` | 32-bit tag stamped on the shape; comes back on a contact |
+| `sensor` | `boolean` | see [sensors](#sensors) — it is a **body** property in Jolt |
+| `friction` / `restitution` | `number` | see [materials](#friction-and-restitution) — also body level |
+| `onCollisionEnter` etc. | handler | scoped to this collider, see [events](#events) |
+
+Mass and density live on the body: `<RigidBody mass={10}>`. There is no per-collider density —
+Jolt derives mass from the shape's own volume and then the body scales it.
+
+A collider's `position`/`rotation` place it inside the body. A body with one collider at the
+origin *is* that shape; anything else (an offset, or more than one collider) becomes a compound.
+
+```tsx
+<RigidBody colliders={false} position={[0, 4, 0]}>
+    {/* a dumbbell: two weights and a bar, one body */}
+    <BallCollider args={[0.5]} position={[-1.5, 0, 0]} />
+    <BallCollider args={[0.5]} position={[1.5, 0, 0]} />
+    <CylinderCollider args={[1.5, 0.15]} rotation={[0, 0, Math.PI / 2]} />
+</RigidBody>
+```
+
+## `<RigidBody colliders>`
+
+`colliders` says what to do about the meshes inside the body.
+
+| value | meaning |
+| --- | --- |
+| *omitted* | every mesh contributes an automatically detected shape (the default, unchanged) |
+| `false` | no automatic shape at all — the meshes are decoration, the colliders are the body |
+| `'cuboid'` | force a box for the meshes |
+| `'ball'` | force a sphere |
+| `'hull'` | force a convex hull |
+| `'trimesh'` | force a triangle mesh |
+
+The four names are rapier's spelling of this library's [`AutoShape`](/api/shapes#autoshape)
+values `box`, `sphere`, `convex` and `trimesh`. `<RigidBody shape="box">` still works and means
+the same thing.
+
+```tsx
+// a box collider around a detailed mesh
+<RigidBody colliders="cuboid">
+    <mesh geometry={detailed} />
+</RigidBody>
+```
+
+When a body has **both** meshes and colliders, they combine into one compound: the mesh shapes
+first, then the colliders in mount order. Use `colliders={false}` when the meshes should not
+contribute.
+
+```tsx
+// one body: the crate itself, plus a trigger volume sticking out of its lid
+<RigidBody>
+    <mesh>
+        <boxGeometry args={[2, 2, 2]} />
+    </mesh>
+    <CuboidCollider args={[0.5, 0.5, 0.5]} position={[0, 1.5, 0]} name="lid-zone" />
+</RigidBody>
+```
+
+> [!NOTE]
+> `<RigidBody colliders={false}>` with no colliders inside it creates no body at all, and warns.
+> A Jolt body cannot exist without a shape.
+
+## Sensors
+
+Jolt's sensor flag is a property of the **body** (`Body::SetIsSensor`), not of a sub-shape.
+There is no way to have one solid collider and one pass-through collider on the same body, so
+the policy is deliberately loud:
+
+- **every** collider on the body is a `sensor`, and no mesh contributes a solid shape → the body
+  is made a sensor, with a warning telling you to write `<RigidBody isSensor>` instead;
+- **a mix** → a thrown error naming the counts, rather than a body that quietly behaves like one
+  of the two.
+
+```tsx
+// the honest spelling of a trigger volume
+<RigidBody type="static" isSensor colliders={false} onSensorEnter={onEnter}>
+    <BallCollider args={[3]} />
+</RigidBody>
+```
+
+An explicit `isSensor={false}` wins over the colliders and warns about the conflict.
+
+## Friction and restitution
+
+Jolt only carries a `PhysicsMaterial` per shape for heightfields and meshes, so a box or a sphere
+has nowhere per-sub-shape to keep a friction value. `friction`/`restitution` on a collider are
+therefore applied to the whole body, with a warning. Prefer saying so directly:
+
+```tsx
+<RigidBody friction={0.9} restitution={0.2} colliders={false}>
+    <CuboidCollider args={[1, 0.1, 1]} />
+</RigidBody>
+```
+
+`<RigidBody friction>` wins when both are set. Per-surface materials do exist for heightfields —
+see [heightfield materials](/api/shapes#heightfields).
+
+## Events
+
+A collider's contact handlers fire only for contacts on **its own** sub-shape, which is the whole
+point of putting several of them on one body. They are the same handlers `<Shape>` takes, and the
+payload is the same one [`<RigidBody>`](/api/rigid-body#events) delivers.
+
+```tsx
+<RigidBody type="static" colliders={false}>
+    <CuboidCollider
+        args={[4, 0.5, 4]}
+        position={[-6, 0, 0]}
+        name="left"
+        onCollisionEnter={(event) => console.log('left half', event.other.handle)}
+    />
+    <CuboidCollider
+        args={[4, 0.5, 4]}
+        position={[6, 0, 0]}
+        name="right"
+        onCollisionEnter={(event) => console.log('right half', event.other.handle)}
+    />
+</RigidBody>
+```
+
+`event.targetSubShape` carries the `name` and `userData` of the collider that was hit, so a
+single body-level handler can do the routing instead if you prefer.
+
+## Mutable compounds
+
+A compound `<RigidBody>` builds out of its colliders is a static one: adding, removing or moving
+a collider rebuilds it. When colliders change every frame, wrap them in
+[`<Shape dynamic>`](/api/shapes#compound-shapes) and leave it as the body's only shape, so the
+`MutableCompoundShape` is edited in place instead.
+
+```tsx
+type Piece = { id: string; position: [number, number, number] };
+const pieces: Piece[] = [];
+
+<RigidBody colliders={false}>
+    <Shape dynamic>
+        {pieces.map((piece) => (
+            <CuboidCollider key={piece.id} args={[0.5, 0.5, 0.5]} position={piece.position} />
+        ))}
+    </Shape>
+</RigidBody>;
+```
