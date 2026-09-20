@@ -7,3 +7,6 @@
 node_modules
 dist
 coverage
+
+# @pmndrs/docs local build output (yarn docs / yarn docs:build)
+docs/out

@@ -1,0 +1,51 @@
+name: Build documentation and deploy to GitHub Pages
+on:
+  push:
+    branches: ['main']
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# Cancel previous run (see: https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#concurrency)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # The shared pmndrs docs generator (https://github.com/pmndrs/docs). It builds the MDX in
+    # `docs/` into a static site and uploads it as the Pages artifact. `@v4` is the major tag
+    # pmndrs/docs asks consumers to pin.
+    permissions:
+      contents: read
+      pages: write # `actions/configure-pages` enables Pages on first run
+      id-token: write
+    uses: pmndrs/docs/.github/workflows/build.yml@v4
+    with:
+      mdx: 'docs'
+      libname: 'React Three Jolt'
+      libname_short: 'r3/jolt'
+      home_redirect: '/getting-started/introduction'
+      icon: '⚡'
+      logo: '/logo.png'
+      github: 'https://github.com/pmndrs/react-three-jolt'
+      discord: 'https://discord.gg/ZZjjNvJ'
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
+    permissions:
+      pages: write # to deploy to Pages
+      id-token: write # to verify the deployment originates from an appropriate source
+
+    # Deploy to the github-pages environment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
