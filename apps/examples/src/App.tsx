@@ -19,6 +19,7 @@ import {
 import { NavLink, NavLinkProps, Route, Routes, useLocation } from 'react-router';
 import { BallBox } from './examples/BallBox';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
+import { Constraints } from './examples/Constraints';
 import { CubeHeap } from './examples/CubeHeap';
 import { FourWheelDemo } from './examples/FourWheelsWithHeightmap';
 import { HeightfieldDemo } from './examples/Heightfield';
@@ -156,6 +157,12 @@ const routes: Routes = {
         transition: false,
         background: '#141622',
         element: <BallBox />
+    },
+    Constraints: {
+        position: [0, 34, 62],
+        target: [0, 8, -8],
+        background: '#3d405b',
+        element: <Constraints />
     }
 };
 
