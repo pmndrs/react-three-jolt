@@ -1,9 +1,16 @@
 import ReactThreeTestRenderer, { act } from '@react-three/test-renderer';
 import React, { StrictMode } from 'react';
+import type * as THREE from 'three';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Command } from '../src/useCommand/Command';
 import { Commander, type CommandInfo } from '../src/useCommand/Commander';
-import { useCommand } from '../src/useCommand/index';
+import {
+    type LookCommandOptions,
+    useCommand,
+    useLookCommand,
+    VectorCommand,
+    vectorPresets
+} from '../src/useCommand/index';
 
 // The window listeners the Commander owns. Nothing else in the tree touches these.
 const COMMANDER_EVENTS = ['keydown', 'keyup', 'mousedown', 'mouseup'];
@@ -75,16 +82,19 @@ function stubAnimationFrames() {
         callbacks.delete(id);
     }) as typeof window.cancelAnimationFrame;
 
+    let clock = 0;
     return {
         pending: () => callbacks.size,
-        flush(frames = 1) {
+        /** run every scheduled frame, advancing the timestamp callbacks receive by `step` ms */
+        flush(frames = 1, step = 16) {
             for (let i = 0; i < frames; i++) {
+                clock += step;
                 const due = [...callbacks.values()];
                 callbacks.clear();
                 // r3f's own render loop lands in here too; a throw from it isn't our business
                 for (const callback of due) {
                     try {
-                        callback(i);
+                        callback(clock);
                     } catch {
                         /* ignore */
                     }
@@ -444,5 +454,474 @@ describe('Commander lifecycle', () => {
         expect(commander.isConnected).toBe(false);
         expect(commander.consumerCount).toBe(0);
         expect(listeners.count()).toBe(0);
+    });
+});
+
+describe('Commander state', () => {
+    beforeEach(() => {
+        fakeGamepads();
+    });
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    test('a command that goes inactive is cleared from the state', () => {
+        const commander = new Commander();
+        const release = commander.retain();
+        try {
+            const held = commander.addCommand('q');
+            commander.addCommand('e');
+
+            pressKey('q');
+            expect(commander.getSnapshot().q).toBe(1);
+
+            // deactivating a command used to leave its last value in the state forever
+            held.active = false;
+            pressKey('e');
+
+            const snapshot = commander.getSnapshot();
+            expect('q' in snapshot).toBe(false);
+            expect(snapshot.e).toBe(1);
+        } finally {
+            release();
+            commander.destroy();
+        }
+    });
+});
+
+describe('vectorPresets.look (#177 leftover)', () => {
+    beforeEach(() => {
+        fakeGamepads();
+    });
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    test('the look preset binds up/down to the vertical axis', () => {
+        // the preset names its vertical directions up/down, and only forward/backward used to
+        // map to `y` -- so looking up moved the *horizontal* axis
+        expect(vectorPresets.look.up.orientation).toBe(-1);
+
+        const commander = new Commander();
+        const release = commander.retain();
+        try {
+            const look = commander.addCommand('look', { asVector: true }) as VectorCommand;
+
+            pressKey('ArrowUp');
+            expect(look.value).toEqual({ x: 0, y: -1 });
+            releaseKey('ArrowUp');
+
+            pressKey('ArrowLeft');
+            expect(look.value).toEqual({ x: -1, y: 0 });
+            releaseKey('ArrowLeft');
+        } finally {
+            release();
+            commander.destroy();
+        }
+    });
+});
+
+// Touch and gamepad support for useLookCommand (#87) -------------------------
+
+type FakePad = { index: number; axes: number[]; buttons: { pressed: boolean; value: number }[] };
+
+function installPads(pads: (FakePad | null)[]) {
+    const getGamepads = vi.fn(() => pads as unknown as Gamepad[]);
+    Object.defineProperty(navigator, 'getGamepads', {
+        value: getGamepads,
+        configurable: true,
+        writable: true
+    });
+    return getGamepads;
+}
+
+function makePad(index = 0): FakePad {
+    return {
+        index,
+        axes: [0, 0, 0, 0],
+        buttons: new Array(17).fill(null).map(() => ({ pressed: false, value: 0 }))
+    };
+}
+
+/**
+ * happy-dom's PointerEvent constructor ignores `pointerType`, so build the event by hand. The
+ * hook only ever reads pointerId/pointerType/clientX/clientY.
+ */
+function pointerEvent(
+    type: string,
+    props: { pointerId: number; clientX?: number; clientY?: number; pointerType?: string }
+) {
+    const event = new Event(type, { bubbles: true });
+    Object.assign(event, {
+        pointerType: 'touch',
+        clientX: 0,
+        clientY: 0,
+        ...props
+    });
+    return event;
+}
+
+/** Spy on one element's listeners so a test can assert they are all gone again. */
+function trackElementListeners(element: HTMLElement) {
+    const attached: ListenerEntry[] = [];
+    const nativeAdd = element.addEventListener.bind(element);
+    const nativeRemove = element.removeEventListener.bind(element);
+
+    vi.spyOn(element, 'addEventListener').mockImplementation(((
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+        options?: boolean | AddEventListenerOptions
+    ) => {
+        attached.push({ type, listener });
+        return nativeAdd(type, listener, options);
+    }) as typeof element.addEventListener);
+
+    vi.spyOn(element, 'removeEventListener').mockImplementation(((
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+        options?: boolean | EventListenerOptions
+    ) => {
+        const index = attached.findIndex(
+            (entry) => entry.type === type && entry.listener === listener
+        );
+        if (index >= 0) attached.splice(index, 1);
+        return nativeRemove(type, listener, options);
+    }) as typeof element.removeEventListener);
+
+    return {
+        count: () => attached.length,
+        types: () => attached.map((entry) => entry.type)
+    };
+}
+
+describe('useLookCommand (#87)', () => {
+    let element: HTMLElement;
+    let deltas: { x: number; y: number }[];
+    let look: (vector: THREE.Vector2) => void;
+    const zoom = vi.fn();
+
+    beforeEach(() => {
+        installPads([]);
+        element = document.createElement('div');
+        document.body.appendChild(element);
+        deltas = [];
+        // the hook reuses one Vector2, so snapshot each call
+        look = (vector) => {
+            deltas.push({ x: vector.x, y: vector.y });
+        };
+    });
+    afterEach(() => {
+        element.remove();
+        zoom.mockClear();
+        vi.restoreAllMocks();
+    });
+
+    function LookConsumer({ options }: { options?: LookCommandOptions }) {
+        useLookCommand(look, zoom, options);
+        return <group />;
+    }
+
+    const touchOnly: LookCommandOptions = { mouse: false, gamepad: false };
+
+    test('a one finger drag reports the pointer delta', async () => {
+        const renderer = await ReactThreeTestRenderer.create(
+            <LookConsumer options={{ ...touchOnly, domElement: element }} />
+        );
+
+        await act(async () => {
+            element.dispatchEvent(
+                pointerEvent('pointerdown', { pointerId: 1, clientX: 10, clientY: 10 })
+            );
+            element.dispatchEvent(
+                pointerEvent('pointermove', { pointerId: 1, clientX: 15, clientY: 30 })
+            );
+            element.dispatchEvent(
+                pointerEvent('pointermove', { pointerId: 1, clientX: 15, clientY: 35 })
+            );
+        });
+
+        expect(deltas).toEqual([
+            { x: 5, y: 20 },
+            { x: 0, y: 5 }
+        ]);
+
+        // and the drag ends with the finger
+        await act(async () => {
+            element.dispatchEvent(
+                pointerEvent('pointerup', { pointerId: 1, clientX: 15, clientY: 35 })
+            );
+            element.dispatchEvent(
+                pointerEvent('pointermove', { pointerId: 1, clientX: 60, clientY: 90 })
+            );
+        });
+        expect(deltas).toHaveLength(2);
+
+        await renderer.unmount();
+    });
+
+    test('touch sensitivity and invertY scale the delta', async () => {
+        const renderer = await ReactThreeTestRenderer.create(
+            <LookConsumer
+                options={{
+                    ...touchOnly,
+                    domElement: element,
+                    invertY: true,
+                    sensitivity: { touch: 2 }
+                }}
+            />
+        );
+
+        await act(async () => {
+            element.dispatchEvent(
+                pointerEvent('pointerdown', { pointerId: 1, clientX: 0, clientY: 0 })
+            );
+            element.dispatchEvent(
+                pointerEvent('pointermove', { pointerId: 1, clientX: 3, clientY: 4 })
+            );
+        });
+        expect(deltas).toEqual([{ x: 6, y: -8 }]);
+
+        await renderer.unmount();
+    });
+
+    test('a second finger (pinch) is not a look', async () => {
+        const renderer = await ReactThreeTestRenderer.create(
+            <LookConsumer options={{ ...touchOnly, domElement: element }} />
+        );
+
+        await act(async () => {
+            element.dispatchEvent(
+                pointerEvent('pointerdown', { pointerId: 1, clientX: 0, clientY: 0 })
+            );
+            element.dispatchEvent(
+                pointerEvent('pointerdown', { pointerId: 2, clientX: 50, clientY: 50 })
+            );
+            // pinching apart moves both fingers
+            element.dispatchEvent(
+                pointerEvent('pointermove', { pointerId: 1, clientX: -20, clientY: 0 })
+            );
+            element.dispatchEvent(
+                pointerEvent('pointermove', { pointerId: 2, clientX: 70, clientY: 50 })
+            );
+        });
+        expect(deltas).toEqual([]);
+
+        await renderer.unmount();
+    });
+
+    test('a mouse pointer is ignored by the touch path', async () => {
+        const renderer = await ReactThreeTestRenderer.create(
+            <LookConsumer options={{ ...touchOnly, domElement: element }} />
+        );
+
+        await act(async () => {
+            element.dispatchEvent(
+                pointerEvent('pointerdown', {
+                    pointerId: 1,
+                    pointerType: 'mouse',
+                    clientX: 0,
+                    clientY: 0
+                })
+            );
+            element.dispatchEvent(
+                pointerEvent('pointermove', {
+                    pointerId: 1,
+                    pointerType: 'mouse',
+                    clientX: 40,
+                    clientY: 40
+                })
+            );
+        });
+        expect(deltas).toEqual([]);
+
+        await renderer.unmount();
+    });
+
+    test('the right stick is sampled per frame and scaled by the frame delta', async () => {
+        const pad = makePad();
+        installPads([pad]);
+        const frames = stubAnimationFrames();
+        try {
+            const renderer = await ReactThreeTestRenderer.create(
+                <LookConsumer
+                    options={{
+                        domElement: element,
+                        mouse: false,
+                        touch: false,
+                        gamepad: { stick: 'right' },
+                        sensitivity: { gamepad: 100 }
+                    }}
+                />
+            );
+
+            // centered sticks say nothing
+            frames.flush(2, 16);
+            expect(deltas).toEqual([]);
+
+            // right stick: axes 2 (x) and 3 (y). The left stick must not be read.
+            pad.axes[0] = 1;
+            pad.axes[1] = 1;
+            pad.axes[2] = 0.5;
+            pad.axes[3] = -0.25;
+            await act(async () => {
+                frames.flush(1, 16);
+            });
+            // 0.5 * 100 * 0.016s
+            expect(deltas).toHaveLength(1);
+            expect(deltas[0].x).toBeCloseTo(0.8, 5);
+            expect(deltas[0].y).toBeCloseTo(-0.4, 5);
+
+            // inside the deadzone the stick is treated as centered
+            deltas.length = 0;
+            pad.axes[2] = 0.1;
+            pad.axes[3] = -0.1;
+            await act(async () => {
+                frames.flush(2, 16);
+            });
+            expect(deltas).toEqual([]);
+
+            // and the loop stops with the hook
+            pad.axes[2] = 0.9;
+            await renderer.unmount();
+            deltas.length = 0;
+            frames.flush(3, 16);
+            expect(deltas).toEqual([]);
+        } finally {
+            frames.restore();
+        }
+    });
+
+    test('the left stick can be selected instead', async () => {
+        const pad = makePad();
+        installPads([pad]);
+        const frames = stubAnimationFrames();
+        try {
+            const renderer = await ReactThreeTestRenderer.create(
+                <LookConsumer
+                    options={{
+                        domElement: element,
+                        mouse: false,
+                        touch: false,
+                        gamepad: { stick: 'left', deadzone: 0.05 },
+                        sensitivity: { gamepad: 100 }
+                    }}
+                />
+            );
+            frames.flush(1, 16);
+            pad.axes[0] = 0.5;
+            await act(async () => {
+                frames.flush(1, 16);
+            });
+            expect(deltas).toHaveLength(1);
+            expect(deltas[0].x).toBeCloseTo(0.8, 5);
+
+            await renderer.unmount();
+        } finally {
+            frames.restore();
+        }
+    });
+
+    test('gamepad: false never starts a loop', async () => {
+        const pad = makePad();
+        pad.axes[2] = 1;
+        const getGamepads = installPads([pad]);
+        const frames = stubAnimationFrames();
+        try {
+            const renderer = await ReactThreeTestRenderer.create(
+                <LookConsumer options={{ ...touchOnly, domElement: element }} />
+            );
+            getGamepads.mockClear();
+            frames.flush(3, 16);
+            expect(getGamepads).not.toHaveBeenCalled();
+            expect(deltas).toEqual([]);
+            await renderer.unmount();
+        } finally {
+            frames.restore();
+        }
+    });
+
+    test('the mouse path still works and respects its sensitivity', async () => {
+        const renderer = await ReactThreeTestRenderer.create(
+            <LookConsumer
+                options={{
+                    domElement: element,
+                    touch: false,
+                    gamepad: false,
+                    sensitivity: { mouse: 0.5 }
+                }}
+            />
+        );
+
+        const move = (movementX: number, movementY: number) => {
+            const event = new Event('mousemove', { bubbles: true });
+            Object.assign(event, { movementX, movementY });
+            element.dispatchEvent(event);
+        };
+
+        // nothing while the button is up
+        await act(async () => {
+            move(10, 10);
+        });
+        expect(deltas).toEqual([]);
+
+        await act(async () => {
+            const down = new Event('mousedown', { bubbles: true });
+            Object.assign(down, { offsetX: 0, offsetY: 0 });
+            element.dispatchEvent(down);
+            move(10, -20);
+        });
+        expect(deltas).toEqual([{ x: 5, y: -10 }]);
+
+        await renderer.unmount();
+    });
+
+    test('the wheel drives the zoom handler', async () => {
+        const renderer = await ReactThreeTestRenderer.create(
+            <LookConsumer options={{ ...touchOnly, domElement: element }} />
+        );
+        await act(async () => {
+            const wheel = new Event('wheel', { bubbles: true });
+            Object.assign(wheel, { deltaY: 42 });
+            element.dispatchEvent(wheel);
+        });
+        expect(zoom).toHaveBeenCalledWith(42);
+        await renderer.unmount();
+    });
+
+    test('unmounting removes every pointer listener it added', async () => {
+        const listeners = trackElementListeners(element);
+        const previousTouchAction = element.style.touchAction;
+
+        const renderer = await ReactThreeTestRenderer.create(
+            <LookConsumer options={{ domElement: element }} />
+        );
+        expect(listeners.count()).toBeGreaterThan(0);
+        expect(listeners.types()).toEqual(
+            expect.arrayContaining([
+                'mousedown',
+                'mouseup',
+                'mousemove',
+                'wheel',
+                'pointerdown',
+                'pointermove',
+                'pointerup',
+                'pointercancel'
+            ])
+        );
+        // the browser would pan the page instead of handing us the drag
+        expect(element.style.touchAction).toBe('none');
+
+        await renderer.unmount();
+        expect(listeners.count()).toBe(0);
+        expect(element.style.touchAction).toBe(previousTouchAction);
+
+        // and a stray event afterwards reaches nobody
+        element.dispatchEvent(
+            pointerEvent('pointerdown', { pointerId: 1, clientX: 0, clientY: 0 })
+        );
+        element.dispatchEvent(
+            pointerEvent('pointermove', { pointerId: 1, clientX: 50, clientY: 50 })
+        );
+        expect(deltas).toEqual([]);
     });
 });

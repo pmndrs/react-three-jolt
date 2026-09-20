@@ -147,6 +147,13 @@ export class VectorCommand extends Command {
         return this.value;
     }
 
+    /**
+     * Which component of the vector a named direction contributes to. `move` names its vertical
+     * directions forward/backward, `look` names them up/down -- the latter used to fall through
+     * to `x`, so the whole `look` preset drove yaw with its pitch bindings.
+     */
+    private static verticalDirections = ['forward', 'backward', 'up', 'down'];
+
     // set the value of the vector based on the string direction
     setVectorFromDirection(
         direction: string,
@@ -154,7 +161,7 @@ export class VectorCommand extends Command {
         value: number,
         addative: boolean = false
     ) {
-        const targetProp = direction === 'forward' || direction === 'backward' ? 'y' : 'x';
+        const targetProp = VectorCommand.verticalDirections.includes(direction) ? 'y' : 'x';
         // drop the value to 0 if its below/above the deadzone
         if (Math.abs(value) <= this.deadzone) value = 0;
         // handle orientation and if it's inverted
