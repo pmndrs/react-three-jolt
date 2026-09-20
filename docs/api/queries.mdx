@@ -310,16 +310,14 @@ A `Raycaster`'s markers are a small ring plus a normal-indicator line, **oriente
 surface normal** (`Quaternion.setFromUnitVectors((0, 1, 0), hit.impactNormal)`) rather than
 axis-aligned to the world. A degenerate normal falls back to world up.
 
-The debug objects are **pooled per raycaster**: one shared material per drawing type, geometry
+The debug objects are **pooled per caster**: one shared material per drawing type, geometry
 reused through `setFromPoints`, and one marker group per hit index, so repeated `drawMarker()` /
 `cast()` calls update an existing group's transform instead of allocating. Markers past the
 current hit count are hidden rather than destroyed. `destroy()` and `clearDebugging()` dispose the
 pools.
 
-> [!WARNING]
-> `Shapecaster` still has the **old, unpooled** debug drawing: it allocates a geometry, a material
-> and an `Object3D` on every call, its markers are world-axis-aligned crosses, and
-> `clearDebugging()` disposes nothing. Turn shapecast debugging on for a look, not for a session.
+`Shapecaster` behaves the same way: it has the same pooled drawing and the same normal-oriented
+markers, and its `destroy()` / `clearDebugging()` dispose the pools too.
 
 ## Lifetime
 
