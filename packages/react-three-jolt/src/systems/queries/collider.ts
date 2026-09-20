@@ -187,7 +187,11 @@ export class ShapeCollider {
     //* Internal Methods ===============================
     // set the matrix for the cast
     setJoltMatrix() {
+        // `generateJoltMatrix` hands back a matrix we own. This runs per frame from the camera
+        // rig, so the one it replaced has to go or the transform leaks every frame.
+        const previous = this.centerOfMassTransform;
         this.centerOfMassTransform = generateJoltMatrix(this.position, this.rotation);
+        if (previous) Raw.module.destroy(previous);
     }
 
     //

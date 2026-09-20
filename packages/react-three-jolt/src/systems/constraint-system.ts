@@ -4,7 +4,7 @@
 import type Jolt from 'jolt-physics';
 import { Raw } from '../raw';
 // @ts-ignore
-import { quat, vec3 } from '../utils';
+import { quat, vec3, withJolt } from '../utils';
 import { BodyState, PhysicsSystem } from '.';
 
 // @ts-ignore
@@ -74,18 +74,21 @@ export class ConstraintSystem {
 
             //* Revolute/Hinge -----------------------------
             case 'revolute':
-            case 'hinge':
-                constraintSettings = new Raw.module.HingeConstraintSettings();
+            case 'hinge': {
+                const hinge = new Raw.module.HingeConstraintSettings();
+                constraintSettings = hinge;
                 // we are going to help with setting a point2 if there isnt one
                 if (options?.point1 && !options?.point2) options.point2 = options.point1;
                 // the axis is from the point. so which item its rotating on
-                constraintSettings.mHingeAxis1 = constraintSettings.mHingeAxis2 = options?.axis
-                    ? vec3.jolt(options?.axis)
-                    : new Raw.module.Vec3(1, 0, 0);
+                // these settings copy the vector they are assigned, so the temporary that
+                // `vec3.jolt` hands us (always a new object, issue #76) has to be released
+                withJolt(options?.axis ?? [1, 0, 0], (axis) => {
+                    hinge.mHingeAxis1 = hinge.mHingeAxis2 = axis;
+                });
                 // I dont know why we set the normal axis
-                constraintSettings.mNormalAxis1 = constraintSettings.mNormalAxis2 = options?.normal
-                    ? vec3.jolt(options.normal)
-                    : new Raw.module.Vec3(0, 1, 0);
+                withJolt(options?.normal ?? [0, 1, 0], (normal) => {
+                    hinge.mNormalAxis1 = hinge.mNormalAxis2 = normal;
+                });
                 // the rest of these are optional
                 // In Radians
                 if (options?.min) constraintSettings.mLimitsMin = options.min;
@@ -97,6 +100,7 @@ export class ConstraintSystem {
                 hasSpring = true;
                 hasMotor = true;
                 break;
+            }
 
             //* Slider/Prismatic ---------------------------
             case 'prismatic':

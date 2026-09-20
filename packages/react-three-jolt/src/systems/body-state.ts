@@ -11,7 +11,7 @@ import {
 } from 'three';
 import { Raw } from '../raw';
 
-import { anyVec3, quat, vec3 } from '../utils';
+import { anyVec3, joltScratch, quat, vec3 } from '../utils';
 import { type BodySystem, getThreeObjectForBody } from './body-system';
 
 // Initital body object copied from r3/rapier's state object
@@ -233,11 +233,14 @@ export class BodyState {
     }
 
     // Set the body position
-    // TODO: NOTE. This is how to correctly cleanup a Jolt Vector
+    // `SetPosition` takes an RVec3Arg and copies it, so the shared scratch vector is safe here
+    // and keeps this setter allocation free - it is driven from useFrame by user code.
     set position(position) {
-        const newPosition = vec3.rjolt(position);
-        this.bodyInterface.SetPosition(this.BodyID, newPosition, Raw.module.EActivation_Activate);
-        Raw.module.destroy(newPosition);
+        this.bodyInterface.SetPosition(
+            this.BodyID,
+            joltScratch.rvec3(position),
+            Raw.module.EActivation_Activate
+        );
     }
     // get the position of the body and wrap it in a three vector
     getPosition(asJolt?: boolean): THREE.Vector3 | Jolt.RVec3 {
@@ -248,15 +251,13 @@ export class BodyState {
         return this.getPosition() as THREE.Vector3;
     }
     // Set the body rotation
+    // `SetRotation` takes a QuatArg and copies it; shared scratch, no allocation per call.
     set rotation(rotation: THREE.Quaternion) {
-        const newQuat = quat.jolt(rotation);
         this.bodyInterface.SetRotation(
             this.BodyID,
-            // TODO: This is probably leaky
-            newQuat,
+            joltScratch.quat(rotation),
             Raw.module.EActivation_Activate
         );
-        Raw.module.destroy(newQuat);
     }
     // get the rotation of the body and wrap it in a three quaternion
     get rotation(): THREE.Quaternion {
@@ -298,6 +299,8 @@ export class BodyState {
             baseShape = existingShape.GetInnerShape();
         }
         // create the new scaled shape
+        // `vec3.jolt` always allocates, `ScaledShape` copies the scale into the shape, so this
+        // one is destroyed below.
         const joltScale = vec3.jolt(scale);
         const newShape = Raw.module.castObject(
             new Raw.module.ScaledShape(baseShape, joltScale),
@@ -326,10 +329,9 @@ export class BodyState {
         return vec3.three(this.body.GetLinearVelocity());
     }
     // set the velocity of the body
+    // `SetLinearVelocity` takes a Vec3Arg and copies it; shared scratch, no allocation per call.
     set velocity(velocity: Vector3) {
-        const newVec = vec3.jolt(velocity);
-        this.body.SetLinearVelocity(newVec);
-        Raw.module.destroy(newVec);
+        this.body.SetLinearVelocity(joltScratch.vec3(velocity));
     }
     // get the angular velocity of the body
     get angularVelocity() {
@@ -337,9 +339,7 @@ export class BodyState {
     }
     // set the angular velocity of the body
     set angularVelocity(angularVelocity: Vector3) {
-        const newVec = vec3.jolt(angularVelocity);
-        this.body.SetAngularVelocity(newVec);
-        Raw.module.destroy(newVec);
+        this.body.SetAngularVelocity(joltScratch.vec3(angularVelocity));
     }
     get color(): THREE.Color {
         // if we are a mesh, get the material color of the mesh
@@ -522,32 +522,29 @@ export class BodyState {
     }
 
     //* Force Manipulation ----------------------------------
+    // Every one of these takes its vector by value and accumulates it into the body, so the
+    // shared scratch objects are safe and these stay allocation free in the frame loop.
     // apply a force to the body
     applyForce(force: Vector3) {
-        const newVec = vec3.jolt(force);
-        this.body.AddForce(newVec);
-        Raw.module.destroy(newVec);
+        this.body.AddForce(joltScratch.vec3(force));
     }
     // apply a torque to the body
     applyTorque(torque: Vector3) {
-        const newVec = vec3.jolt(torque);
-        this.body.AddTorque(newVec);
-        Raw.module.destroy(newVec);
+        this.body.AddTorque(joltScratch.vec3(torque));
     }
     // add impulse to the body
     addImpulse(impulse: Vector3) {
-        const newVec = vec3.jolt(impulse);
-        this.body.AddImpulse(newVec);
-        Raw.module.destroy(newVec);
+        this.body.AddImpulse(joltScratch.vec3(impulse));
     }
     //move kinematic
+    // `rotation` is optional in practice; `joltScratch.quat(undefined)` is the identity rotation.
     moveKinematic(position: Vector3, rotation: THREE.Quaternion, deltaTime = 0) {
-        const newVec = vec3.rjolt(position);
-        const newQuat = rotation ? quat.jolt(rotation) : new Raw.module.Quat(0, 0, 0, 1);
-
-        this.bodyInterface.MoveKinematic(this.BodyID, newVec, newQuat, deltaTime);
-        Raw.module.destroy(newVec);
-        Raw.module.destroy(newQuat);
+        this.bodyInterface.MoveKinematic(
+            this.BodyID,
+            joltScratch.rvec3(position),
+            joltScratch.quat(rotation),
+            deltaTime
+        );
     }
 
     //* Motion Source ----------------------------------
