@@ -23,7 +23,13 @@ import {
     PayloadPool
 } from './contact-events';
 import type { Emitter } from './emitter';
-import { type CollisionTarget, EventBit, type ValidatePayload, type WorldEventMap } from './events';
+import {
+    type CollisionTarget,
+    EventBit,
+    type SubShapeRef,
+    type ValidatePayload,
+    type WorldEventMap
+} from './events';
 import {
     type AutoShape,
     checkDynamicMeshStrategy,
@@ -33,10 +39,14 @@ import {
     createShapeSettings,
     type DynamicMeshStrategy,
     describeObject,
+    descriptorForSubShape,
     generateHeightfieldShapeFromThree,
     makeDescriptorDynamicSafe,
     releaseShape,
-    ShapeSystem
+    type ShapeDescriptor,
+    ShapeSystem,
+    subShapeIndexFromId,
+    subShapeUserData
 } from './shape-system';
 
 // TYPES ========================================
@@ -58,6 +68,13 @@ export interface GenerateBodyOptions {
     group?: number;
     subGroup?: number;
     shape?: Jolt.Shape;
+    /**
+     * The description `shape` was built from. Stored on the `BodyState` so a contact's
+     * `SubShapeID` can be traced back to the descriptor child that produced it (issue #13).
+     * The `describeObject` path fills this in by itself; pass it when you hand over a
+     * ready made `shape`.
+     */
+    shapeDescriptor?: ShapeDescriptor;
     /**
      * What to do with a trimesh shape on a **dynamic** body (issue #112). Jolt cannot simulate
      * one: mesh vs mesh has no collision, so the body falls through the world and ends up with a
@@ -122,6 +139,16 @@ export class BodySystem {
     // pending actions to be called at the begining of a frame
     //todo: type these
     pendingActions: PendingAction[] = [];
+
+    /**
+     * How `createBody` hands the descriptor it described an Object3D as back to
+     * `addExistingBody`, without allocating a result object per body. The handle is checked so a
+     * caller that created a body by hand and then added a *different* one gets nothing.
+     */
+    private readonly describedShape: { descriptor?: ShapeDescriptor; handle: number } = {
+        descriptor: undefined,
+        handle: -1
+    };
 
     joltPhysicsSystem: Jolt.PhysicsSystem;
     bodyInterface: Jolt.BodyInterface;
@@ -289,7 +316,10 @@ export class BodySystem {
         // fall back to the system wide default shape when the caller didn't pick one
         if (options.shapeType === undefined && this.defaultShape !== undefined)
             options = { ...options, shapeType: this.defaultShape };
-        let settings = generateBodySettings(objectOrShape, options);
+        // #13: `generateBodySettings` is the only place that knows the descriptor an Object3D was
+        // described as. It reports it here so `addExistingBody` can keep it on the BodyState.
+        this.describedShape.descriptor = undefined;
+        let settings = generateBodySettings(objectOrShape, options, this.describedShape);
         // if there are properties in the default, merge them with settings
         if (Object.keys(this.defaultBodySettings).length > 0)
             settings = mergeBodyCreationSettings(settings, this.defaultBodySettings);
@@ -305,6 +335,7 @@ export class BodySystem {
         }
 
         const body = this.bodyInterface.CreateBody(settings);
+        this.describedShape.handle = body.GetID().GetIndexAndSequenceNumber();
         // remove the settings
         this.jolt.destroy(settings);
         if (collisionGroup) {
@@ -332,6 +363,11 @@ export class BodySystem {
         const state = new BodyState(object, body, this.joltPhysicsSystem, this, options?.index);
         // generate the handle
         const handle = body.GetID().GetIndexAndSequenceNumber();
+        // #13: what this body's shape was described as, either handed to us with the shape or
+        // recorded by the `createBody` call just above
+        state.shapeDescriptor =
+            options?.shapeDescriptor ??
+            (this.describedShape.handle === handle ? this.describedShape.descriptor : undefined);
         // Stamp the handle into Jolt's user data so the activation listener - whose second
         // argument is `inBodyUserData` - resolves a body with no wrapPointer and no lookup.
         // Jolt >=0.39 narrowed user data to 32 bit unsigned, which is exactly what
@@ -567,7 +603,28 @@ export class BodySystem {
      * refcount. Everything user facing is written to `eventQueue` and dispatched from
      * `flushEvents()` once `Step()` has returned.
      */
+    /**
+     * Turn one side's raw `SubShapeID` into the `<Shape>` (or descriptor child) that produced it
+     * - issue #13. Handed to the payload pool, which calls it only when a handler actually reads
+     * `payload.targetSubShape` / `.otherSubShape`, so an unused sub shape costs nothing.
+     *
+     * A body whose shape has no children reports Jolt's empty id; `subShapeIndexFromId` looks at
+     * the shape rather than the id to tell that apart from "child 1 of a two child compound",
+     * whose id happens to be the same word.
+     */
+    private resolveSubShape = (target: CollisionTarget, out: SubShapeRef): void => {
+        const state = target.body;
+        // an unregistered or already destroyed body: `id` is all the caller gets
+        if (!state || state.disposed) return;
+        const shape = state.body.GetShape();
+        if (!shape) return;
+        out.index = subShapeIndexFromId(shape, target.subShapeId);
+        out.userData = subShapeUserData(shape, target.subShapeId);
+        out.descriptor = descriptorForSubShape(state.shapeDescriptor, out.index);
+    };
+
     private initializeContactListeners() {
+        this.payloads.subShapeResolver = this.resolveSubShape;
         const listener = new Raw.module.ContactListenerJS();
         listener.OnContactValidate = (
             body1: number,
@@ -1015,7 +1072,9 @@ export function mergeBodyCreationSettings(
 
 export function generateBodySettings(
     object: Object3D | Jolt.Shape,
-    options: GenerateBodyOptions = {}
+    options: GenerateBodyOptions = {},
+    /** Out parameter: receives the descriptor an `Object3D` was described as (issue #13). */
+    describedShape?: { descriptor?: ShapeDescriptor }
 ): Jolt.BodyCreationSettings {
     const jolt = Raw.module;
     const isObject = object instanceof Object3D;
@@ -1110,6 +1169,7 @@ export function generateBodySettings(
             ? makeDescriptorDynamicSafe(described, meshStrategy)
             : described;
         convertedFromMesh = descriptor !== described;
+        if (describedShape) describedShape.descriptor = descriptor;
         // takes ownership of the settings (and of any sub-settings they reference) and gives us
         // a shape we hold one reference on - released below, once the BodyCreationSettings has
         // taken its own.

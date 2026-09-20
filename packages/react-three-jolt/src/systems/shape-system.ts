@@ -108,8 +108,17 @@ export interface ShapeDescriptorBase {
      * to the generated shape.
      */
     offset?: Vec3Tuple;
-    /** User data stored on the sub shape when this descriptor is added to a compound. */
+    /**
+     * A 32 bit tag stamped onto the generated shape (and onto the compound's sub shape record).
+     * A contact reports it back as `payload.targetSubShape.userData`, which is how a `<Shape>`
+     * knows which contacts are its own - issue #13.
+     */
     userData?: number;
+    /**
+     * A human readable label, carried on the descriptor only - it never reaches Jolt. Reachable
+     * from a contact as `payload.targetSubShape.descriptor?.name`.
+     */
+    name?: string;
 }
 
 export interface BoxShapeDescriptor extends ShapeDescriptorBase {
@@ -930,8 +939,20 @@ const createCompoundShapeSettings = (
  * The children of a compound and the inner shape of a decorator are ref-counted by their parent:
  * destroying the returned settings frees the whole tree, and nothing inside it may be destroyed
  * by hand.
+ *
+ * Every descriptor's `userData` is stamped onto the shape itself (issue #13). That matters
+ * because `CompoundShape::GetSubShapeUserData` recurses into the child a `SubShapeID` points at
+ * and returns the **child shape's** user data - not the `mUserData` the compound stores per
+ * sub shape record - so the shape is the only place a contact can read it back from. Both are
+ * written: the record keeps `AddShape`'s copy for anyone walking the compound by index.
  */
 export function createShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSettings {
+    const settings = buildShapeSettings(descriptor);
+    if (descriptor.userData !== undefined) settings.mUserData = descriptor.userData;
+    return settings;
+}
+
+function buildShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSettings {
     const jolt = Raw.module;
     switch (descriptor.type) {
         case 'box': {
@@ -1313,6 +1334,127 @@ export function modifySubShape(
     }
     mutable.AdjustCenterOfMass();
 }
+
+/* ============================================================================
+ * Sub shape identity (issue #13)
+ *
+ * A contact manifold names the two shapes that touched with a `SubShapeID`: a bit path from the
+ * root shape down to the leaf that was actually hit, packed into one 32 bit word from the low
+ * end, with every unused high bit set to 1. Jolt's "empty" id - what a shape with no children
+ * reports - is therefore `0xFFFFFFFF`, which reads as `-1` out of the `Int32Array` the event
+ * queue stores it in.
+ *
+ * Two things can be recovered from it:
+ *
+ *  - **user data**: `Shape::GetSubShapeUserData` walks the path and returns the leaf shape's
+ *    `mUserData`, which `createShapeSettings` stamps from the descriptor. This works at any
+ *    nesting depth and is what `<Shape>`'s scoped event props match on.
+ *  - **index**: which child of the *top level* compound the path starts at.
+ *    `CompoundShape::GetSubShapeIndexFromID` is not in the JS binding, so `subShapeIndexFromId`
+ *    redoes its arithmetic: pop `ceil(log2(numSubShapes))` bits off the low end.
+ *
+ * Note the consequence of the padding: for a two child compound, child 1's id is `0xFFFFFFFF` -
+ * the same word as the empty id. The two are only distinguishable by looking at the shape, which
+ * is why the index is resolved against the body's root shape rather than from the id alone.
+ * ========================================================================== */
+
+// One shared `SubShapeID`, same contract (and the same module-swap guard) as `joltScratch`:
+// `GetSubShapeUserData` copies what it reads, so nothing keeps a pointer to it.
+let subShapeIdModule: unknown = null;
+let subShapeIdScratch: Jolt.SubShapeID | null = null;
+const scratchSubShapeId = (value: number): Jolt.SubShapeID => {
+    if (subShapeIdModule !== Raw.module) {
+        subShapeIdModule = Raw.module;
+        subShapeIdScratch = null;
+    }
+    if (!subShapeIdScratch) subShapeIdScratch = new Raw.module.SubShapeID();
+    subShapeIdScratch.SetValue(value);
+    return subShapeIdScratch;
+};
+
+/** Jolt's "no sub shape" id, as it comes out of the event queue. */
+export const EMPTY_SUB_SHAPE_ID = -1;
+
+/**
+ * Strip the decorators (`ScaledShape`, `OffsetCenterOfMassShape`, `RotatedTranslatedShape`) that
+ * wrap a shape without contributing bits to a `SubShapeID`, so the compound underneath - if
+ * there is one - can be found. The loop is bounded because a cycle is impossible but a very
+ * deeply decorated shape is not worth walking forever.
+ */
+const undecorateShape = (shape: Jolt.Shape): Jolt.Shape => {
+    const jolt = Raw.module;
+    let current = shape;
+    for (let depth = 0; depth < 8; depth++) {
+        const subType = current.GetSubType();
+        if (
+            subType !== jolt.EShapeSubType_Scaled &&
+            subType !== jolt.EShapeSubType_OffsetCenterOfMass &&
+            subType !== jolt.EShapeSubType_RotatedTranslated
+        )
+            return current;
+        current = jolt.castObject(current, jolt.DecoratedShape).GetInnerShape();
+    }
+    return current;
+};
+
+/** True when `shape` (decorators stripped) is a compound, i.e. when it has sub shapes at all. */
+export const hasSubShapes = (shape: Jolt.Shape): boolean => {
+    const jolt = Raw.module;
+    const subType = undecorateShape(shape).GetSubType();
+    return (
+        subType === jolt.EShapeSubType_StaticCompound ||
+        subType === jolt.EShapeSubType_MutableCompound
+    );
+};
+
+/**
+ * Which child of `shape`'s top level compound a `SubShapeID` points at, or `-1` when the shape
+ * has no children (so the whole shape is the contact).
+ */
+export const subShapeIndexFromId = (shape: Jolt.Shape, subShapeId: number): number => {
+    const jolt = Raw.module;
+    const root = undecorateShape(shape);
+    const subType = root.GetSubType();
+    if (
+        subType !== jolt.EShapeSubType_StaticCompound &&
+        subType !== jolt.EShapeSubType_MutableCompound
+    )
+        return -1;
+    const count = jolt.castObject(root, jolt.CompoundShape).GetNumSubShapes();
+    if (count <= 0) return -1;
+    // `GetSubShapeIDBits()` is `32 - CountLeadingZeros(size - 1)`: just enough bits to hold the
+    // largest index. A one child compound uses none of them, so its only child is index 0.
+    const bits = count === 1 ? 0 : 32 - Math.clz32(count - 1);
+    const index = bits === 0 ? 0 : subShapeId & ((1 << bits) - 1);
+    return index < count ? index : -1;
+};
+
+/**
+ * The user data of the leaf shape a `SubShapeID` points at - `0` when nothing stamped one.
+ * Resolved against the shape at any nesting depth, not just the top level.
+ */
+export const subShapeUserData = (shape: Jolt.Shape, subShapeId: number): number =>
+    shape.GetSubShapeUserData(scratchSubShapeId(subShapeId)) >>> 0;
+
+/**
+ * The descriptor a top level sub shape index was built from, when the body kept the description
+ * it was built from (`BodyState.shapeDescriptor`). `index === -1` means the shape has no
+ * children, so the whole descriptor is the answer.
+ */
+export const descriptorForSubShape = (
+    descriptor: ShapeDescriptor | undefined,
+    index: number
+): ShapeDescriptor | undefined => {
+    if (!descriptor) return undefined;
+    let current: ShapeDescriptor = descriptor;
+    for (let depth = 0; depth < 8; depth++) {
+        if (current.type !== 'scaled' && current.type !== 'offsetCenterOfMass') break;
+        current = current.child;
+    }
+    if (current.type !== 'staticCompound' && current.type !== 'mutableCompound')
+        return index < 0 ? current : undefined;
+    return index < 0 ? undefined : current.children[index];
+};
 
 /* ============================================================================
  * Scaling (issue #40)

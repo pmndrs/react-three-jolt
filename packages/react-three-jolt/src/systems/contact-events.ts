@@ -14,7 +14,8 @@ import type {
     ActivationPayload,
     CollisionEnterPayload,
     CollisionPayload,
-    CollisionTarget
+    CollisionTarget,
+    SubShapeRef
 } from './events';
 
 /** Record kinds stored in the queue. */
@@ -373,7 +374,76 @@ const makeTarget = (): CollisionTarget => ({
     index: undefined
 });
 
-type PooledEnter = CollisionEnterPayload & { _store: Vector3[] };
+const makeSubShapeRef = (): SubShapeRef => ({
+    id: -1,
+    index: -1,
+    userData: 0,
+    descriptor: undefined
+});
+
+/**
+ * Fills a {@link SubShapeRef} from one side of a payload. `BodySystem` supplies it; it is the
+ * only thing that knows how to reach the body's shape.
+ */
+export type SubShapeResolver = (target: CollisionTarget, out: SubShapeRef) => void;
+
+/** The bookkeeping the lazy `targetSubShape` / `otherSubShape` getters run on. */
+type SubShapeSlots = {
+    /** [target, other]; reused, never reallocated. */
+    _subs: [SubShapeRef, SubShapeRef];
+    /** Whether each slot has been filled for the event currently being dispatched. */
+    _resolvedTarget: boolean;
+    _resolvedOther: boolean;
+    _resolver: SubShapeResolver | undefined;
+};
+
+type PooledEnter = CollisionEnterPayload & SubShapeSlots & { _store: Vector3[] };
+type PooledBasic = CollisionPayload & SubShapeSlots;
+
+/**
+ * Resolve one side's sub shape, once. Reading `payload.targetSubShape` is what triggers the
+ * shape walk, so a handler that does not look at it costs nothing per contact.
+ */
+function resolveSide(payload: SubShapeSlots & CollisionPayload, side: 0 | 1): SubShapeRef {
+    const out = payload._subs[side];
+    const done = side === 0 ? payload._resolvedTarget : payload._resolvedOther;
+    if (!done) {
+        if (side === 0) payload._resolvedTarget = true;
+        else payload._resolvedOther = true;
+        const from = side === 0 ? payload.target : payload.other;
+        out.id = from.subShapeId;
+        out.index = -1;
+        out.userData = 0;
+        out.descriptor = undefined;
+        payload._resolver?.(from, out);
+    }
+    return out;
+}
+
+/**
+ * Install the two lazy accessors on a payload.
+ *
+ * `Object.defineProperties` rather than a spread: spreading an object literal with getters
+ * *calls* them and copies the values, which would resolve every sub shape eagerly - exactly the
+ * cost this is here to avoid.
+ */
+const defineSubShapeAccessors = <T extends SubShapeSlots & CollisionPayload>(payload: T): T => {
+    Object.defineProperties(payload, {
+        targetSubShape: {
+            get(this: T) {
+                return resolveSide(this, 0);
+            },
+            enumerable: true
+        },
+        otherSubShape: {
+            get(this: T) {
+                return resolveSide(this, 1);
+            },
+            enumerable: true
+        }
+    });
+    return payload;
+};
 
 /**
  * Payloads are reused across events within a flush, and across flushes. Handlers must read
@@ -385,8 +455,10 @@ type PooledEnter = CollisionEnterPayload & { _store: Vector3[] };
  */
 export class PayloadPool {
     debug = false;
+    /** Set by `BodySystem`; handed to every payload it hands out. */
+    subShapeResolver?: SubShapeResolver;
     private enters: PooledEnter[] = [];
-    private basics: CollisionPayload[] = [];
+    private basics: PooledBasic[] = [];
     private activations: ActivationPayload[] = [];
     private enterIndex = 0;
     private basicIndex = 0;
@@ -400,7 +472,18 @@ export class PayloadPool {
     }
 
     acquireEnter(): PooledEnter {
-        if (this.debug) return PayloadPool.newEnter();
+        const payload = this.debug ? PayloadPool.newEnter() : this.pooledEnter();
+        this.arm(payload);
+        return payload;
+    }
+
+    acquireBasic(): PooledBasic {
+        const payload = this.debug ? PayloadPool.newBasic() : this.pooledBasic();
+        this.arm(payload);
+        return payload;
+    }
+
+    private pooledEnter(): PooledEnter {
         const index = this.enterIndex++;
         let payload = this.enters[index];
         if (!payload) {
@@ -410,8 +493,7 @@ export class PayloadPool {
         return payload;
     }
 
-    acquireBasic(): CollisionPayload {
-        if (this.debug) return PayloadPool.newBasic();
+    private pooledBasic(): PooledBasic {
         const index = this.basicIndex++;
         let payload = this.basics[index];
         if (!payload) {
@@ -419,6 +501,13 @@ export class PayloadPool {
             this.basics[index] = payload;
         }
         return payload;
+    }
+
+    /** Re-arm the lazy sub shape getters for the event about to be dispatched. */
+    private arm(payload: SubShapeSlots): void {
+        payload._resolvedTarget = false;
+        payload._resolvedOther = false;
+        payload._resolver = this.subShapeResolver;
     }
 
     acquireActivation(): ActivationPayload {
@@ -450,6 +539,16 @@ export class PayloadPool {
         if (payload.normal) payload.normal.set(Number.NaN, Number.NaN, Number.NaN);
         if (payload.penetration !== undefined) payload.penetration = Number.NaN;
         if (payload.contactCount !== undefined) payload.contactCount = Number.NaN;
+        if (payload._subs) {
+            for (const ref of payload._subs as SubShapeRef[]) {
+                ref.index = Number.NaN;
+                ref.userData = Number.NaN;
+                ref.descriptor = undefined;
+                Object.freeze(ref);
+            }
+            // freezing the payload below makes a *later* lazy resolve throw, which is the point
+            payload._resolver = undefined;
+        }
         for (const side of ['target', 'other'] as const) {
             const targetSide = payload[side];
             if (!targetSide) continue;
@@ -462,7 +561,7 @@ export class PayloadPool {
     }
 
     private static newEnter(): PooledEnter {
-        return {
+        return defineSubShapeAccessors({
             target: makeTarget(),
             other: makeTarget(),
             flipped: false,
@@ -471,16 +570,24 @@ export class PayloadPool {
             penetration: 0,
             points: [],
             pointCount: 0,
-            _store: []
-        };
+            _store: [],
+            _subs: [makeSubShapeRef(), makeSubShapeRef()],
+            _resolvedTarget: false,
+            _resolvedOther: false,
+            _resolver: undefined
+        } as unknown as PooledEnter);
     }
 
-    private static newBasic(): CollisionPayload {
-        return {
+    private static newBasic(): PooledBasic {
+        return defineSubShapeAccessors({
             target: makeTarget(),
             other: makeTarget(),
             flipped: false,
-            contactCount: 0
-        };
+            contactCount: 0,
+            _subs: [makeSubShapeRef(), makeSubShapeRef()],
+            _resolvedTarget: false,
+            _resolvedOther: false,
+            _resolver: undefined
+        } as unknown as PooledBasic);
     }
 }

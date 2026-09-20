@@ -27,10 +27,11 @@ import React, {
 } from 'react';
 import * as THREE from 'three';
 
-import { useForwardedRef, useJolt } from '../../hooks';
+import { useEventCallback, useForwardedRef, useJolt } from '../../hooks';
 import {
     type AutoShape,
     addSubShape,
+    type BodyState,
     describeShapeFromOptions,
     descriptorKey,
     generateShape,
@@ -45,6 +46,7 @@ import {
     scaleShape,
     stableKey
 } from '../../systems';
+import type { BodyEventMap, CollisionPayload } from '../../systems/events';
 import { vec3 } from '../../utils';
 import { RigidBodyContext } from '../RigidBody';
 
@@ -69,7 +71,48 @@ export interface ShapeProps extends Omit<ShapeOptions, 'children'> {
      */
     dynamic?: boolean;
     type?: AutoShape | ShapeType;
+
+    //* Sub shape identity (issue #13) --------------------
+    /**
+     * A 32 bit tag stamped onto this shape. A contact on it reports it back as
+     * `payload.targetSubShape.userData`. Leave it out and, if this `<Shape>` has any of the
+     * event props below, one is assigned automatically.
+     */
+    userData?: number;
+    /** A label carried on the descriptor, readable from `payload.targetSubShape.descriptor`. */
+    name?: string;
+
+    //* Events, scoped to this sub shape ------------------
+    // Subscribed on the parent body and filtered by sub shape, so they only fire for contacts on
+    // *this* piece of a compound. Zero cost when unused: nothing subscribes, nothing is stamped,
+    // and the body's event mask stays clear.
+    /** Something started touching this sub shape. */
+    onCollisionEnter?: BodyEventMap['collisionEnter'];
+    /** The contact on this sub shape was maintained this step. */
+    onCollisionPersist?: BodyEventMap['collisionPersist'];
+    /** The last manifold on this sub shape closed. */
+    onCollisionExit?: BodyEventMap['collisionExit'];
+    /** Something started overlapping this sub shape of a sensor body. */
+    onSensorEnter?: BodyEventMap['sensorEnter'];
+    /** Something stopped overlapping this sub shape of a sensor body. */
+    onSensorExit?: BodyEventMap['sensorExit'];
 }
+
+/**
+ * Auto assigned sub shape tags live at the top of the 32 bit range, well clear of the small
+ * numbers an application is likely to pick for its own `userData`.
+ */
+const AUTO_USER_DATA_BASE = 0x40000000;
+let autoUserDataCounter = 0;
+const nextAutoUserData = () => AUTO_USER_DATA_BASE + (autoUserDataCounter++ % 0x3fffffff);
+
+/** The contact events a `<Shape>` can scope to itself. */
+type ShapeEvent =
+    | 'collisionEnter'
+    | 'collisionPersist'
+    | 'collisionExit'
+    | 'sensorEnter'
+    | 'sensorExit';
 
 /** What a `<Shape>` ref exposes: the description it built and the shape it owns. */
 export type ShapeHandle = {
@@ -87,6 +130,40 @@ export interface ShapeContext {
     removeShape: (index: number) => void;
 }
 export const ShapeContext = createContext<ShapeContext | undefined>(undefined!);
+
+/**
+ * Subscribe one of the body's contact events but only let through the ones whose sub shape
+ * carries `userData` - issue #13.
+ *
+ * The filter is read through a ref and `payload.targetSubShape` is only touched once a handler
+ * is attached, so an unused prop subscribes nothing and a contact on a body whose shapes have
+ * no handlers never walks a shape.
+ *
+ * `scoped` is false for a root `<Shape>` that is itself the compound: Jolt resolves
+ * `GetSubShapeUserData` down to the *leaf* that was hit, so a compound's own tag is never what
+ * a contact reports. Such a shape is the whole body, so its handlers are the body's.
+ */
+function useSubShapeEvent(
+    body: BodyState | undefined,
+    type: ShapeEvent,
+    handler: BodyEventMap[ShapeEvent] | undefined,
+    userData: number | undefined,
+    scoped: () => boolean
+): void {
+    const callback = useEventCallback(handler);
+    const enabled = handler !== undefined;
+    const filter = useRef({ userData, scoped });
+    filter.current = { userData, scoped };
+    useEffect(() => {
+        if (!body || !enabled) return;
+        return body.on(type, ((payload: CollisionPayload) => {
+            const { userData: wanted, scoped: isScoped } = filter.current;
+            if (wanted !== undefined && isScoped() && payload.targetSubShape.userData !== wanted)
+                return;
+            (callback as (p: CollisionPayload) => void)(payload);
+        }) as BodyEventMap[ShapeEvent]);
+    }, [body, enabled, type, callback]);
+}
 
 /**
  * Identity of everything that defines the shape itself. Geometries and objects are identified by
@@ -110,6 +187,13 @@ export const Shape: React.FC<ShapeProps> = memo(
             position = [0, 0, 0],
             rotation = [0, 0, 0],
             scale,
+            userData,
+            name,
+            onCollisionEnter,
+            onCollisionPersist,
+            onCollisionExit,
+            onSensorEnter,
+            onSensorExit,
             ...options
         } = props;
 
@@ -197,6 +281,21 @@ export const Shape: React.FC<ShapeProps> = memo(
         const dynamicRef = useRef(dynamic);
         dynamicRef.current = dynamic;
 
+        // #13: the tag a contact on this sub shape reports back. An explicit `userData` wins; a
+        // <Shape> that only asked for events gets an auto assigned one, once, for its lifetime.
+        const wantsEvents =
+            onCollisionEnter !== undefined ||
+            onCollisionPersist !== undefined ||
+            onCollisionExit !== undefined ||
+            onSensorEnter !== undefined ||
+            onSensorExit !== undefined;
+        const autoUserData = useRef<number | undefined>(undefined);
+        if (userData === undefined && wantsEvents && autoUserData.current === undefined)
+            autoUserData.current = nextAutoUserData();
+        const shapeUserData = userData ?? autoUserData.current;
+        const identityRef = useRef({ userData: shapeUserData, name });
+        identityRef.current = { userData: shapeUserData, name };
+
         /** The full description of this node: a compound when it has children, a leaf otherwise. */
         const composeDescriptor = useCallback((): ShapeDescriptor => {
             const childDescriptors = subShapes.current.filter(Boolean) as ShapeDescriptor[];
@@ -208,7 +307,11 @@ export const Shape: React.FC<ShapeProps> = memo(
                   }
                 : localDescriptorRef.current;
             const { position, rotation } = transformRef.current;
-            return { ...base, position, rotation };
+            const { userData, name } = identityRef.current;
+            const described: ShapeDescriptor = { ...base, position, rotation };
+            if (userData !== undefined) described.userData = userData;
+            if (name !== undefined) described.name = name;
+            return described;
         }, []);
 
         const resolveDescriptor = useCallback(
@@ -216,7 +319,7 @@ export const Shape: React.FC<ShapeProps> = memo(
             // biome-ignore lint/correctness/useExhaustiveDependencies: this wrapper exists only
             // to change identity when the content behind `composeDescriptor`'s refs changes, so
             // the effects below re-run - `subShapeVersion` is how a child change reaches us
-            [composeDescriptor, localDescriptor, transform, subShapeVersion]
+            [composeDescriptor, localDescriptor, transform, subShapeVersion, shapeUserData, name]
         );
 
         //* Compound children ---------------------------------
@@ -411,6 +514,29 @@ export const Shape: React.FC<ShapeProps> = memo(
             // if we are the top level shape, we need to set the active shape
             rigidBody?.setActiveShape(shape);
         }, [shape, parentShape, rigidBody]);
+
+        // #13: the body keeps the description its shape was built from, so a contact's
+        // `SubShapeID` can be mapped back to a descriptor child. Only the root <Shape> knows the
+        // whole tree, and only it talks to the body.
+        const body = rigidBody?.body;
+        useEffect(() => {
+            if (parentShape || !body) return;
+            body.shapeDescriptor = resolveDescriptor();
+        }, [parentShape, body, resolveDescriptor]);
+
+        //* Scoped events -------------------------------------
+        // A root <Shape> that is itself the compound cannot be matched by user data (Jolt
+        // resolves a contact down to the leaf), but it *is* the whole body, so its handlers
+        // simply are the body's. Read through a callback so this stays right as children mount.
+        const isScoped = useCallback(
+            () => parentShapeRef.current !== undefined || !subShapes.current.some(Boolean),
+            []
+        );
+        useSubShapeEvent(body, 'collisionEnter', onCollisionEnter, shapeUserData, isScoped);
+        useSubShapeEvent(body, 'collisionPersist', onCollisionPersist, shapeUserData, isScoped);
+        useSubShapeEvent(body, 'collisionExit', onCollisionExit, shapeUserData, isScoped);
+        useSubShapeEvent(body, 'sensorEnter', onSensorEnter, shapeUserData, isScoped);
+        useSubShapeEvent(body, 'sensorExit', onSensorExit, shapeUserData, isScoped);
 
         // A stable context value matters: a child's registration effect depends on it, so a new
         // object every render would have the child re-register, bump our version state, re-render
