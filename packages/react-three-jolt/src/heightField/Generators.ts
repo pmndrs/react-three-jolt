@@ -1,14 +1,20 @@
 import * as THREE from 'three';
 
+// three types Texture.image as its (unknown by default) TImage generic since r175, so the
+// drawable image of a plain THREE.Texture has to be narrowed at the use site.
+type DrawableImage = CanvasImageSource & { width: number; height: number };
+const drawableImage = (texture: THREE.Texture): DrawableImage => texture.image as DrawableImage;
+
 // Take in a three texture, make a new canvas, and scene, and draw the texture to the canvas
 // then return the canvas
 export function textureToCanvas(texture: THREE.Texture) {
+    const image = drawableImage(texture);
     const canvas = document.createElement('canvas');
-    canvas.width = texture.image.width;
-    canvas.height = texture.image.height;
+    canvas.width = image.width;
+    canvas.height = image.height;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('No context');
-    context.drawImage(texture.image, 0, 0);
+    context.drawImage(image, 0, 0);
     return canvas;
 }
 
@@ -40,8 +46,7 @@ export async function imageUrlToImageData(url: string, scalingFactor?: number): 
 
 export function textureToImageData(texture: THREE.Texture): ImageData {
     const canvas = document.createElement('canvas');
-    const width = texture.image.width;
-    const height = texture.image.height;
+    const { width, height } = drawableImage(texture);
     canvas.width = width;
     canvas.height = height;
 

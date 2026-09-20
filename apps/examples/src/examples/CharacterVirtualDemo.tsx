@@ -3,7 +3,7 @@ import { Floor } from "@react-three/jolt-addons";
 import { CharacterController, CameraRig } from "@react-three/jolt-controllers";
 //helpers for example
 import { BoundBoxes } from "./BoundBoxes";
-import InitJolt from "../jolt/Distribution/jolt-physics.wasm-compat";
+import InitJolt from "jolt-physics";
 import { Arch } from "./Bodies/Arch";
 import { Tunnel } from "./Bodies/Tunnel";
 import { Teleport } from "./Bodies/Teleport";

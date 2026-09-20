@@ -27,7 +27,7 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
         const { children, count = 150, color = '#D9594C', position, rotation } = props;
         // I put one in the ref to appease typescript
         const holderMeshRef = useRef<THREE.Mesh>(new THREE.Mesh());
-        const instancedMeshRef: any = useRef();
+        const instancedMeshRef: any = useRef(undefined);
         const parentRef = useRef<THREE.Object3D>(null);
         // Jolt body to be replicated for the instances
         //@ts-ignore

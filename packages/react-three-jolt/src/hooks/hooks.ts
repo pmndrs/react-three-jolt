@@ -15,7 +15,7 @@ export const useJolt = () => {
 // this is the r3/rapier version but you can find it here:
 //https://github.com/microsoft/fluentui/blob/master/packages/react-hooks/src/useConst.ts
 export function useConst<T>(initialValue: T | (() => T)): T {
-    const ref = useRef<{ value: T }>();
+    const ref = useRef<{ value: T } | undefined>(undefined);
     if (ref.current === undefined) {
         ref.current = {
             value: typeof initialValue === 'function' ? (initialValue as Function)() : initialValue
@@ -63,7 +63,6 @@ export const useSetTimeout = (): UseSetTimeoutReturnType => {
     useEffect(
         () => () => {
             for (const id of Object.keys(timeoutIds)) {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 clearTimeout(id as any);
             }
         },
@@ -104,7 +103,6 @@ export const useSetInterval = (): UseSetIntervalReturnType => {
     useEffect(
         () => () => {
             for (const id of Object.keys(intervalIds)) {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 clearInterval(id as any);
             }
         },

@@ -224,7 +224,7 @@ export class BodySystem {
 		const planeWidth = planeMesh.geometry.parameters.width;
 		const scale = planeWidth / size;
 		const offset = -size * scale * 0.5;
-		const position = new Raw.module.Vec3(
+		const position = new Raw.module.RVec3(
 			offset + planeMesh.position.x,
 			planeMesh.position.y,
 			planeMesh.position.z + offset
@@ -591,7 +591,8 @@ export function generateBodySettings(
 		);
 	}
 	// reset the items to jolt types
-	position = vec3.threeToJolt(position);
+	// BodyCreationSettings takes an RVec3 world space position in jolt-physics >=1.0
+	position = vec3.rjolt(position);
 	quaternion = quat.threeToJolt(quaternion);
 
 	// type bases on bodyType (Dynamic by default)
