@@ -63,7 +63,6 @@ export const useSetTimeout = (): UseSetTimeoutReturnType => {
     useEffect(
         () => () => {
             for (const id of Object.keys(timeoutIds)) {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 clearTimeout(id as any);
             }
         },
@@ -104,7 +103,6 @@ export const useSetInterval = (): UseSetIntervalReturnType => {
     useEffect(
         () => () => {
             for (const id of Object.keys(intervalIds)) {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 clearInterval(id as any);
             }
         },
