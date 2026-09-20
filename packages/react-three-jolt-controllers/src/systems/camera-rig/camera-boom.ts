@@ -14,6 +14,7 @@ import {
     type ShapecastHit,
     vec3
 } from '@react-three/jolt';
+import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 
 /**
@@ -61,7 +62,26 @@ export interface CameraBoomOptions {
      * `pitch` or `yaw` still wins.
      */
     camera?: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+
+    //* Whiskers (issue #92) ------------------------------
+    /** Cast side whiskers each step and steer the boom around obstructions. @default false */
+    whiskers?: boolean;
+    /** How many whiskers are cast, fanned evenly across the spread. @default 5 */
+    whiskerCount?: number;
+    /** Half angle of the whisker fan either side of the boom, in radians. @default 60 degrees */
+    whiskerSpread?: number;
+    /** How far each whisker reaches, in metres. @default 3 */
+    whiskerLength?: number;
+    /** Peak yaw rate a fully buried whisker asks for, in radians per second. @default 2 */
+    whiskerStrength?: number;
+    /** How fast the steering rate catches up to the whiskers, 0..1. Lower is smoother. @default 0.2 */
+    whiskerDamping?: number;
 }
+
+/** A jolt collector only ever configured as `closest`, so `mHit` is always the one hit. */
+type ClosestRayCollector = Jolt.CastRayClosestHitCollisionCollector;
+
+const clamp01 = (value: number) => (value < 0 ? 0 : value > 1 ? 1 : value);
 
 export class CameraBoom {
     physicsSystem: PhysicsSystem;
@@ -124,6 +144,35 @@ export class CameraBoom {
     cameraSpace = new THREE.Object3D();
     lookVector = new THREE.Vector2(0, 0);
 
+    //* Whiskers (issue #92) ==========================================
+    /** cast side whiskers each step and steer the boom away from what they touch */
+    useWhiskers = false;
+    whiskerCount = 5;
+    whiskerSpread = THREE.MathUtils.degToRad(60);
+    whiskerLength = 3;
+    whiskerStrength = 2;
+    whiskerDamping = 0.2;
+    /** true while at least one whisker is touching something */
+    isWhiskerSteering = false;
+    /** current whisker driven yaw rate, radians per second */
+    whiskerYawVelocity = 0;
+
+    /**
+     * Dedicated closest-hit raycaster for the whiskers, built the first time whiskers are turned
+     * on and kept (and freed in `destroy()`) for the boom's lifetime: a `Raycaster` is roughly
+     * seven wasm allocations, so it is not something to build per frame.
+     */
+    private whiskerCaster?: Raycaster;
+    // The fan is precomputed: the angle for the sign of the steer, sin/cos to rotate the boom
+    // direction about the up axis without any trig - or any allocation - in the step.
+    private whiskerAngles: number[] = [];
+    private whiskerSin: number[] = [];
+    private whiskerCos: number[] = [];
+    // scratch vectors so `updateWhiskers` never allocates
+    private readonly whiskerOrigin = new THREE.Vector3();
+    private readonly whiskerBoom = new THREE.Vector3();
+    private readonly whiskerDirection = new THREE.Vector3();
+
     /** radius currently realised in `collider.shape`, so setOptions can skip a no-op rebuild */
     private colliderRadius?: number;
 
@@ -160,9 +209,12 @@ export class CameraBoom {
         this.raycaster?.destroy();
         this.shapecaster?.destroy();
         this.collider?.destroy();
+        // a fourth set of filters/collector/ray, but only if whiskers were ever switched on
+        this.whiskerCaster?.destroy();
         this.raycaster = undefined as unknown as Raycaster;
         this.shapecaster = undefined as unknown as Shapecaster;
         this.collider = undefined as unknown as ShapeCollider;
+        this.whiskerCaster = undefined;
 
         // detach the camera (and anything else parented to the boom) from the rig
         if (this.activeCamera) this.cameraSpace.remove(this.activeCamera);
@@ -276,6 +328,22 @@ export class CameraBoom {
         if (options.updateMode !== undefined) this.updateMode = options.updateMode;
         if (options.target !== undefined) this.target.copy(vec3.three(options.target));
 
+        // whiskers (issue #92) ------------------------------------------
+        const fanChanged =
+            (options.whiskerCount !== undefined && options.whiskerCount !== this.whiskerCount) ||
+            (options.whiskerSpread !== undefined && options.whiskerSpread !== this.whiskerSpread);
+        if (options.whiskerCount !== undefined)
+            this.whiskerCount = Math.max(1, Math.floor(options.whiskerCount));
+        if (options.whiskerSpread !== undefined) this.whiskerSpread = options.whiskerSpread;
+        if (options.whiskerLength !== undefined) this.whiskerLength = options.whiskerLength;
+        if (options.whiskerStrength !== undefined) this.whiskerStrength = options.whiskerStrength;
+        if (options.whiskerDamping !== undefined) this.whiskerDamping = options.whiskerDamping;
+        if (options.whiskers !== undefined) this.useWhiskers = options.whiskers;
+        if (fanChanged) this.rebuildWhiskers();
+        // the raycaster is only built once someone actually asks for whiskers
+        if (this.useWhiskers) this.ensureWhiskerCaster();
+        else this.whiskerYawVelocity = 0;
+
         // collision radius ----------------------------------------------
         if (options.collisionRadius !== undefined) this.setCollisionRadius(options.collisionRadius);
 
@@ -376,11 +444,13 @@ export class CameraBoom {
     }
 
     // handle the frame update call from a rig
-    handleFrameUpdate(_deltaTime = 1 / 60) {
+    handleFrameUpdate(deltaTime = 1 / 60) {
         // handle additive mode (gamepad and joystick controls)
         // TODO  do additive mode
         // do the obstruction test
         if (this.destroyed || !this.activeCamera) return;
+        // whiskers steer the yaw; the tests below only ever change the boom's length
+        if (this.useWhiskers) this.updateWhiskers(deltaTime);
         if (!this.allowCameraClipping) {
             // these are tested individually because they both can activate shapecasting
             if (!this.isShapecasting) this.doCollisionTest();
@@ -406,6 +476,108 @@ export class CameraBoom {
             }
             if (this.updateMode === 'demand') this.handleZoomUpdate();
         }
+    }
+
+    //* Whiskers (issue #92) ========================================
+    /**
+     * Fan short rays out either side of the boom and rotate the yaw away from whatever they
+     * touch, so the camera slides around a corner instead of snapping in once the wall is
+     * already between it and the player. This is the "ray base whiskers" trick from the issue;
+     * the boom's existing shapecast still handles the case where it has to pull in.
+     *
+     * Allocation free, in wasm and in JS: the fan's sin/cos are precomputed, the vectors are
+     * reused, and each cast writes straight into the raycaster's own `RRayCast` and reads the
+     * hit fraction back off its collector rather than building a `RaycastHit` per whisker per
+     * frame.
+     */
+    private updateWhiskers(deltaTime: number) {
+        const caster = this.whiskerCaster;
+        if (!caster || this.whiskerSin.length === 0) return;
+
+        // the physics pre-step runs before three walks the graph, so the matrix may be stale
+        this.pivot.updateWorldMatrix(true, false);
+        const elements = this.pivot.matrixWorld.elements;
+        this.whiskerOrigin.set(elements[12], elements[13], elements[14]).add(this.target);
+        // the boom runs down the pivot's +Z; flatten it onto the ground plane so the whiskers
+        // sweep horizontally no matter how far down the camera happens to be pitched
+        this.whiskerBoom.set(elements[8], 0, elements[10]);
+        const lengthSq = this.whiskerBoom.lengthSq();
+        // a perfectly vertical boom has no horizontal direction to steer along
+        if (lengthSq < 1e-8) return;
+        this.whiskerBoom.multiplyScalar(1 / Math.sqrt(lengthSq));
+
+        let push = 0;
+        let hits = 0;
+        for (let i = 0; i < this.whiskerSin.length; i++) {
+            const sin = this.whiskerSin[i];
+            const cos = this.whiskerCos[i];
+            // rotate the boom direction by this whisker's angle about the up axis
+            this.whiskerDirection.set(
+                this.whiskerBoom.x * cos + this.whiskerBoom.z * sin,
+                0,
+                -this.whiskerBoom.x * sin + this.whiskerBoom.z * cos
+            );
+            const fraction = this.castWhisker(this.whiskerDirection);
+            if (fraction < 0) continue;
+            hits++;
+            // a whisker buried to the hilt (fraction 0) steers hard, one grazing its tip barely
+            // at all, and the centre whisker (angle 0) has no side to steer towards
+            push -= Math.sign(this.whiskerAngles[i]) * (1 - fraction);
+        }
+        this.isWhiskerSteering = hits > 0;
+
+        // spring toward the rate the whiskers are asking for and let it damp back to zero once
+        // they come clear, so the camera eases around the corner instead of snapping
+        const desired = (push / this.whiskerSin.length) * this.whiskerStrength;
+        this.whiskerYawVelocity +=
+            (desired - this.whiskerYawVelocity) * clamp01(this.whiskerDamping);
+        if (Math.abs(this.whiskerYawVelocity) < 1e-6) {
+            this.whiskerYawVelocity = 0;
+            return;
+        }
+        this.pivot.rotation.y += this.whiskerYawVelocity * deltaTime;
+    }
+
+    /** Cast one whisker. Returns the hit fraction along the whisker, or -1 for a clean sweep. */
+    private castWhisker(direction: THREE.Vector3): number {
+        const caster = this.whiskerCaster;
+        if (!caster || !caster.active) return -1;
+        const ray = caster.ray;
+        ray.mOrigin.Set(this.whiskerOrigin.x, this.whiskerOrigin.y, this.whiskerOrigin.z);
+        // jolt takes the ray as origin + direction, where the direction carries the length
+        ray.mDirection.Set(
+            direction.x * this.whiskerLength,
+            direction.y * this.whiskerLength,
+            direction.z * this.whiskerLength
+        );
+        const collector = caster.collector as ClosestRayCollector;
+        // every collector keeps its hit and its early-out fraction between casts (issue #60)
+        collector.Reset();
+        caster.rawCast();
+        return collector.HadHit() ? collector.mHit.mFraction : -1;
+    }
+
+    private ensureWhiskerCaster() {
+        if (this.destroyed || this.whiskerCaster) return;
+        // closest hit is all a whisker needs: it only asks "how far until something".
+        this.whiskerCaster = this.physicsSystem.getRaycaster();
+        if (this.whiskerSin.length === 0) this.rebuildWhiskers();
+    }
+
+    private rebuildWhiskers() {
+        const count = Math.max(1, Math.floor(this.whiskerCount));
+        this.whiskerAngles.length = 0;
+        this.whiskerSin.length = 0;
+        this.whiskerCos.length = 0;
+        for (let i = 0; i < count; i++) {
+            // -1..1 across the fan, so the middle whisker of an odd count runs down the boom
+            const t = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
+            const angle = t * this.whiskerSpread;
+            this.whiskerAngles.push(angle);
+            this.whiskerSin.push(Math.sin(angle));
+            this.whiskerCos.push(Math.cos(angle));
+        }
+        this.whiskerYawVelocity = 0;
     }
 
     //* Collision detection ========================================
