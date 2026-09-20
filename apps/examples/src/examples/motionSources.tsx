@@ -11,6 +11,7 @@ import { Floor } from '@react-three/jolt-addons';
 import { useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 
 // because im lazy
 const dtr = (degree: number) => THREE.MathUtils.degToRad(degree);
@@ -18,7 +19,7 @@ const dtr = (degree: number) => THREE.MathUtils.degToRad(degree);
 // we have to wrap the demo so we can provide the physics component
 
 export function MotionSources() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
 
     // Reset the restitution
     // body settings so shapes dont bounce
@@ -27,6 +28,7 @@ export function MotionSources() {
     };
     return (
         <Physics
+            module={module}
             paused={paused}
             key={physicsKey}
             interpolate={interpolate}
@@ -34,6 +36,7 @@ export function MotionSources() {
             gravity={22}
             defaultBodySettings={defaultBodySettings}
         >
+            <JoltMemoryRegistrar />
             <Inner />
         </Physics>
     );

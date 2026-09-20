@@ -106,7 +106,87 @@ const defaultBodySettings = { mRestitution: 0.5 });
 </Physics>
 ```
 
+#### `module`:
+
+The jolt-physics WASM module to initialise, instead of the bundled default (`jolt-physics`, i.e. its `wasm-compat` build). Pass the **default export of a jolt-physics entrypoint** - not a string path:
+
+```tsx
+import InitJoltWasm from 'jolt-physics/wasm';
+
+<Physics module={InitJoltWasm}>...</Physics>;
+```
+
+Only the *first* `<Physics>` mounted in your app actually decides the module - see [Choosing a jolt-physics build](#choosing-a-jolt-physics-build) below for the full list of entrypoints, what each one costs, and the bundler setup `/wasm` needs. Every `<Physics>` after that should either omit `module` or pass that exact same factory reference; passing a *different* one while a world is already running does nothing but log a `devWarn` (enable it with `setDebug(true)`) and keeps the module that's already active - there is no way to migrate a live world's bodies, shapes and constraints to a different WASM heap. Swap modules before the first `<Physics>` mounts, or after every `<Physics>` has unmounted, not while one is running.
+
 // TODO: all the rapier like props
+
+---
+
+## Choosing a jolt-physics build
+
+jolt-physics 1.1.0 ships several prebuilt WASM variants as separate entrypoints. `<Physics>` (via `initJolt`, see `raw.ts`) uses the default export of `jolt-physics` (`wasm-compat`) unless you pass a different one through the `module` prop:
+
+| Entrypoint | What it is | Notes |
+| --- | --- | --- |
+| `jolt-physics` / `jolt-physics/wasm-compat` | **Default.** WASM embedded as base64 inside the JS. | Zero config - works everywhere (Vite, Next/webpack, plain `<script>`), at the cost of a larger download (~3.5MB, see issue #22) and worse compression than a real binary. |
+| `jolt-physics/wasm` | Same engine, WASM shipped as its own `.wasm` file. | Smaller download (~1.79MB per issue #22) and better gzip, but needs `locateFile` and a bundler that can hand you a URL for the `.wasm` asset - see below. |
+| `jolt-physics/debug-wasm-compat` | `wasm-compat` built with asserts and Jolt's debug renderer on. | Bigger and slower; use it while chasing bugs/leaks, not in production. See [Memory profiling](#memory-profiling-issue-54) below. |
+| `jolt-physics/asm` | asm.js fallback, no WASM at all. | For environments that can't run WASM. Much slower. |
+| `jolt-physics/wasm-multithread`, `/wasm-compat-multithread`, `/debug-wasm-compat-multithread` | Multithreaded builds (need cross-origin isolation: `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`, since they use `SharedArrayBuffer`). | Not exercised by this repo's examples app; wire up the headers on your host before trying one. |
+
+`apps/examples` has a working switcher between `wasm-compat` (default), `wasm` and `debug-wasm-compat` - a leva control (top right, "Jolt Module") backed by a `?jolt=` query param, in `apps/examples/src/joltModules.ts` and `apps/examples/src/App.tsx`. Since a running Physics world can't be moved to a different module (see the `module` prop docs above), picking a variant there reloads the page rather than hot-swapping.
+
+### `/wasm` with Vite
+
+`/wasm`'s `.wasm` is a separate file, so something has to tell jolt-physics where to fetch it from. Emscripten's hook for that is `locateFile`, and Vite's `?url` import suffix gives you the URL to hand it:
+
+```ts
+import InitJoltWasm from 'jolt-physics/wasm';
+// jolt-physics.wasm.wasm is exported by the package itself (see its package.json "exports"),
+// so this resolves without knowing where node_modules physically lives.
+import wasmUrl from 'jolt-physics/jolt-physics.wasm.wasm?url';
+
+const jolt = await InitJoltWasm({
+    locateFile: (path) => (path.endsWith('.wasm') ? wasmUrl : path)
+});
+```
+
+`apps/examples/src/joltModules.ts` does exactly this. Two things worth knowing:
+
+- Vite's dependency pre-bundler and its production bundler (rolldown, as of Vite 8) both notice jolt-physics's `await import("node:module")` (a Node-only code path, guarded at runtime and never actually taken in a browser build - it's how `wasm-compat`/`debug-wasm-compat` find `createRequire` under Node) and print `Module "node:module" has been externalized for browser compatibility`. It's harmless but noisy on every dev start and build. `apps/examples/vite.config.ts` silences it two ways: `resolve.alias` maps `node:module` to a tiny local no-op stub (`src/shims/node-module-shim.ts`) so the resolver never treats it as a real Node builtin being pulled into client code, and `optimizeDeps.exclude: ['jolt-physics']` does the equivalent for the dev-server's separate esbuild pre-bundling pass. Copy both into your own `vite.config.ts` if you see the same warning.
+- `yarn build` in `apps/examples` emits `jolt-physics.wasm.wasm` as its own hashed asset in `dist/assets/` whenever anything imports it with `?url` (which `joltModules.ts` always does, regardless of which variant ends up selected) - confirmed against jolt-physics 1.1.0 built with Vite 8/rolldown. The dev server serves the same file from `node_modules` directly (`/@fs/.../jolt-physics.wasm.wasm`, `content-type: application/wasm`).
+
+### `/wasm` with Next.js / webpack
+
+See issue #111 for the full writeup (Turbopack needs no config at all as of Next 16). For the legacy webpack bundler specifically, jolt-physics's `await import("node:module")` breaks `next build --webpack` / `next dev --webpack` with `UnhandledSchemeError: Reading from "node:module" is not handled by plugins`. Verified fix, in `next.config.ts`:
+
+```ts
+webpack: (config, { isServer, webpack }) => {
+    if (!isServer) {
+        config.plugins.push(
+            new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {
+                resource.request = resource.request.replace(/^node:/, '');
+            })
+        );
+        config.resolve.fallback = {
+            ...config.resolve.fallback,
+            module: false,
+            fs: false,
+            path: false,
+            url: false
+        };
+    }
+    return config;
+}
+```
+
+No `experiments.asyncWebAssembly` flag is needed for `/wasm` - the `.wasm` is fetched at runtime (`locateFile`), not statically imported. For `/wasm`'s own asset, use webpack's asset modules (`import wasmUrl from 'jolt-physics/jolt-physics.wasm.wasm'` typically resolves as a URL under webpack 5's `asset/resource` handling; add an explicit rule if your config doesn't already cover `.wasm` this way) and pass it to `locateFile` exactly as in the Vite recipe above.
+
+### Memory profiling (issue #54)
+
+`jolt-physics/debug-wasm-compat`'s `JoltInterface` exposes `sGetTotalMemory()` / `sGetFreeMemory()` - despite the `.d.ts` listing them without a `static` modifier (the `s` prefix is Jolt's own C++ static-method convention, not TypeScript's), they're bound as **instance** methods: call them on any live `Jolt.JoltInterface` (e.g. `useJolt().joltInterface`), not on the `Jolt` module or the `JoltInterface` class itself. Verified at runtime against jolt-physics 1.1.0 - and, for what it's worth, they work identically on `wasm-compat`, not only the debug build.
+
+`apps/examples` wires this up as a small always-polling readout (`apps/examples/src/JoltMemoryReadout.tsx` + `joltMemory.ts`) shown in the top-right corner whenever `debug-wasm-compat` is the selected build - pick it from the "Jolt Module" leva control, then watch the number while you reproduce a leak.
 
 ---
 

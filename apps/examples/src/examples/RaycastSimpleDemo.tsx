@@ -14,10 +14,11 @@ import { Floor } from '@react-three/jolt-addons';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 // we have to wrap the demo so we can provide the physics component
 
 export function RaycastSimpleDemo() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
 
     // Reset the restitution
     // body settings so shapes dont bounce
@@ -27,6 +28,7 @@ export function RaycastSimpleDemo() {
     return (
         <>
             <Physics
+                module={module}
                 paused={paused}
                 key={physicsKey}
                 interpolate={interpolate}
@@ -34,6 +36,7 @@ export function RaycastSimpleDemo() {
                 gravity={22}
                 defaultBodySettings={defaultBodySettings}
             >
+                <JoltMemoryRegistrar />
                 <RaycastSimple />
             </Physics>
             <directionalLight

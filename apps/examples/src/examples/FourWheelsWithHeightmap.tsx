@@ -4,12 +4,15 @@ import { Floor } from '@react-three/jolt-addons';
 //import { CameraRig } from './lib/components/CameraRig';
 import { VehicleFourWheel } from '@react-three/jolt-controllers';
 import * as THREE from 'three';
+import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 
 export function FourWheelDemo() {
     //const controllerRef = useRef(null);
 
     //const options = useConst({ inverted: { y: true } });
     //useGamepadForCameraControls('look', controls, options);
+    const { module } = useDemo();
 
     // body settings so shapes bounce
     const defaultBodySettings = {
@@ -17,7 +20,8 @@ export function FourWheelDemo() {
     };
 
     return (
-        <Physics gravity={25} defaultBodySettings={defaultBodySettings}>
+        <Physics module={module} gravity={25} defaultBodySettings={defaultBodySettings}>
+            <JoltMemoryRegistrar />
             <VehicleFourWheel position={[0, 25, 0]} />
             <RigidBody
                 position={[0, 2, 0]}

@@ -11,15 +11,17 @@ import { useControls } from 'leva';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 
 export function CubeHeap() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
     // body settings so shapes bounce
     const defaultBodySettings = {
         mRestitution: 0.7
     };
     return (
         <Physics
+            module={module}
             paused={paused}
             key={physicsKey}
             interpolate={interpolate}
@@ -27,6 +29,7 @@ export function CubeHeap() {
             gravity={22}
             defaultBodySettings={defaultBodySettings}
         >
+            <JoltMemoryRegistrar />
             <CubeHeapInner />
             <directionalLight
                 castShadow
