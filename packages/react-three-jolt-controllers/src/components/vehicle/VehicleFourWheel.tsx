@@ -51,11 +51,22 @@ export function VehicleFourWheel(props: VehicleFourWheelProps) {
         camera.position.set(-4, 4, 0);
         camera.lookAt(newVehicle.position);
         //controls?.target = newVehicle.position;
-    }, [vehicleSystem]);
+        // the vehicle owns a VehicleConstraint, its step listener, the callbacks jolt calls into
+        // and the car body; none of it used to be released (issue #140)
+        return () => {
+            vehicleSystem.removeVehicle(name!);
+            vehicle.current = null;
+        };
+    }, [vehicleSystem, name, type]);
+
+    // the whole system (and with it its own step listeners) goes when the component does
+    useEffect(() => () => vehicleSystem.destroy(), [vehicleSystem]);
 
     useEffect(() => {
-        if (!controls) return;
-        vehicle.current!.onPreStep((_vehicleConstraint: any) => {
+        if (!controls || !vehicle.current) return;
+        // onPreStep returns its own remover - dropping it left the listener (and the closure over
+        // `controls`) attached for the lifetime of the vehicle
+        return vehicle.current.onPreStep((_vehicleConstraint: any) => {
             const bodyPosition = vehicle.current?.position.clone();
             // console.log('controls', controls);
             //@ts-ignore
