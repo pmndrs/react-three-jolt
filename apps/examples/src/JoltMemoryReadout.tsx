@@ -43,8 +43,8 @@ export function JoltMemoryReadout({ variant }: { variant: JoltVariant }) {
         <div
             style={{
                 position: 'absolute',
-                top: 12,
-                right: 12,
+                bottom: 12,
+                left: 12,
                 padding: '6px 10px',
                 background: 'rgba(0, 0, 0, 0.65)',
                 color: '#9EE493',
