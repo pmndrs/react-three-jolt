@@ -21,6 +21,7 @@ import { assert, beforeAll, expect, test } from 'vitest';
 import { initJolt, Raw } from '../src/raw';
 import type { BodyState } from '../src/systems/body-state';
 import { PhysicsSystem } from '../src/systems/physics-system';
+import { installAllocTracker } from './jolt-alloc';
 
 let ps: PhysicsSystem;
 
@@ -49,9 +50,9 @@ const step = (frames = 60) => {
 const distance = (a: BodyState, to: THREE.Vector3) => a.position.distanceTo(to);
 
 /**
- * Minimal allocation spy: counts every wasm object the constraint code can allocate and
- * un-counts it on destroy, so a forgotten `Raw.module.destroy` shows up as a non-zero
- * delta. Pointers are unique among live objects, so reuse after a free is not a problem.
+ * Allocation tracking for the constraint paths, on top of the shared `installAllocTracker`
+ * helper: it counts every wasm object the constraint code can allocate and un-counts it on
+ * destroy, so a forgotten `Raw.module.destroy` shows up as a non-empty live list.
  */
 const TRACKED = [
     'Vec3',
@@ -67,40 +68,14 @@ const TRACKED = [
     'ConeConstraintSettings',
     'SwingTwistConstraintSettings',
     'SixDOFConstraintSettings'
-] as const;
+];
 
 const installAllocationSpy = () => {
-    // biome-ignore lint/suspicious/noExplicitAny: the jolt module is an untyped embind namespace
-    const jolt = Raw.module as any;
-    const live = new Map<number, string>();
-    const originals = new Map<string, unknown>();
-
-    for (const name of TRACKED) {
-        const Original = jolt[name];
-        originals.set(name, Original);
-        jolt[name] = new Proxy(Original, {
-            construct(target, args, newTarget) {
-                const instance = Reflect.construct(target, args, newTarget);
-                live.set(jolt.getPointer(instance), name);
-                return instance;
-            }
-        });
-    }
-
-    const originalDestroy = jolt.destroy;
-    jolt.destroy = (obj: unknown) => {
-        const pointer = jolt.getPointer(obj);
-        originalDestroy.call(jolt, obj);
-        live.delete(pointer);
-    };
-
+    const tracker = installAllocTracker(Raw, { types: TRACKED, throwOnDoubleDestroy: false });
     return {
         /** class names of everything allocated and not yet freed */
-        outstanding: () => [...live.values()],
-        restore: () => {
-            for (const [name, Original] of originals) jolt[name] = Original;
-            jolt.destroy = originalDestroy;
-        }
+        outstanding: () => tracker.liveDetails().map(({ type }) => type),
+        restore: () => tracker.uninstall()
     };
 };
 

@@ -9,22 +9,19 @@ import { assert, beforeAll, describe, expect, test } from 'vitest';
 import { initJolt, Raw } from '../src/raw';
 import { PhysicsSystem } from '../src/systems/physics-system';
 import { ShapeCollider } from '../src/systems/queries/collider';
+import { installAllocTracker } from './jolt-alloc';
 
 // ---------------------------------------------------------------------------------------------
-// Minimal local allocation tracker.
-//
-// embind gives no way to ask "how many objects are alive"; this wraps a curated set of
-// `Raw.module` constructors (and `destroy`) in a Proxy so a test can assert the net Jolt
-// allocation count of some operation is zero. Only `new Raw.module.X()` calls go through the
-// wrapped constructors - by-value returns from Jolt methods (e.g. `Mat44.prototype.sRotation()`)
-// are pointers to static temporaries owned by the WebIDL binder and never touch `new`, so they
-// correctly never show up here (and must never be passed to `destroy()`).
+// Allocation tracking uses the shared `installAllocTracker` helper (test/jolt-alloc.ts). Only
+// `new Raw.module.X()` calls go through its wrapped constructors - by-value returns from Jolt
+// methods (e.g. `Mat44.prototype.sRotation()`) are pointers to static temporaries owned by the
+// WebIDL binder and never touch `new`, so they correctly never show up here (and must never be
+// passed to `destroy()`).
 //
 // Shape classes (SphereShape, BoxShape, ...) are deliberately NOT tracked: their lifecycle is
 // reference counted (AddRef/Release), not new/destroy, so a naive live-count would never go back
 // to zero even though the object is genuinely freed once its refcount hits zero. Shape ownership
 // is asserted separately below via GetRefCount().
-// ---------------------------------------------------------------------------------------------
 const TRACKED_TYPES = [
     'Vec3',
     'RVec3',
@@ -41,66 +38,11 @@ const TRACKED_TYPES = [
     'CollideShapeAllHitCollisionCollector'
 ];
 
-type RawHolder = { module: any };
-
-function installAllocTracker(raw: RawHolder, types: string[] = TRACKED_TYPES) {
-    const target = raw.module;
-    const live = new Map<number, string>();
-    const ctorProxies = new Map<string, unknown>();
-    let doubleDestroyed = false;
-
-    const pointerOf = (obj: unknown): number => {
-        try {
-            return target.getPointer(obj);
-        } catch {
-            return -1;
-        }
-    };
-
-    const wrapCtor = (name: string) => {
-        const existing = ctorProxies.get(name);
-        if (existing) return existing;
-        const ctor = target[name];
-        if (typeof ctor !== 'function') return ctor;
-        const proxy = new Proxy(ctor, {
-            construct(ctorTarget: any, args: any[]) {
-                const instance = new ctorTarget(...args);
-                const ptr = pointerOf(instance);
-                if (ptr > 0) live.set(ptr, name);
-                return instance;
-            }
-        });
-        ctorProxies.set(name, proxy);
-        return proxy;
-    };
-
-    const proxy = new Proxy(target, {
-        get(moduleTarget: any, prop: string | symbol, receiver: unknown) {
-            if (prop === 'destroy') {
-                return (obj: unknown) => {
-                    const ptr = pointerOf(obj);
-                    if (ptr > 0) {
-                        if (!live.has(ptr)) doubleDestroyed = true;
-                        live.delete(ptr);
-                    }
-                    return moduleTarget.destroy(obj);
-                };
-            }
-            if (typeof prop === 'string' && types.includes(prop)) return wrapCtor(prop);
-            return Reflect.get(moduleTarget, prop, receiver);
-        }
-    });
-
-    raw.module = proxy;
-
-    return {
-        live: () => live.size,
-        wasDoubleDestroyed: () => doubleDestroyed,
-        uninstall: () => {
-            raw.module = target;
-        }
-    };
-}
+// `foreignDestroys()` counts `destroy()` calls on pointers the tracker never handed out - a
+// double free, or a by-value static temporary being freed. Either is a bug here, so the old
+// `wasDoubleDestroyed()` assertions became `foreignDestroys() === 0`.
+const trackAllocations = () =>
+    installAllocTracker(Raw, { types: TRACKED_TYPES, throwOnDoubleDestroy: false });
 
 // ---------------------------------------------------------------------------------------------
 
@@ -156,7 +98,7 @@ describe('ShapeCollider', () => {
     });
 
     test('destroy() frees every Jolt object the collider allocated', () => {
-        const tracker = installAllocTracker(Raw);
+        const tracker = trackAllocations();
         try {
             const baseline = tracker.live();
             const collider = new ShapeCollider(ps.physicsSystem, ps.joltInterface);
@@ -173,7 +115,7 @@ describe('ShapeCollider', () => {
 
             collider.destroy();
             expect(tracker.live()).toBe(baseline);
-            expect(tracker.wasDoubleDestroyed()).toBe(false);
+            expect(tracker.foreignDestroys()).toBe(0);
         } finally {
             tracker.uninstall();
         }
@@ -186,7 +128,7 @@ describe('ShapeCollider', () => {
         collider.position = boxPosition.clone();
         collider.cast();
 
-        const tracker = installAllocTracker(Raw);
+        const tracker = trackAllocations();
         try {
             const baseline = tracker.live();
             for (let i = 0; i < 200; i++) {
@@ -202,7 +144,7 @@ describe('ShapeCollider', () => {
                 collider.cast();
             }
             expect(tracker.live()).toBe(baseline);
-            expect(tracker.wasDoubleDestroyed()).toBe(false);
+            expect(tracker.foreignDestroys()).toBe(0);
         } finally {
             tracker.uninstall();
         }
