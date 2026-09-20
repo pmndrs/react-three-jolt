@@ -1,4 +1,4 @@
-import { Layer, PhysicsSystem, quat, Raw, vec3 } from '@react-three/jolt';
+import { Layer, PhysicsSystem, quat, Raw, vec3, withJolt } from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { VehicleManager } from './VehicleManager';
@@ -105,7 +105,10 @@ export class VehicleManagerTwoWheels extends VehicleManager {
             //@ts-ignore
             this.settings.wheels.front.posZ
         );
-        front.mPosition = vec3.jolt(frontPosition);
+        // the settings copy the vector on assignment, so release the temporary `vec3.jolt` made
+        withJolt(frontPosition, (v) => {
+            front.mPosition = v;
+        });
         //@ts-ignore
         front.mMaxSteerAngle = this.settings.wheels.front.maxSteerAngle;
         front.mSuspensionDirection = new Raw.module.Vec3(

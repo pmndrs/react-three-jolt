@@ -4,6 +4,7 @@ so much and can be reused for things like NPC's */
 import {
     type BodySystem,
     generateBodySettings,
+    joltScratch,
     Layer,
     type PhysicsSystem,
     quat,
@@ -254,26 +255,24 @@ export class CharacterControllerSystem {
     get linearVelocity(): THREE.Vector3 {
         return vec3.three(this.character.GetLinearVelocity());
     }
+    // every one of these Jolt setters takes its argument by value and copies it, so the shared
+    // scratch objects keep the per-frame character setters allocation free. `vec3.jolt()` would
+    // be correct too, but it allocates (and used to hand back - and then free - the caller's own
+    // object, issue #76).
     set linearVelocity(value: THREE.Vector3) {
-        const newVec = vec3.jolt(value);
-        this.character.SetLinearVelocity(newVec);
-        Raw.module.destroy(newVec);
+        this.character.SetLinearVelocity(joltScratch.vec3(value));
     }
     get position(): THREE.Vector3 {
         return vec3.three(this.character.GetPosition());
     }
     set position(value: THREE.Vector3) {
-        const newVec = vec3.rjolt(value);
-        this.character.SetPosition(newVec);
-        Raw.module.destroy(newVec);
+        this.character.SetPosition(joltScratch.rvec3(value));
     }
     get rotation(): THREE.Quaternion {
         return quat.three(this.character.GetRotation());
     }
     set rotation(value: THREE.Quaternion) {
-        const newQuat = quat.jolt(value);
-        this.character.SetRotation(newQuat);
-        Raw.module.destroy(newQuat);
+        this.character.SetRotation(joltScratch.quat(value));
     }
     //read-only
     get worldTransform(): THREE.Matrix4 {
@@ -311,9 +310,7 @@ export class CharacterControllerSystem {
         return vec3.three(this.character.GetUp());
     }
     set up(value: THREE.Vector3) {
-        const newVec = vec3.jolt(value);
-        this.character.SetUp(newVec);
-        Raw.module.destroy(newVec);
+        this.character.SetUp(joltScratch.vec3(value));
     }
     // Ground Properties ----------------------------------
     //Tell if we are flying, sliding, etc (Read-only)
@@ -378,9 +375,7 @@ export class CharacterControllerSystem {
         return vec3.three(this.character.GetShapeOffset());
     }
     set shapeOffset(value: THREE.Vector3) {
-        const newVec = vec3.jolt(value);
-        this.character.SetShapeOffset(newVec);
-        Raw.module.destroy(newVec);
+        this.character.SetShapeOffset(joltScratch.vec3(value));
     }
 
     //* Contact Listeners =================================
@@ -408,9 +403,14 @@ export class CharacterControllerSystem {
 
                 //check if the body is a conveyor
                 if (body2State.isConveyor && body2State.conveyorVector) {
-                    const addVec = vec3.jolt(body2State.conveyorVector);
-                    linearVelocity.Add(addVec);
-                    Raw.module.destroy(addVec);
+                    // `Add` returns a new (leaked) vector and leaves `linearVelocity` alone;
+                    // write the sum back into the vector Jolt handed us instead.
+                    const conveyor = body2State.conveyorVector;
+                    linearVelocity.Set(
+                        linearVelocity.GetX() + conveyor.x,
+                        linearVelocity.GetY() + conveyor.y,
+                        linearVelocity.GetZ() + conveyor.z
+                    );
                 }
             }
         };
@@ -880,6 +880,8 @@ export class CharacterControllerSystem {
     //* Util functions ----------------------------------
 
     isSlopeTooSteep(normal: THREE.Vector3) {
-        return this.character.IsSlopeTooSteep(vec3.threeToJolt(normal));
+        // `threeToJolt` allocates; this is called per contact so use the shared scratch vector
+        // (`IsSlopeTooSteep` only reads it).
+        return this.character.IsSlopeTooSteep(joltScratch.vec3(normal));
     }
 }
