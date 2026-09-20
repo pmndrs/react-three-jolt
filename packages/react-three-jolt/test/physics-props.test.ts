@@ -182,6 +182,42 @@ test('setGravity applies the value and frees its Jolt vector', () => {
     ps.setGravity([0, -9.81, 0]);
 });
 
+test('teleporting a body does not interpolate across the jump', () => {
+    reset();
+    const { mesh, state } = spawnBox();
+
+    // two whole steps so the pose cache holds a real previous/current pair
+    for (let i = 0; i < 6; i++) ps.onUpdate(STEP);
+    assert.isTrue(state.poseCacheValid, 'pose cache was never filled');
+    const fellTo = state.position.y;
+
+    // a teleport: the body jumps somewhere the simulation never carried it
+    state.position = new THREE.Vector3(state.position.x, fellTo + 50, 0);
+    assert.isFalse(state.poseCacheValid, 'the position setter left a stale pose cache behind');
+
+    // the next partial frame must render the body where it now is, not halfway back to where
+    // it used to be
+    ps.onUpdate(STEP / 2);
+    assert.closeTo(mesh.position.y, state.position.y, 1e-6, 'lerped across a teleport');
+    assert.isAbove(mesh.position.y, fellTo + 40, 'the render pose was dragged back to the jump');
+
+    // same for rotation and for the combined setter
+    for (let i = 0; i < 6; i++) ps.onUpdate(STEP);
+    assert.isTrue(state.poseCacheValid);
+    state.rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 1.2);
+    assert.isFalse(state.poseCacheValid, 'the rotation setter left a stale pose cache behind');
+
+    for (let i = 0; i < 6; i++) ps.onUpdate(STEP);
+    assert.isTrue(state.poseCacheValid);
+    state.setPositionAndRotation(
+        new THREE.Vector3(state.position.x, fellTo + 80, 0),
+        new THREE.Quaternion()
+    );
+    assert.isFalse(state.poseCacheValid, 'setPositionAndRotation left a stale pose cache behind');
+    ps.onUpdate(STEP / 2);
+    assert.closeTo(mesh.position.y, state.position.y, 1e-6, 'lerped across a teleport');
+});
+
 test('the frame loop does not allocate Jolt objects', () => {
     reset();
     spawnBox();
@@ -302,11 +338,17 @@ test('paused stops the simulation while the frame loop keeps running', async () 
 // Wraps the Jolt value-type constructors we allocate from JS plus `destroy`, so a test can
 // assert that a block of work is allocation neutral. The wrappers share the originals'
 // prototypes, so `instanceof` and the binder's own pointer cache are unaffected.
-// TODO: replace with the shared `installAllocTracker` helper once fix/vec3-quat-passthrough-76
-// lands it in test/jolt-alloc.ts.
+//
+// NOT the shared `installAllocTracker` from test/jolt-alloc.ts on purpose: that helper replaces
+// `Raw.module` with a Proxy, and `joltScratch` (utils/general.ts) keys its shared Vec3/RVec3/Quat
+// singletons on module identity so it can drop them when a test swaps the module out. Installing
+// the shared tracker therefore rebuilds the scratch objects *inside* the counted window and every
+// `joltScratch` user - setGravity, the body setters - looks like it allocates one object. This
+// spy mutates the module in place, leaving its identity (and the scratch) alone.
 const TRACKED = ['Vec3', 'RVec3', 'Quat', 'Mat44', 'RMat44'] as const;
 
 function allocationSpy() {
+    // biome-ignore lint/suspicious/noExplicitAny: the jolt module is an untyped embind namespace
     const jolt = Raw.module as any;
     const originals = new Map<string, any>();
     let created = 0;

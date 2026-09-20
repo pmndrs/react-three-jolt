@@ -299,6 +299,10 @@ export class BodyState {
             joltScratch.rvec3(position),
             Raw.module.EActivation_Activate
         );
+        // A setter is a teleport, not simulation: the cached previous/current poses now bracket
+        // a jump the body never travelled, and interpolating across them would smear the object
+        // from its old place to its new one over the next frame.
+        this.resetPoseCache();
     }
     // get the position of the body and wrap it in a three vector
     getPosition(asJolt?: boolean): THREE.Vector3 | Jolt.RVec3 {
@@ -316,6 +320,8 @@ export class BodyState {
             joltScratch.quat(rotation),
             Raw.module.EActivation_Activate
         );
+        // see the `position` setter: a teleport must not be slerped across.
+        this.resetPoseCache();
     }
     // get the rotation of the body and wrap it in a three quaternion
     get rotation(): THREE.Quaternion {
@@ -325,6 +331,9 @@ export class BodyState {
     setPositionAndRotation(position: THREE.Vector3, rotation: THREE.Quaternion) {
         this.position = position;
         this.rotation = rotation;
+        // the two setters above each drop the cache already; kept explicit so this stays correct
+        // if either of them is ever reimplemented against the body interface directly.
+        this.resetPoseCache();
     }
     get scale() {
         return this.activeScale;
