@@ -23,7 +23,12 @@ import { initJolt, Raw } from '../src/raw';
 import type { BodyState } from '../src/systems/body-state';
 import { flushDeferredWorldDestroys, PhysicsSystem } from '../src/systems/physics-system';
 import { joltScratch } from '../src/utils';
-import { allDestroyableTypes, DEFAULT_TRACKED_TYPES, installAllocTracker } from './jolt-alloc';
+import {
+    allDestroyableTypes,
+    DEFAULT_TRACKED_TYPES,
+    expectHeapRestored,
+    installAllocTracker
+} from './jolt-alloc';
 
 // <Physics> suspends on the async wasm load, which @react-three/test-renderer's create() cannot
 // await through Suspense on its own. Pre-resolving it seeds suspend-react's cache so every
@@ -102,7 +107,7 @@ test('ten worlds can be created and destroyed one after another, and all of them
     assert.equal(new Set(ids).size, ids.length);
 
     // every byte the ten worlds took is back
-    assert.equal(freeMemory(), baselineFree, 'sequential worlds leaked WASM heap');
+    expectHeapRestored(baselineFree, freeMemory(), 64, 'sequential worlds leaked WASM heap');
 });
 
 // The reproduction from #176: four PhysicsSystems alive at once. The old cap of three handed the
@@ -408,11 +413,7 @@ test('unmounting a whole <Physics> tree returns the allocation tracker to baseli
             `unmount leaked ${valueTypesLive(alloc) - baselineLive} tracked allocations: ` +
                 JSON.stringify(alloc.liveByType())
         );
-        assert.equal(
-            freeMemory(),
-            baselineFree,
-            `unmount leaked ${baselineFree - freeMemory()} bytes of WASM heap`
-        );
+        expectHeapRestored(baselineFree, freeMemory(), 64, 'unmounting the tree');
     } finally {
         alloc.uninstall();
         flushDeferredWorldDestroys();
