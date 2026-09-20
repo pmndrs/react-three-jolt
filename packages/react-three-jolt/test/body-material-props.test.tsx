@@ -74,6 +74,24 @@ test('<RigidBody restitution / damping / gravityFactor> reach the body', async (
     await renderer.unmount();
 });
 
+test('<RigidBody mass> reaches the body and is read back (#201)', async () => {
+    const body = React.createRef<BodyState>();
+    const renderer = await create(tree({ mass: 5 }, body));
+
+    assert.closeTo(body.current!.mass, 5, 1e-4, 'the mass prop was dropped');
+
+    await renderer.update(tree({ mass: 10 }, body));
+    assert.closeTo(body.current!.mass, 10, 1e-4, 'mass did not stay reactive');
+    assert.closeTo(
+        body.current!.body.GetMotionProperties().GetInverseMass(),
+        0.1,
+        1e-6,
+        'the simulation is not using the new mass'
+    );
+
+    await renderer.unmount();
+});
+
 test('the material props reach a body created behind a <Shape> child', async () => {
     // A <RigidBody> with <Shape> children has no body at all on the first pass - it waits for the
     // shape to mount. The old effect was keyed on the (non-reactive) ref, so it ran once, before

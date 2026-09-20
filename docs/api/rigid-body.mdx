@@ -228,6 +228,12 @@ still worth tuning for a demo that has to feel solid:
 `isSensor` — all plain get/set number/boolean properties. `color` gets/sets the three.js material
 colour (and the per-instance colour on instanced bodies).
 
+`mass` is the body's *simulated* mass in kilograms, read from its motion properties rather than
+from the shape's density, so it reflects a `mass` prop or a later write. Static and kinematic
+bodies have infinite mass in Jolt and report `0`; setting it on one does nothing. Setting it
+scales the inertia tensor with it and leaves the body's [degrees of freedom](#degrees-of-freedom)
+untouched.
+
 ### Degrees of freedom
 
 | member | |

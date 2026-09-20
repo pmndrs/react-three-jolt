@@ -11,7 +11,7 @@ import {
 } from 'three';
 import { Raw } from '../raw';
 
-import { anyVec3, joltScratch, quat, vec3 } from '../utils';
+import { anyVec3, devWarn, joltScratch, quat, vec3 } from '../utils';
 import { type BodySystem, getThreeObjectForBody } from './body-system';
 import { Emitter, type Unsubscribe } from './emitter';
 import { BODY_EVENT_BITS, type BodyEventMap, EventBit } from './events';
@@ -727,29 +727,66 @@ export class BodyState {
     get restitution() {
         return this.body.GetRestitution();
     }
+    /**
+     * This body's `MotionProperties`, or `undefined` for a static body - which has none at all.
+     * `Body::GetMotionProperties()` asserts on a static body in a debug build and hands back a
+     * null pointer in a release one, so every caller goes through here.
+     */
+    private get motionProperties(): Jolt.MotionProperties | undefined {
+        if (this.body.IsStatic()) return undefined;
+        return this.body.GetMotionProperties();
+    }
     get angularDamping() {
-        return this.body.GetMotionProperties().GetAngularDamping();
+        return this.motionProperties?.GetAngularDamping() ?? 0;
     }
     set angularDamping(damping: number) {
-        this.body.GetMotionProperties().SetAngularDamping(damping);
+        this.motionProperties?.SetAngularDamping(damping);
     }
     get linearDamping() {
-        return this.body.GetMotionProperties().GetLinearDamping();
+        return this.motionProperties?.GetLinearDamping() ?? 0;
     }
     set linearDamping(damping: number) {
-        this.body.GetMotionProperties().SetLinearDamping(damping);
+        this.motionProperties?.SetLinearDamping(damping);
     }
     get gravityFactor() {
-        return this.body.GetMotionProperties().GetGravityFactor();
+        return this.motionProperties?.GetGravityFactor() ?? 0;
     }
     set gravityFactor(factor: number) {
-        this.body.GetMotionProperties().SetGravityFactor(factor);
+        this.motionProperties?.SetGravityFactor(factor);
     }
-    get mass() {
-        return this.body.GetShape().GetMassProperties().mMass;
+    /**
+     * The body's mass in kilograms (issue #201).
+     *
+     * Read from the body's own `MotionProperties`, not from the shape: a body created with a
+     * `mass` option (or scaled afterwards) overrides what the shape's density implies, and the
+     * old getter reported the shape's number and ignored the override entirely.
+     *
+     * **`0` for static and kinematic bodies**, which Jolt treats as having infinite mass - they
+     * have no inverse mass to invert. Setting it on one is a no-op.
+     */
+    get mass(): number {
+        // only a dynamic body has a meaningful inverse mass; Jolt asserts on the others
+        if (!this.body.IsDynamic()) return 0;
+        const inverseMass = this.body.GetMotionProperties().GetInverseMass();
+        return inverseMass > 0 ? 1 / inverseMass : 0;
     }
     set mass(mass: number) {
-        this.bodySystem.setMass(this.handle, mass);
+        const motionProperties = this.motionProperties;
+        if (!motionProperties || !this.body.IsDynamic()) {
+            devWarn(
+                `*** R3/Jolt: mass has no meaning on a ${
+                    this.body.IsStatic() ? 'static' : 'kinematic'
+                } body (Jolt treats it as infinite); ignoring ***`
+            );
+            return;
+        }
+        if (!(mass > 0)) {
+            devWarn(`*** R3/Jolt: mass must be greater than 0, got ${mass}; ignoring ***`);
+            return;
+        }
+        // scales the inverse mass and the inertia tensor together, and - unlike going through
+        // `SetMassProperties` - leaves the body's allowed degrees of freedom alone
+        motionProperties.ScaleToMass(mass);
     }
 
     //* Group Filtering ----------------------------------

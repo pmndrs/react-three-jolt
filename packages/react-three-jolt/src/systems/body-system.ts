@@ -505,7 +505,10 @@ export class BodySystem {
     setMass(bodyHandle: number, mass: number) {
         const body = this.getBody(bodyHandle);
         if (!body) return;
-        changeMassInertia(body.body, mass);
+        // one implementation, on BodyState: it scales the motion properties rather than pushing
+        // a fresh MassProperties through `SetMassProperties`, which also reset the body's
+        // allowed degrees of freedom to "all" (issue #201)
+        body.mass = mass;
     }
 
     //* Loop Functions ===================================
@@ -1153,7 +1156,6 @@ export function generateBodySettings(
     // while we still know the motion type. https://jrouwe.github.io/JoltPhysics/#dynamic-mesh-shapes
     const meshStrategy = options.dynamicMeshStrategy ?? 'convex';
     let shape: Jolt.Shape;
-    let convertedFromMesh = false;
     if (isObject) {
         // one place decides what this object is; when the body is dynamic, any trimesh in that
         // description becomes a convex hull before anything is allocated
@@ -1161,7 +1163,6 @@ export function generateBodySettings(
         const descriptor = isDynamic
             ? makeDescriptorDynamicSafe(described, meshStrategy)
             : described;
-        convertedFromMesh = descriptor !== described;
         // takes ownership of the settings (and of any sub-settings they reference) and gives us
         // a shape we hold one reference on - released below, once the BodyCreationSettings has
         // taken its own.
@@ -1175,7 +1176,6 @@ export function generateBodySettings(
             checkDynamicMeshStrategy(meshStrategy);
             shape = convexHullFromShape(shape);
             ownsShape = true;
-            convertedFromMesh = true;
         }
     }
 
@@ -1184,10 +1184,13 @@ export function generateBodySettings(
         new jolt.BodyCreationSettings(shape, position, quaternion, motionType, layer),
         options.bodySettings
     );
-    if (convertedFromMesh && options.mass !== undefined) {
-        // #112: the shape is a real convex hull now, so its own mass properties are meaningful -
-        // scale those to the requested mass instead of pretending the body is a solid box.
-        // `GetMassProperties()` hands back a static temporary: read it, never destroy it.
+    // `GetMassProperties()` hands back a static temporary: read it, never destroy it.
+    const shapeMass = isDynamic ? shape.GetMassProperties().mMass : 0;
+    if (isDynamic && options.mass !== undefined && shapeMass > 0) {
+        // #201 (and #112, which is the convex hull case of the same thing): the shape's own mass
+        // properties describe its distribution correctly, so scale those to the requested mass
+        // rather than pretending the body is a solid box - or, as before this, ignoring
+        // `options.mass` altogether on everything but a converted trimesh.
         const massProperties = shape.GetMassProperties();
         settings.mOverrideMassProperties = jolt.EOverrideMassProperties_MassAndInertiaProvided;
         settings.mMassPropertiesOverride.mMass = massProperties.mMass;
@@ -1217,14 +1220,11 @@ export function generateBodySettings(
 
 // TODO: my base generators require three objects. perhaps abastract out or make better names
 
-// Change a bodies mass settings after already being created
+// Changing a body's mass after creation lives on `BodyState.mass` now (issue #201). What used to
+// be here rebuilt a MassProperties from the *shape* and pushed it through
+// `SetMassProperties(EAllowedDOFs_All, ...)`, which threw away any locked degrees of freedom and
+// ignored a mass override the body had been created with.
 // src:PhoenixIllusion @ https://github.com/jrouwe/JoltPhysics.js/discussions/112
-function changeMassInertia(body: Jolt.Body, mass: number) {
-    const motionProps = body.GetMotionProperties();
-    const massProps = body.GetShape().GetMassProperties();
-    massProps.ScaleToMass(mass); //<--- newly exposed function
-    motionProps.SetMassProperties(Raw.module.EAllowedDOFs_All, massProps);
-}
 /* og
 export function changeMassInertia(body: Jolt.Body, mass: number) {
     const motionProps = body.GetMotionProperties();
