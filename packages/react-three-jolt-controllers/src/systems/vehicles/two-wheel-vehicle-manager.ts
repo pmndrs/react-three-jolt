@@ -1,7 +1,7 @@
 import {
     createShapeFromSettings,
     Layer,
-    PhysicsSystem,
+    type PhysicsSystem,
     quat,
     Raw,
     releaseShape,
@@ -10,50 +10,26 @@ import {
 } from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
-import { VehicleManager } from './VehicleManager';
-import {
-    VehicleFourWheelSettings,
-    WheelState
-    //createWheelSettings
-} from './wheels';
+import { VehicleManager } from './vehicle-manager';
+import type {
+    ResolvedTwoWheelVehicleSettings,
+    TwoWheelVehicleSettings,
+    WheelSettingsTwoWheel
+} from './vehicle-settings';
 
-/*
-const FL_WHEEL = 0;
-const FR_WHEEL = 1;
-const BL_WHEEL = 2;
-const BR_WHEEL = 3;
-*/
-
-//TODO Fix this type
-interface VehicleTwoWheelSettings extends VehicleFourWheelSettings {
-    backWheelRadius: number;
-    backWheelWidth: number;
-    backWheelPosZ: number;
-    backWheelSuspensionMinLength: number;
-    backWheelSuspensionMaxLength: number;
-    backSuspensionFreq: number;
-    backBrakeTorque: number;
-
-    frontWheelRadius: number;
-    frontWheelWidth: number;
-    frontWheelPosZ: number;
-    frontSuspensionMinLength: number;
-    frontSuspensionMaxLength: number;
-    frontSuspensionFreq: number;
-    frontBrakeTorque: number;
-
-    steerSpeed: number;
-    casterAngle: number;
-    maxPitchRollAngle: number;
-}
-
-export class VehicleManagerTwoWheels extends VehicleManager {
+/**
+ * A motorcycle: two wheels driven by jolt's `MotorcycleController`, with a caster angle on the
+ * front fork and a steering speed the rider can't exceed.
+ */
+export class TwoWheelVehicleManager extends VehicleManager {
     currentRight = 0;
-    settings: VehicleTwoWheelSettings;
-    constructor(physicsSystem: PhysicsSystem, settings: VehicleTwoWheelSettings) {
-        super(physicsSystem, settings);
-        // TODO: is this necessary?
-        this.settings = settings;
+    // `declare` (not a redeclaration): with `useDefineForClassFields` a plain field declaration
+    // would define `settings` as undefined *after* the base constructor filled it in.
+    declare settings: ResolvedTwoWheelVehicleSettings;
+    declare controller: Jolt.MotorcycleController;
+
+    constructor(physicsSystem: PhysicsSystem, settings: TwoWheelVehicleSettings = {}) {
+        super(physicsSystem, { ...settings, type: 'twoWheel' });
     }
 
     // this createBody is different for motorcycles
@@ -63,11 +39,11 @@ export class VehicleManagerTwoWheels extends VehicleManager {
         // box settings, the vectors are copied on assignment, and `createShapeFromSettings` takes
         // a real reference on the shape (`Create().Get()` only borrowed a static one).
         const halfExtents = vec3.jolt([
-            this.settings.vehicleWidth! / 2,
-            this.settings.vehicleHeight! / 2,
-            this.settings.vehicleLength! / 2
+            this.settings.vehicleWidth / 2,
+            this.settings.vehicleHeight / 2,
+            this.settings.vehicleLength / 2
         ]);
-        const centerOfMassOffset = vec3.jolt([0, -this.settings.vehicleHeight! / 2, 0]);
+        const centerOfMassOffset = vec3.jolt([0, -this.settings.vehicleHeight / 2, 0]);
         const motorcycleShapeSettings = new Raw.module.OffsetCenterOfMassShapeSettings(
             centerOfMassOffset,
             new Raw.module.BoxShapeSettings(halfExtents)
@@ -90,7 +66,7 @@ export class VehicleManagerTwoWheels extends VehicleManager {
         Raw.module.destroy(upAxis);
         motorcycleBodySettings.mOverrideMassProperties =
             Raw.module.EOverrideMassProperties_CalculateInertia;
-        motorcycleBodySettings.mMassPropertiesOverride.mMass = this.settings.vehicleMass! | 250;
+        motorcycleBodySettings.mMassPropertiesOverride.mMass = this.settings.vehicleMass;
         const motorcycleBody = this.physicsSystem.bodyInterface.CreateBody(motorcycleBodySettings);
         Raw.module.destroy(motorcycleBodySettings);
         releaseShape(motorcycleShape);
@@ -100,39 +76,66 @@ export class VehicleManagerTwoWheels extends VehicleManager {
             Raw.module.EActivation_Activate
         );
         this.carBody = motorcycleBody;
-        const debugMesh = new THREE.Mesh(
-            new THREE.BoxGeometry(
-                this.settings.vehicleWidth!,
-                this.settings.vehicleHeight!,
-                this.settings.vehicleLength!
-            ),
-            new THREE.MeshStandardMaterial({ color: '#EAF0CE' })
-        );
-        this.threeObject.add(debugMesh);
+        // the caller's chassis object if they injected one, otherwise our own box (issue #26)
+        this.applyBodyObject();
 
         return motorcycleBody;
     }
+
+    /** the generated stand-in chassis of a motorcycle: one box, no cab */
+    protected createDebugBody(): THREE.Mesh {
+        const debugMesh = new THREE.Mesh(
+            new THREE.BoxGeometry(
+                this.settings.vehicleWidth,
+                this.settings.vehicleHeight,
+                this.settings.vehicleLength
+            ),
+            new THREE.MeshStandardMaterial({ color: '#EAF0CE' })
+        );
+        debugMesh.visible = this.isDebugging;
+        this.debugObject = debugMesh;
+        this.threeObject.add(debugMesh);
+        return debugMesh;
+    }
+
+    /** apply the settings shared by both wheels of a motorcycle */
+    private applyWheelSettings(wheel: Jolt.WheelSettingsWV, settings: WheelSettingsTwoWheel) {
+        const shared = this.settings.wheels;
+        const radius = settings.radius ?? shared.radius;
+        const width = settings.width ?? shared.width;
+        const suspensionMinLength = settings.suspensionMinLength ?? shared.suspensionMinLength;
+        const suspensionMaxLength = settings.suspensionMaxLength ?? shared.suspensionMaxLength;
+        if (radius !== undefined) wheel.mRadius = radius;
+        if (width !== undefined) wheel.mWidth = width;
+        if (suspensionMinLength !== undefined) wheel.mSuspensionMinLength = suspensionMinLength;
+        if (suspensionMaxLength !== undefined) wheel.mSuspensionMaxLength = suspensionMaxLength;
+        if (settings.suspensionFreq !== undefined)
+            wheel.mSuspensionSpring.mFrequency = settings.suspensionFreq;
+        if (settings.brakeTorque !== undefined) wheel.mMaxBrakeTorque = settings.brakeTorque;
+        wheel.mMaxSteerAngle = settings.maxSteerAngle ?? 0;
+        // `mPosition` copies the vector, so the temporary built here is ours to free
+        withJolt(
+            settings.position ?? [
+                0.0,
+                (-0.9 * this.settings.vehicleHeight) / 2,
+                settings.posZ ?? 0
+            ],
+            (value) => {
+                wheel.mPosition = value;
+            }
+        );
+    }
+
     // create the primary Jolt items and generate the wheels
     createConstraint() {
         const vehicle = new Raw.module.VehicleConstraintSettings();
-        vehicle.mMaxPitchRollAngle = this.settings.maxPitchRollAngle!;
+        vehicle.mMaxPitchRollAngle = this.settings.maxPitchRollAngle;
         vehicle.mWheels.clear();
 
-        // motorcycle makes the wheels declaritively. have to figure out the wheelState
-        // TODO rewrite these to use the createWheelSettings()
+        // motorcycle makes the wheels declaratively (the front one has a caster angle), so it
+        // doesn't go through `createWheelSettings`
         const front = new Raw.module.WheelSettingsWV();
-        const frontPosition = new THREE.Vector3(
-            0.0,
-            (-0.9 * this.settings.vehicleHeight!) / 2,
-            //@ts-ignore
-            this.settings.wheels.front.posZ
-        );
-        // the settings copy the vector on assignment, so release the temporary `vec3.jolt` made
-        withJolt(frontPosition, (v) => {
-            front.mPosition = v;
-        });
-        //@ts-ignore
-        front.mMaxSteerAngle = this.settings.wheels.front.maxSteerAngle;
+        this.applyWheelSettings(front, this.settings.wheels.front ?? {});
         // `Normalized()` returns a static temporary by value and the property assignment copies
         // it, so only the vector built here needs freeing - it used to leak one per wheel.
         withJolt([0, -1, Math.tan(this.settings.casterAngle)], (v) => {
@@ -141,46 +144,11 @@ export class VehicleManagerTwoWheels extends VehicleManager {
         withJolt([0, 1, -Math.tan(this.settings.casterAngle)], (v) => {
             front.mSteeringAxis = v.Normalized();
         });
-
-        if (this.settings.wheels.radius) front.mRadius = this.settings.wheels.radius;
-        if (this.settings.wheels.width) front.mWidth = this.settings.wheels.width;
-        if (this.settings.wheels.suspensionMinLength)
-            front.mSuspensionMinLength = this.settings.wheels.suspensionMinLength;
-        if (this.settings.wheels.suspensionMaxLength)
-            front.mSuspensionMaxLength = this.settings.wheels.suspensionMaxLength;
-        front.mSuspensionSpring.mFrequency =
-            //@ts-ignore
-            this.settings.wheels.front.suspensionFreq;
-        //@ts-ignore
-        front.mMaxBrakeTorque = this.settings.wheels.front.brakeTorque;
-
         vehicle.mWheels.push_back(front);
 
         const back = new Raw.module.WheelSettingsWV();
-        withJolt(
-            [
-                0.0,
-                (-0.9 * this.settings.vehicleHeight!) / 2,
-                //@ts-ignore
-                this.settings.wheels.back.posZ
-            ],
-            (v) => {
-                back.mPosition = v;
-            }
-        );
+        this.applyWheelSettings(back, this.settings.wheels.back ?? {});
         back.mMaxSteerAngle = 0.0;
-        if (this.settings.wheels.radius) back.mRadius = this.settings.wheels.radius;
-        if (this.settings.wheels.width) back.mWidth = this.settings.wheels.width;
-        if (this.settings.wheels.suspensionMinLength)
-            back.mSuspensionMinLength = this.settings.wheels.suspensionMinLength;
-        if (this.settings.wheels.suspensionMaxLength)
-            back.mSuspensionMaxLength = this.settings.wheels.suspensionMaxLength;
-        back.mSuspensionSpring.mFrequency =
-            //@ts-ignore
-            this.settings.wheels.back.suspensionFreq;
-        //@ts-ignore
-        back.mMaxBrakeTorque = this.settings.wheels.back.brakeTorque;
-
         vehicle.mWheels.push_back(back);
 
         // create the controller
@@ -204,14 +172,10 @@ export class VehicleManagerTwoWheels extends VehicleManager {
 
         this.constraint = new Raw.module.VehicleConstraint(this.carBody, vehicle);
 
-        // now we have the constraint we can set the wheelStates
-        const frontState = new WheelState(this.constraint, 0);
-        this.wheels.set('front', frontState);
-        this.threeObject.add(frontState.threeObject);
-        //now the back
-        const backState = new WheelState(this.constraint, 1);
-        this.wheels.set('back', backState);
-        this.threeObject.add(backState.threeObject);
+        // now we have the constraint we can set the wheelStates (which pick up any injected
+        // wheel objects, issue #27)
+        this.addWheelState('front', 0);
+        this.addWheelState('back', 1);
 
         // the tester is owned by the constraint; the constraint is reference counted and its
         // step listener is ours - see VehicleManager.attachConstraint
@@ -231,8 +195,8 @@ export class VehicleManagerTwoWheels extends VehicleManager {
         if (this.destroyed) return;
         let forward = this.moveDirection.y;
         let right = this.moveDirection.x;
-        let brake = 0.0,
-            handBrake = 0.0;
+        let brake = 0.0;
+        let handBrake = 0.0;
 
         if (this.previousForward * forward < 0.0) {
             // static temporaries read into the shared scratch objects, see VehicleManager
@@ -274,8 +238,13 @@ export class VehicleManagerTwoWheels extends VehicleManager {
             );
         right = this.currentRight;
 
-        this.controller.SetDriverInput(forward, right, brake, handBrake);
-        if (right != 0.0 || forward != 0.0 || brake != 0.0 || handBrake != 0.0)
+        this.driverInput(forward, right, brake, handBrake);
+        if (right !== 0.0 || forward !== 0.0 || brake !== 0.0 || handBrake !== 0.0)
             this.physicsSystem.bodyInterface.ActivateBody(this.carBody.GetID());
     }
 }
+
+/** @deprecated renamed to `TwoWheelVehicleManager` (issue #10) */
+export const VehicleManagerTwoWheels = TwoWheelVehicleManager;
+/** @deprecated renamed to `TwoWheelVehicleManager` (issue #10) */
+export type VehicleManagerTwoWheels = TwoWheelVehicleManager;
