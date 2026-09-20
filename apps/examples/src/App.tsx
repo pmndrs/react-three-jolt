@@ -25,6 +25,7 @@ import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
 import { Constraints } from './examples/Constraints';
 import { CubeHeap } from './examples/CubeHeap';
 import { FloatingPlatforms } from './examples/FloatingPlatforms';
+import { FooterFunnel } from './examples/FooterFunnel';
 import { FourWheelDemo } from './examples/FourWheelsWithHeightmap';
 import { HeightfieldDemo } from './examples/Heightfield';
 import { Impulses } from './examples/Impulses';
@@ -190,6 +191,14 @@ const routes: Routes = {
         target: [0, 8, -8],
         background: '#3d405b',
         element: <Constraints />
+    },
+    FooterFunnel: {
+        label: 'Footer Funnel',
+        position: [0, 2, 40],
+        target: [0, 2, 0],
+        transition: false,
+        background: '#141622',
+        element: <FooterFunnel />
     }
 };
 
