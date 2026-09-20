@@ -12,17 +12,17 @@ import {
     BufferGeometry,
     CapsuleGeometry,
     CylinderGeometry,
-    Object3D,
+    type Object3D,
     SphereGeometry,
     Vector3
 } from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import { Raw } from '../raw';
-import { anyVec3, quat, vec3 } from '../utils';
+import { type anyVec3, quat, vec3 } from '../utils';
 
 export class ShapeSystem {
     private physicsSystem: Jolt.PhysicsSystem;
-    //@ts-ignore
+    //@ts-expect-error
     private bodyInterface: Jolt.BodyInterface;
     constructor(physicsSystem: Jolt.PhysicsSystem) {
         this.physicsSystem = physicsSystem;
@@ -44,11 +44,79 @@ export type AutoShape =
     | 'compound'
     | 'heightfield';
 
+/* ============================================================================
+ * Memory notes (jolt-physics 1.1.0 / emscripten WebIDL binder)
+ *
+ * - Every `new Raw.module.X()` is a real allocation on the WASM heap and is only freed by
+ *   `Raw.module.destroy(x)`. Nothing here is garbage collected.
+ * - The list containers (`ArrayVec3`, `VertexList`, `IndexedTriangleList`, ...) *copy* the
+ *   value handed to `push_back`, so one scratch object can be re-`Set` for every element.
+ *   Allocating a fresh `Vec3`/`Float3`/`IndexedTriangle` per element leaked one WASM object
+ *   per vertex/triangle (a 2k-triangle sphere leaked ~3k objects).
+ * - `ShapeSettings` and the lists handed to their constructors are copied into the shape by
+ *   `Create()`, so both can be destroyed as soon as the shape exists.
+ * - `ShapeSettings.Create()` does NOT return a fresh object: the binder hands back a pointer
+ *   to a `static ShapeResult` temporary that is overwritten by the next `Create()` call
+ *   anywhere in the process. It must never be passed to `destroy()` (that would `delete` a
+ *   static) and the reference it holds on the shape must not be relied on - see
+ *   `createShapeFromSettings` below.
+ * - Statics returned by value (`Vec3::sZero()`, `Quat::sIdentity()`, `AABox::sBiggest()`,
+ *   `Shape::GetCenterOfMass()`, ...) are the same kind of static temporary: they are not
+ *   allocations and must not be destroyed.
+ * - Sub-settings added to a compound (`CompoundShapeSettings::AddShape`) are ref-counted by
+ *   the compound. Destroying the compound settings frees them, so callers must not destroy
+ *   sub-settings themselves.
+ * ========================================================================== */
+
+/**
+ * Turn `ShapeSettings` into a `Shape`, taking ownership of the settings.
+ *
+ * `Create()` returns a reference to a static `ShapeResult` whose reference on the new shape is
+ * dropped the next time anything calls `Create()`, so we take our own reference here. The
+ * returned shape is owned by the caller: pass it to something that takes a reference (a
+ * `BodyCreationSettings`, a compound, ...) and then `releaseShape()` it, or `releaseShape()` it
+ * when the shape is no longer needed.
+ *
+ * @param shapeSettings the settings to realise
+ * @param destroySettings destroy the settings once the shape exists (default true)
+ */
+export const createShapeFromSettings = (
+    shapeSettings: Jolt.ShapeSettings,
+    destroySettings = true
+): Jolt.Shape => {
+    const jolt = Raw.module;
+    // NOTE: not an allocation, and never destroy it - it is a static temporary.
+    const result = shapeSettings.Create();
+    if (result.HasError()) {
+        // copy the message out before Clear() frees it
+        const message = result.GetError().c_str();
+        result.Clear();
+        if (destroySettings) jolt.destroy(shapeSettings);
+        throw new Error(`Jolt could not create the shape: ${message}`);
+    }
+    const shape = result.Get();
+    // own a reference before the settings (and the static result) let go of theirs
+    shape.AddRef();
+    // release the static temporary's reference so it doesn't keep this shape alive by accident
+    result.Clear();
+    if (destroySettings) jolt.destroy(shapeSettings);
+    return shape;
+};
+
+/**
+ * Drop a reference taken by `createShapeFromSettings`. Jolt shapes are ref-counted: this frees
+ * the shape only once nothing else (a body, a compound, ...) is holding it.
+ */
+export const releaseShape = (shape?: Jolt.Shape | null) => {
+    if (shape) shape.Release();
+};
+
 export const getShapeSettingsFromObject = (
     object: Object3D,
     // why do I need this here?
     shapeType?: AutoShape
 ) => {
+    const jolt = Raw.module;
     // TODO: Add types here
     const shapes: any = [];
 
@@ -63,11 +131,13 @@ export const getShapeSettingsFromObject = (
                 );
 
                 if (shapeSettingsAndOffset) {
+                    // the three vectors are kept as-is; the jolt Vec3/Quat are only created
+                    // once, below, because AddShape copies them anyway.
                     const shape = {
                         shapeSettings: shapeSettingsAndOffset.shapeSettings,
                         offset: shapeSettingsAndOffset.offset,
-                        position: vec3.threeToJolt(child.position),
-                        quaternion: quat.threeToJolt(child.quaternion)
+                        position: child.position,
+                        quaternion: child.quaternion
                     };
 
                     shapes.push(shape);
@@ -81,15 +151,20 @@ export const getShapeSettingsFromObject = (
     //console.log('shapes', shapes);
     // if theres only one, return it
     if (shapes.length === 1) return shapes[0].shapeSettings;
-    const compoundShapeSettings = new Raw.module.StaticCompoundShapeSettings();
+    const compoundShapeSettings = new jolt.StaticCompoundShapeSettings();
 
+    // one scratch position/rotation for the whole loop: AddShape copies both
+    const position = new jolt.Vec3(0, 0, 0);
+    const quaternion = new jolt.Quat(0, 0, 0, 1);
     // Note: offset also available
-    for (const { shapeSettings, position, quaternion } of shapes) {
+    for (const { shapeSettings, position: inPosition, quaternion: inQuaternion } of shapes) {
+        position.Set(inPosition.x, inPosition.y, inPosition.z);
+        quaternion.Set(inQuaternion.x, inQuaternion.y, inQuaternion.z, inQuaternion.w);
+        // the compound takes a reference on the sub-settings; destroying the compound frees them
         compoundShapeSettings.AddShape(position, quaternion, shapeSettings, 0);
-
-        Raw.module.destroy(position);
-        Raw.module.destroy(quaternion);
     }
+    jolt.destroy(position);
+    jolt.destroy(quaternion);
 
     return compoundShapeSettings;
 };
@@ -119,6 +194,66 @@ const getShapeTypeFromGeometry = (geometry: PossibleGeometry): AutoShape => {
             // bail out with sphere
             return 'convex';
     }
+};
+
+/**
+ * Fill a `ConvexHullShapeSettings`' point list from a flat xyz array.
+ * One scratch `Vec3` is reused for every point because `push_back` copies the value.
+ */
+const pushHullPoints = (points: ArrayLike<number>, hull: Jolt.ConvexHullShapeSettings) => {
+    const jolt = Raw.module;
+    const hullPoints = hull.mPoints;
+    hullPoints.reserve(points.length / 3);
+    const point = new jolt.Vec3(0, 0, 0);
+    for (let i = 0; i < points.length; i += 3) {
+        point.Set(points[i], points[i + 1], points[i + 2]);
+        hullPoints.push_back(point);
+    }
+    jolt.destroy(point);
+};
+
+/**
+ * Build `MeshShapeSettings` from flat vertex/index data.
+ * One scratch `Float3` and one scratch `IndexedTriangle` are reused for the whole mesh, and the
+ * vertex/triangle/material lists are destroyed as soon as the settings have copied them.
+ * The material list is left empty on purpose - Jolt then uses its default physics material, and
+ * a `PhysicsMaterial` pushed into the list cannot be freed by hand (the list owns a reference).
+ */
+const createMeshShapeSettings = (
+    getVertex: (index: number, out: Jolt.Float3) => void,
+    vertexCount: number,
+    getTriangle: (index: number, out: Jolt.IndexedTriangle) => void,
+    triangleCount: number
+): Jolt.MeshShapeSettings => {
+    const jolt = Raw.module;
+
+    const verts = new jolt.VertexList();
+    verts.reserve(vertexCount);
+    const vertex = new jolt.Float3(0, 0, 0);
+    for (let i = 0; i < vertexCount; i++) {
+        getVertex(i, vertex);
+        // push_back copies, so the same scratch Float3 serves every vertex
+        verts.push_back(vertex);
+    }
+    jolt.destroy(vertex);
+
+    const tris = new jolt.IndexedTriangleList();
+    tris.reserve(triangleCount);
+    const triangle = new jolt.IndexedTriangle(0, 0, 0, 0);
+    for (let i = 0; i < triangleCount; i++) {
+        getTriangle(i, triangle);
+        tris.push_back(triangle);
+    }
+    jolt.destroy(triangle);
+
+    const mats = new jolt.PhysicsMaterialList();
+    const shapeSettings = new jolt.MeshShapeSettings(verts, tris, mats);
+    // the settings copied all three lists
+    jolt.destroy(verts);
+    jolt.destroy(tris);
+    jolt.destroy(mats);
+
+    return shapeSettings;
 };
 
 // We use shape settings because it lets us reuse this fn in compound shape generation
@@ -195,18 +330,14 @@ export const getShapeSettingsFromGeometry = (
             const mergedPoints = BufferGeometryUtils.mergeVertices(simplifiedGeo);
             const points = mergedPoints.getAttribute('position').array;
 
-            // create the hull
-            shapeSettings = new jolt.ConvexHullShapeSettings();
-            // add the points
-            for (let i = 0; i < points.length; i += 3) {
-                shapeSettings.mPoints.push_back(
-                    new jolt.Vec3(points[i], points[i + 1], points[i + 2])
-                );
-            }
-            // Do we need to destroy the points, or will it destroy when the settings does?
-            // we can probably destroy all the three helper objects
-            // TODO: kill three objects
+            // create the hull and add the points
+            const hull = new jolt.ConvexHullShapeSettings();
+            pushHullPoints(points, hull);
+            shapeSettings = hull;
 
+            // the two throwaway three geometries are ours, drop them
+            mergedPoints.dispose();
+            simplifiedGeo.dispose();
             break;
         }
         // trimesh as default if nothing else passed
@@ -214,26 +345,26 @@ export const getShapeSettingsFromGeometry = (
         // base pulled from: https://github.com/sajal353/r3f-jolt/blob/main/src/Jolt/useTrimesh.ts
         default: {
             const vertices = geometry.getAttribute('position');
-            const indices = geometry.index!.array;
-            const verts = new jolt.VertexList();
-            // loop over the bufferAttribute
-            for (let i = 0; i < vertices.count; i++) {
-                verts.push_back(
-                    new jolt.Float3(vertices.getX(i), vertices.getY(i), vertices.getZ(i))
-                );
-            }
-            // make the triangle list
-            const tris = new jolt.IndexedTriangleList();
-            for (let i = 0; i < indices.length; i += 3) {
-                tris.push_back(
-                    new jolt.IndexedTriangle(indices[i], indices[i + 1], indices[i + 2], 0)
-                );
-            }
-            // not sure we need these mats
-            const mats = new jolt.PhysicsMaterialList();
-            mats.push_back(new jolt.PhysicsMaterial());
+            // a non-indexed geometry is just triangle soup: vertex i*3 + n
+            const indices = geometry.index?.array;
+            const triangleCount = indices ? indices.length / 3 : vertices.count / 3;
 
-            shapeSettings = new jolt.MeshShapeSettings(verts, tris, mats);
+            shapeSettings = createMeshShapeSettings(
+                (i, out) => {
+                    out.x = vertices.getX(i);
+                    out.y = vertices.getY(i);
+                    out.z = vertices.getZ(i);
+                },
+                vertices.count,
+                (i, out) => {
+                    const o = i * 3;
+                    out.set_mIdx(0, indices ? indices[o] : o);
+                    out.set_mIdx(1, indices ? indices[o + 1] : o + 1);
+                    out.set_mIdx(2, indices ? indices[o + 2] : o + 2);
+                    out.set_mMaterialIndex(0);
+                },
+                triangleCount
+            );
         }
     }
 
@@ -292,12 +423,17 @@ export const generateShapeSettings = (
                 shapeSettings = settings!.shapeSettings;
                 break;
             }
-            const points = options.points || [];
-            shapeSettings = new jolt.ConvexHullShapeSettings();
-            points.forEach((point: Vector3) => {
-                //@ts-ignore
-                shapeSettings!.mPoints.push_back(new jolt.Vec3(point.x, point.y, point.z));
+            const points: Vector3[] = options.points || [];
+            const hull = new jolt.ConvexHullShapeSettings();
+            // flatten so the shared helper can reuse a single scratch Vec3
+            const flat = new Float32Array(points.length * 3);
+            points.forEach((point, index) => {
+                flat[index * 3] = point.x;
+                flat[index * 3 + 1] = point.y;
+                flat[index * 3 + 2] = point.z;
             });
+            pushHullPoints(flat, hull);
+            shapeSettings = hull;
             break;
         }
         // this one is heavy
@@ -307,29 +443,36 @@ export const generateShapeSettings = (
                 shapeSettings = settings!.shapeSettings;
                 break;
             }
-            const vertices = options.vertices || [];
-            const indices = options.indices || [];
-            const verts = new jolt.VertexList();
-            vertices.forEach((point: Vector3) => {
-                verts.push_back(new jolt.Float3(point.x, point.y, point.z));
-            });
-            const tris = new jolt.IndexedTriangleList();
-            indices.forEach((tri: number[]) => {
-                tris.push_back(new jolt.IndexedTriangle(tri[0], tri[1], tri[2], 0));
-            });
-            const mats = new jolt.PhysicsMaterialList();
-            mats.push_back(new jolt.PhysicsMaterial());
+            const vertices: Vector3[] = options.vertices || [];
+            const indices: number[][] = options.indices || [];
 
-            shapeSettings = new jolt.MeshShapeSettings(verts, tris, mats);
+            shapeSettings = createMeshShapeSettings(
+                (i, out) => {
+                    const point = vertices[i];
+                    out.x = point.x;
+                    out.y = point.y;
+                    out.z = point.z;
+                },
+                vertices.length,
+                (i, out) => {
+                    const tri = indices[i];
+                    out.set_mIdx(0, tri[0]);
+                    out.set_mIdx(1, tri[1]);
+                    out.set_mIdx(2, tri[2]);
+                    out.set_mMaterialIndex(0);
+                },
+                indices.length
+            );
             break;
         }
 
         // default to box
         default: {
             const size = options.size ? vec3.three(options.size) : new THREE.Vector3(1, 1, 1);
-            shapeSettings = new jolt.BoxShapeSettings(
-                new jolt.Vec3(size.x / 2, size.y / 2, size.z / 2)
-            );
+            const halfExtent = new jolt.Vec3(size.x / 2, size.y / 2, size.z / 2);
+            shapeSettings = new jolt.BoxShapeSettings(halfExtent);
+            // BoxShapeSettings copied the half extent
+            jolt.destroy(halfExtent);
             break;
         }
     }
@@ -342,6 +485,11 @@ export type CompoundShapeData = {
     quaternion: THREE.Quaternion;
     shape?: Jolt.Shape;
 };
+/**
+ * Build a compound from already-created sub-settings.
+ * The compound takes a reference on every sub-setting, so the caller must NOT destroy them:
+ * destroying the returned compound settings frees the whole tree.
+ */
 export const generateCompoundShapeSettings = (shapes: CompoundShapeData[], dynamic = false) => {
     const jolt = Raw.module;
     const compoundShapeSettings = dynamic
@@ -377,10 +525,13 @@ export const generateHeightfieldShapeFromThree = (heightfieldPlane: THREE.Mesh) 
 
     // create the heightfield
     const shapeSettings = new jolt.HeightFieldShapeSettings();
+    // mOffset/mScale are members of the settings, not allocations - Set() them in place.
     shapeSettings.mOffset.Set(0, 0, 0);
     shapeSettings.mScale.Set(scale, 1, scale);
     shapeSettings.mSampleCount = size;
     shapeSettings.mBlockSize = BLOCK_SIZE;
+    // mHeightSamples is an ArrayFloat owned by the settings: resize() allocates inside it and
+    // destroying the settings frees it. There is no _malloc here to _free.
     shapeSettings.mHeightSamples.resize(vertexCount);
 
     const heightSamples = new Float32Array(
@@ -388,39 +539,44 @@ export const generateHeightfieldShapeFromThree = (heightfieldPlane: THREE.Mesh) 
         jolt.getPointer(shapeSettings.mHeightSamples.data()),
         vertexCount
     ); // Convert the height samples into a Float32Array
-    //@ts-ignore
-    heightSamples.forEach((o, i) => {
+    for (let i = 0; i < vertexCount; i++) {
         heightSamples[i] = vertices[i * 3 + 1];
-        //heightSamples[i] = 1;
         // TODO: NOTE, this implementation does not allow holes in the map, which Jolt supports
         //heightSamples[i] = Jolt.HeightFieldShapeConstantValues.prototype.cNoCollisionValue; // Invisible pixels make holes
-    });
+    }
     return shapeSettings;
 };
 
-// Take a complex Jolt shape and generate a ThreeJS mesh
-//taken from jolt examples
-export function createMeshForShape(shape: Jolt.Shape): THREE.BufferGeometry {
+// Take a complex Jolt shape and generate a ThreeJS geometry.
+// Taken from the Jolt JS examples. This used to exist twice, byte for byte, as
+// `createMeshForShape` here and `createMeshFromShape` in utils/meshTools.ts; both names still
+// resolve to this one implementation.
+// Note on memory: `AABox::sBiggest()`, `Quat::sIdentity()` and `Shape::GetCenterOfMass()` return
+// pointers to static temporaries inside the binder, not allocations - destroying them would free
+// memory Jolt still owns. Only `scale` and `triContext` are ours to free.
+export function createMeshFromShape(shape: Jolt.Shape): THREE.BufferGeometry {
+    const jolt = Raw.module;
     // Get triangle data
-    const scale = new Raw.module.Vec3(1, 1, 1);
-    const triContext = new Raw.module.ShapeGetTriangles(
+    const scale = new jolt.Vec3(1, 1, 1);
+    const triContext = new jolt.ShapeGetTriangles(
         shape,
-        Raw.module.AABox.prototype.sBiggest(),
+        jolt.AABox.prototype.sBiggest(),
         shape.GetCenterOfMass(),
-        Raw.module.Quat.prototype.sIdentity(),
+        jolt.Quat.prototype.sIdentity(),
         scale
     );
-    Raw.module.destroy(scale);
+    jolt.destroy(scale);
+
     // Get a view on the triangle data (does not make a copy)
     const vertices = new Float32Array(
-        Raw.module.HEAPF32.buffer,
+        jolt.HEAPF32.buffer,
         triContext.GetVerticesData(),
         triContext.GetVerticesSize() / Float32Array.BYTES_PER_ELEMENT
     );
 
     // Now move the triangle data to a buffer and clone it so that we can free the memory from the C++ heap (which could be limited in size)
     const buffer = new THREE.BufferAttribute(vertices, 3).clone();
-    Raw.module.destroy(triContext);
+    jolt.destroy(triContext);
 
     // Create a three mesh
     const geometry = new THREE.BufferGeometry();
@@ -429,3 +585,6 @@ export function createMeshForShape(shape: Jolt.Shape): THREE.BufferGeometry {
 
     return geometry;
 }
+
+/** @deprecated use `createMeshFromShape` - kept because it is part of the public API. */
+export const createMeshForShape = createMeshFromShape;

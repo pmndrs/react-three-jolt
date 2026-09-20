@@ -16,8 +16,10 @@ import { BodyState } from './body-state';
 import {
     AutoShape,
     createMeshForShape,
+    createShapeFromSettings,
     generateHeightfieldShapeFromThree,
     getShapeSettingsFromObject,
+    releaseShape,
     ShapeSystem
 } from './shape-system';
 
@@ -216,8 +218,6 @@ export class BodySystem {
         const shapeSettings = generateHeightfieldShapeFromThree(planeMesh);
         //const position = new Raw.module.Vec3(0, -20, 0); // The image tends towards 'white', so offset it down closer to zero
         const quaternion = new Raw.module.Quat(0, 0, 0, 1);
-        //@ts-ignore
-        const shape: Jolt.HeightFieldShape = shapeSettings.Create().Get();
         const size = shapeSettings.mSampleCount;
         //@ts-ignore  yes it does exist
         const planeWidth = planeMesh.geometry.parameters.width;
@@ -229,6 +229,8 @@ export class BodySystem {
             planeMesh.position.z + offset
         );
 
+        // this destroys the shapeSettings and hands back a shape we hold a reference on
+        const shape = createShapeFromSettings(shapeSettings);
         const creationSettings = new Raw.module.BodyCreationSettings(
             shape,
             position,
@@ -237,13 +239,12 @@ export class BodySystem {
             Layer.NON_MOVING
         );
         const body = this.bodyInterface.CreateBody(creationSettings);
-        // cleanup before returning
-        this.jolt.destroy(shapeSettings);
+        // cleanup before returning. The body holds its own reference to the shape and the
+        // creation settings copied the transform, so all of this is ours to free.
         this.jolt.destroy(creationSettings);
-        //TODO: One of these causes a crash.
-        // this.jolt.destroy(position);
-        //this.jolt.destroy(quaternion);
-        //this.jolt.destroy(shape);
+        this.jolt.destroy(position);
+        this.jolt.destroy(quaternion);
+        releaseShape(shape);
         return this.addExistingBody(planeMesh, body, { bodyType: 'static' });
     }
     //* Body Modification ===================================
@@ -559,7 +560,10 @@ export function generateBodySettings(
     if (isObject) {
         const shapeSettings = getShapeSettingsFromObject(object, options.shapeType);
         if (!shapeSettings) throw new Error('No shape settings found');
-        shape = shapeSettings.Create().Get();
+        // takes ownership of the settings (and of any sub-settings they reference) and gives us
+        // a shape we hold one reference on - released below, once the BodyCreationSettings has
+        // taken its own.
+        shape = createShapeFromSettings(shapeSettings);
     }
 
     // create position and quaternion from three to jolt
@@ -651,11 +655,15 @@ export function generateBodySettings(
         let size: any = options?.size || new THREE.Vector3(1, 1, 1);
         const mass = options?.mass || 200;
         if (isObject) size = new THREE.Box3().setFromObject(object).getSize(new Vector3());
-        settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(vec3.jolt(size), mass);
+        const boxSize = vec3.jolt(size);
+        settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(boxSize, mass);
+        jolt.destroy(boxSize);
     }
     // destroy the position and quaternion
     jolt.destroy(position);
     jolt.destroy(quaternion);
+    // the settings hold their own reference to a shape we created here
+    if (isObject) releaseShape(shape);
 
     return settings;
 }
