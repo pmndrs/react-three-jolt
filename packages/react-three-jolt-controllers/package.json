@@ -61,7 +61,8 @@
         }
     },
     "dependencies": {
-        "@react-three/jolt": "0.0.1"
+        "@react-three/jolt": "0.0.1",
+        "@react-three/jolt-addons": "0.0.1"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.14",
