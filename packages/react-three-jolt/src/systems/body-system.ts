@@ -360,6 +360,9 @@ export class BodySystem {
 
         // VERY IMPORTANT! ADD TO THE ACTUAL SIMULATION
         this.bodyInterface.AddBody(body.GetID(), activationState);
+        // Registry event (#158), after the body is fully live so a listener may read its shape
+        // and pose. Costs nothing when nothing is listening.
+        this.worldEvents?.emit('bodyAdded', state);
         return handle;
     }
     getBody(handle: number) {
@@ -370,6 +373,10 @@ export class BodySystem {
         // get the body so we can process it
         const bodyState = this.getBody(bodyHandle);
         if (!bodyState) return;
+        // Registry event (#158). Emitted before anything is torn down - every early return below
+        // still leaves the body out of the maps, so a listener that mirrors the world has to hear
+        // about it exactly once, here.
+        this.worldEvents?.emit('bodyRemoved', bodyState);
         // The collision group is ours, not the body's (Jolt copied it), so free it up front -
         // every early return below would otherwise leak it and hand the recycled handle a stale
         // one. (issue #95)

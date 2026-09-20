@@ -1,3 +1,5 @@
+export * from './Attractor';
+export * from './Debug';
 export * from './FrameStepper';
 export * from './Heightfield';
 export * from './InstancedRigidBody';

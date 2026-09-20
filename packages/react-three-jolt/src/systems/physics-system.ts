@@ -244,10 +244,10 @@ export class PhysicsSystem {
         }
 
         // How far the render frame sits past the last completed physics step, 0..1
-        this.frameAlpha = interpolating
+        this._frameAlpha = interpolating
             ? this.steppingState.accumulator / (this.timeStep as number)
             : 1;
-        this.frameInterpolating = interpolating;
+        this._frameInterpolating = interpolating;
 
         // Loop over all dynamic and kinematic bodies. Iterating the two maps directly (rather
         // than spreading them into one array) keeps the frame loop allocation free.
@@ -261,8 +261,22 @@ export class PhysicsSystem {
 
     // alpha/mode for the current frame, read by `syncBodyToObject`. Kept as fields so the sync
     // callback can be a single long lived function instead of a closure allocated every frame.
-    private frameAlpha = 1;
-    private frameInterpolating = false;
+    private _frameAlpha = 1;
+    private _frameInterpolating = false;
+
+    /**
+     * How far the current render frame sits past the last completed physics step, 0..1. `1`
+     * when the frame lands exactly on a step, which is always the case with interpolation off.
+     * Anything drawing its own view of the world (the `<Physics debug>` overlay) reads this so
+     * it lands on the same pose the bodies' meshes were given.
+     */
+    get frameAlpha(): number {
+        return this._frameAlpha;
+    }
+    /** True when this frame's object poses were interpolated rather than read live. */
+    get frameInterpolating(): boolean {
+        return this._frameInterpolating;
+    }
 
     /**
      * Push one body's physics pose onto its three.js object. Either the interpolated pose
@@ -272,8 +286,8 @@ export class PhysicsSystem {
         if (state.isSleeping) return;
 
         // World space physics pose for this frame -> _vector3 / _quaternion
-        if (this.frameInterpolating && state.poseCacheValid) {
-            state.getInterpolatedPose(this.frameAlpha, _vector3, _quaternion);
+        if (this._frameInterpolating && state.poseCacheValid) {
+            state.getInterpolatedPose(this._frameAlpha, _vector3, _quaternion);
         } else {
             state.readPose(_vector3, _quaternion);
         }

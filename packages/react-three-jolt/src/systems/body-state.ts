@@ -333,6 +333,7 @@ export class BodyState {
         this.bodyInterface.SetShape(this.BodyID, shape, false, Raw.module.EActivation_Activate);
         // update the debug object if it exists
         if (this.debugMesh) this.updateDebugMesh();
+        this.bodySystem.worldEvents?.emit('shapeChanged', this);
     }
 
     //* Mutable compounds (issue #108) ========================
@@ -373,6 +374,9 @@ export class BodyState {
             Raw.module.EActivation_Activate
         );
         if (this.debugMesh) this.updateDebugMesh();
+        // An in-place compound edit keeps the same shape pointer, so a geometry cache keyed on
+        // that pointer cannot see it. This is the only notification there is (issue #158).
+        this.bodySystem.worldEvents?.emit('shapeChanged', this);
     }
 
     /**
