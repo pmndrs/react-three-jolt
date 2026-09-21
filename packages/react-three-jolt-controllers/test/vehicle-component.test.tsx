@@ -116,8 +116,10 @@ test('the deprecated <VehicleFourWheel> alias still renders a four wheeled vehic
     await settle(() => vehicle !== null);
 
     assert.isNotNull(vehicle, '<VehicleFourWheel> never created a vehicle');
-    assert.equal(vehicle!.settings.type, 'fourWheel');
-    assert.equal(vehicle!.wheels.size, 4);
+    // assigned from a React callback, so control flow analysis still has it as `null` here
+    const created = vehicle as unknown as VehicleManager;
+    assert.equal(created.settings.type, 'fourWheel');
+    assert.equal(created.wheels.size, 4);
 
     await renderer.unmount();
 });

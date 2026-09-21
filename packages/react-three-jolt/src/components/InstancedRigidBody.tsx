@@ -179,7 +179,9 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
                 const extras = instances.slice(count);
                 instances = instances.slice(0, count);
                 // remove the extras - this unregisters each body from bodySystem's maps
-                extras.forEach((instance) => instance.destroy());
+                extras.forEach((instance) => {
+                    instance.destroy();
+                });
             } else if (count > instances.length) {
                 // if the count is greater than the current instances, add the extras
                 for (let i = instances.length; i < count; i++) {

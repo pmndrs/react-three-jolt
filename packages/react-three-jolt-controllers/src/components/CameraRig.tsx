@@ -44,7 +44,7 @@ export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, re
 
     // bind the look command for look and zoom
     useLookCommand(
-        (lookVector: any) => {
+        (lookVector) => {
             cameraRig.moveBoom(lookVector);
         },
         (zoomLevel: number) => {
@@ -66,7 +66,6 @@ export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, re
 
     useEffect(() => {
         if (!characterSystem) return;
-        //@ts-ignore
         cameraRig.attach(characterSystem.anchor);
         // `followMode="movement"` steers off the character's own velocity: the anchor it follows
         // is a kinematic stand-in and does not carry one (issue #75)

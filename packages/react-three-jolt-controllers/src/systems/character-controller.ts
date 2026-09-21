@@ -14,7 +14,8 @@ import {
     Raw,
     releaseShape,
     type Unsubscribe,
-    vec3
+    vec3,
+    wrapPointer
 } from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
@@ -29,8 +30,41 @@ interface CharacterFilters {
     shapeFilter: Jolt.ShapeFilter;
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-export type CharacterActionCallback = (action: any, payload?: any) => void;
+/**
+ * Everything that can reach an action listener (issue #209).
+ *
+ * Every typed {@link CharacterEventMap} event is *also* emitted as an action of the same name,
+ * and a handful of names below exist only as actions - they carry a payload but no dedicated
+ * event. `on(action, fn)` filters on one of these.
+ *
+ * `'exausted'` is a misspelling kept for one release; listen for `'exhausted'`.
+ */
+export type CharacterActionName = keyof CharacterEventMap | CharacterActionOnlyName;
+
+/** Action names with no matching entry in {@link CharacterEventMap}. */
+export type CharacterActionOnlyName =
+    | 'falling'
+    | 'crouched'
+    | 'running'
+    | 'exhausted'
+    /** @deprecated misspelling of `'exhausted'` */
+    | 'exausted';
+
+/**
+ * A controller action listener: `(name, payload)`.
+ *
+ * The payload differs per action (a speed, a jump count, a boolean, ...), so it is `unknown`
+ * and the handler narrows it. Use `controller.events.on(type, fn)` for a typed payload.
+ */
+export type CharacterActionCallback = (action: CharacterActionName, payload?: unknown) => void;
+
+/**
+ * Any callable, used only as the identity key of the deprecated `removeActionListener(fn)`.
+ *
+ * `never[]` parameters make it a supertype of every concrete listener signature without being
+ * the banned `Function`, which types nothing and permits `new listener()`.
+ */
+type ActionListenerKey = (...args: never[]) => unknown;
 
 /**
  * One contact between the character and a body, forwarded from Jolt's
@@ -147,11 +181,13 @@ export class CharacterControllerSystem {
         new THREE.MeshPhongMaterial({ color: 0xffff00 })
     );
     protected updateSettings = new Raw.module.ExtendedUpdateSettings();
-    protected characterContactListener: any;
+    protected characterContactListener?: Jolt.CharacterContactListenerJS;
 
     //rig anchor
-    anchor: any;
-    anchorID: any;
+    /** The kinematic body the camera rig follows; created by `createAnchor()`. */
+    anchor?: BodyState;
+    /** {@link anchor}'s body handle. */
+    anchorID?: Jolt.BodyID;
 
     // DO NOT MESS WITH THESE
     filters: CharacterFilters = {
@@ -169,7 +205,7 @@ export class CharacterControllerSystem {
      */
     readonly events = new Emitter<CharacterEventMap>(CHARACTER_EVENT_BITS);
     /** Back compat so the deprecated `removeActionListener(fn)` still finds its handles. */
-    private legacyActionSubs = new Map<Function, Unsubscribe[]>();
+    private legacyActionSubs = new Map<ActionListenerKey, Unsubscribe[]>();
 
     // configurable options
 
@@ -358,10 +394,11 @@ export class CharacterControllerSystem {
         );
         // adjust the main body filter to not conflict with sensors
         this.filters.bodyFilter.ShouldCollide = () => true;
-        //@ts-ignore wrap still incorrect here.
-        this.filters.bodyFilter.ShouldCollideLocked = (inBody: Jolt.Body) =>
-            //@ts-ignore wrap still incorrect here.
-            !Raw.module.wrapPointer(inBody, Raw.module.Body).IsSensor();
+        // embind hands a JSImplementation raw pointers, so `inBodyPtr` is a heap address and
+        // has to be wrapped before it is a Body. The wrapper is a view Jolt owns - never freed,
+        // never retained past this call.
+        this.filters.bodyFilter.ShouldCollideLocked = (inBodyPtr) =>
+            !wrapPointer(inBodyPtr, Raw.module.Body).IsSensor();
 
         // Init the character contact listener
         this.initCharacterContactListener();
@@ -491,9 +528,9 @@ export class CharacterControllerSystem {
         const setAttempt = this.character.SetShape(
             shape,
             1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
-            //@ts-ignore
-            this.filters.movingBPFilter,
-            this.filters.movingLayerFilter,
+            // both filters are built in the constructor and only cleared by destroy()
+            this.filters.movingBPFilter!,
+            this.filters.movingLayerFilter!,
             this.filters.bodyFilter,
             this.filters.shapeFilter,
             this.joltInterface.GetTempAllocator()
@@ -646,10 +683,10 @@ export class CharacterControllerSystem {
     get groundVelocity(): THREE.Vector3 {
         return vec3.three(this.character.GetGroundVelocity());
     }
-    get groundMaterial(): any {
+    get groundMaterial(): Jolt.PhysicsMaterial {
         return this.character.GetGroundMaterial();
     }
-    get groundBodyHandle(): any {
+    get groundBodyHandle(): number {
         return this.character.GetGroundBodyID().GetIndexAndSequenceNumber();
         //TODO do we need to destroy the bodyID?
     }
@@ -682,16 +719,17 @@ export class CharacterControllerSystem {
 
     initCharacterContactListener() {
         this.characterContactListener = new Raw.module.CharacterContactListenerJS();
+        // Every parameter of every CharacterContactListenerJS callback is a raw WASM pointer -
+        // that is what jolt-physics 1.1.0's typings say and what emscripten actually passes.
+        // Wrapping produces a view Jolt owns: never free one, never keep one past the callback.
         this.characterContactListener.OnAdjustBodyVelocity = (
-            _character: Jolt.CharacterVirtual,
-            body2: Jolt.Body,
-            linearVelocity: Jolt.Vec3,
-            _angularVelocity: Jolt.Vec3
+            _characterPtr,
+            body2Ptr,
+            linearVelocityPtr,
+            _angularVelocityPtr
         ) => {
-            //@ts-ignore wrapPointer TS error
-            body2 = Raw.module.wrapPointer(body2, Raw.module.Body);
-            //@ts-ignore
-            linearVelocity = Raw.module.wrapPointer(linearVelocity, Raw.module.Vec3);
+            const body2 = wrapPointer(body2Ptr, Raw.module.Body);
+            const linearVelocity = wrapPointer(linearVelocityPtr, Raw.module.Vec3);
             // get the body we are colliding with
 
             const body2State = this.bodySystem.getBody(body2.GetID().GetIndexAndSequenceNumber());
@@ -715,15 +753,13 @@ export class CharacterControllerSystem {
             }
         };
         this.characterContactListener.OnContactValidate = (
-            character: Jolt.CharacterVirtual,
-            bodyID2: Jolt.BodyID,
-            _subShapeID2: Jolt.SubShapeID
+            _characterPtr,
+            _bodyID2Ptr,
+            _subShapeID2Ptr
         ) => {
-            //@ts-ignore wrapPointer TS error
-            bodyID2 = Raw.module.wrapPointer(bodyID2, Raw.module.Body);
-            //@ts-ignore wrapPointer TS error
-            character = Raw.module.wrapPointer(character, Raw.module.Body);
             // this seems to be a space to trigger sensors
+            // (the two pointers used to be wrapped here and then thrown away unused; wrapping
+            // them again is one line whenever this actually filters something)
             return true;
         };
         // #79/#80/#187: forward the contacts Jolt actually reports. Every one of these is a
@@ -745,23 +781,19 @@ export class CharacterControllerSystem {
             // lives in `OnContactSolve` below, which relies on that being trustworthy.
         ) => this.queueContact(0, bodyID2, subShapeID2, contactPosition, contactNormal);
         this.characterContactListener.OnContactSolve = (
-            character: any,
-            _bodyID2: Jolt.BodyID,
-            _subShapeID2: Jolt.SubShapeID,
-            _contactPosition: Jolt.Vec3,
-            contactNormal: Jolt.Vec3,
-            contactVelocity: Jolt.Vec3,
-            _contactMaterial: Jolt.PhysicsMaterial,
-            _characterVelocity: Jolt.Vec3,
-            newCharacterVelocity: Jolt.Vec3
+            _characterPtr,
+            _bodyID2Ptr,
+            _subShapeID2Ptr,
+            _contactPositionPtr,
+            contactNormalPtr,
+            contactVelocityPtr,
+            _contactMaterialPtr,
+            _characterVelocityPtr,
+            newCharacterVelocityPtr
         ) => {
-            character = Raw.module.wrapPointer(character, Raw.module.Body);
-            //@ts-ignore wrapPointer TS error
-            contactVelocity = Raw.module.wrapPointer(contactVelocity, Raw.module.Vec3);
-            //@ts-ignore
-            newCharacterVelocity = Raw.module.wrapPointer(newCharacterVelocity, Raw.module.Vec3);
-            //@ts-ignore
-            contactNormal = Raw.module.wrapPointer(contactNormal, Raw.module.Vec3);
+            const contactVelocity = wrapPointer(contactVelocityPtr, Raw.module.Vec3);
+            const newCharacterVelocity = wrapPointer(newCharacterVelocityPtr, Raw.module.Vec3);
+            const contactNormal = wrapPointer(contactNormalPtr, Raw.module.Vec3);
 
             if (
                 !this.allowSliding &&
@@ -954,7 +986,8 @@ export class CharacterControllerSystem {
             Raw.module.Quat.prototype.sIdentity(),
             this.physicsSystem.physicsSystem
         );
-        this.character.SetListener(this.characterContactListener);
+        if (this.characterContactListener)
+            this.character.SetListener(this.characterContactListener);
 
         this.threeObject.userData.body = this.character;
 
@@ -1101,9 +1134,9 @@ export class CharacterControllerSystem {
             deltaTime,
             this.character.GetUp(),
             this.updateSettings,
-            //@ts-ignore
-            this.filters.movingBPFilter,
-            this.filters.movingLayerFilter,
+            // both filters are built in the constructor and only cleared by destroy()
+            this.filters.movingBPFilter!,
+            this.filters.movingLayerFilter!,
             this.filters.bodyFilter,
             this.filters.shapeFilter,
             this.joltInterface.GetTempAllocator()
@@ -1119,7 +1152,7 @@ export class CharacterControllerSystem {
         );
         //console.log('character position', vec3.three(this.character.GetPosition()	);
         // update the anchor
-        this.anchor.setPositionAndRotation(this.threeObject.position, this.threeObject.quaternion);
+        this.anchor?.setPositionAndRotation(this.threeObject.position, this.threeObject.quaternion);
 
         // Everything user facing happens here, once the character update has returned: the
         // contacts Jolt queued from inside it, then the state edges derived from the result.
@@ -1222,11 +1255,9 @@ export class CharacterControllerSystem {
      */
     private emitEvent<K extends keyof CharacterEventMap>(
         type: K,
-        // biome-ignore lint/suspicious/noExplicitAny: forwarded straight to the emitter
-        ...args: any[]
+        ...args: Parameters<CharacterEventMap[K]>
     ): void {
-        // biome-ignore lint/suspicious/noExplicitAny: see above
-        this.events.emit(type, ...(args as any));
+        this.events.emit(type, ...args);
         this.triggerActionListeners(type, args[0]);
     }
     //* Movement Functions ========================================
@@ -1295,7 +1326,7 @@ export class CharacterControllerSystem {
         const groundVelocity = this.groundVelocity;
         const gravity = vec3.joltToThree(this.physicsSystem.physicsSystem.GetGravity());
 
-        let newVelocity: any;
+        let newVelocity: THREE.Vector3;
         const movingTowardsGround = currentVerticalVelocity.y - groundVelocity.y < 0.1;
 
         // notify the user we are falling
@@ -1372,9 +1403,9 @@ export class CharacterControllerSystem {
             const tryShape = this.character.SetShape(
                 newShape,
                 1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
-                //@ts-ignore
-                this.filters.movingBPFilter,
-                this.filters.movingLayerFilter,
+                // both filters are built in the constructor and only cleared by destroy()
+                this.filters.movingBPFilter!,
+                this.filters.movingLayerFilter!,
                 this.filters.bodyFilter,
                 this.filters.shapeFilter,
                 this.joltInterface.GetTempAllocator()
@@ -1409,7 +1440,7 @@ export class CharacterControllerSystem {
             this.isJumping = false;
         }, 100);
     }
-    startRunning(speed?: any) {
+    startRunning(speed?: number) {
         if (this.destroyed) return;
         if (!this.allowRunning || this.isExhausted || this.isCrouched) return;
         const newSpeed = speed || this.characterSpeed * 2;
@@ -1455,17 +1486,19 @@ export class CharacterControllerSystem {
         this.legacyActionSubs.delete(listener);
         for (const off of subs) off();
     };
-    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-    triggerActionListeners = (action: any, payload?: any) => {
+    triggerActionListeners = (action: CharacterActionName, payload?: unknown) => {
         if (this.isDebugging && this.debugVerbose)
             console.log('Character Controller:', action, payload);
         this.events.emit('action', action, payload);
     };
-    // watch function takes an action and a callback and adds the correct listener
-    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-    on = (action: any, callback: (action: any, payload?: any) => void): Unsubscribe =>
-        // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-        this.events.on('action', (a: any, payload?: any) => {
+    /**
+     * Subscribe to one named action. Returns the unsubscribe.
+     *
+     * This is the action-filtered API; `controller.events.on(type, fn)` is the typed one, and
+     * both see the same things (see {@link CharacterActionName}).
+     */
+    on = (action: CharacterActionName, callback: CharacterActionCallback): Unsubscribe =>
+        this.events.on('action', (a, payload) => {
             if (a === action) callback(a, payload);
         });
 

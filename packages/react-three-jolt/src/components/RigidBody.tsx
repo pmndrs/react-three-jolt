@@ -31,7 +31,8 @@ import { devWarn, vec3 } from '../utils';
 import { ShapeContext } from './shape/context';
 
 interface RigidBodyProps {
-    children: ReactNode;
+    /** Optional so `createElement(RigidBody, props, ...children)` typechecks as JSX does. */
+    children?: ReactNode;
     key?: number;
     position?: number[];
     rotation?: number[];
@@ -89,7 +90,11 @@ interface RigidBodyProps {
      */
     colliders?: RigidBodyColliders;
     debug?: boolean;
-    ref?: any;
+    /**
+     * Receives the {@link BodyState} once the body exists. `| undefined` because the usual
+     * `useRef<BodyState>()` produces a `RefObject<BodyState | undefined>`.
+     */
+    ref?: React.Ref<BodyState | undefined>;
     allowObstruction?: boolean;
     obstructionTimelimit?: number;
     isSensor?: boolean;
@@ -154,12 +159,15 @@ interface RigidBodyProps {
 export interface RigidBodyContext {
     body: BodyState | undefined;
     type: BodyType | undefined;
-    position: THREE.Vector3 | undefined;
-    rotation: THREE.Vector3 | undefined;
-    scale: THREE.Vector3 | undefined;
-    quaternion: THREE.Quaternion | undefined;
+    // These four are the RigidBody's own props passed straight through, so they are the props'
+    // `number[]` shape - not THREE.Vector3/Quaternion, which is what this interface used to
+    // claim behind a blanket suppression on the value it was assigned (issue #11).
+    position: number[] | undefined;
+    rotation: number[] | undefined;
+    scale: number[] | undefined;
+    quaternion: number[] | undefined;
     // methods
-    setActiveShape: (shape: any) => void;
+    setActiveShape: (shape: Jolt.Shape | undefined) => void;
     /**
      * Tell the body its shape changed underneath it (#108: a `<Shape dynamic>` edits its
      * `MutableCompoundShape` in place rather than handing over a new shape, so `setActiveShape`
@@ -481,7 +489,6 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                 if (position) objectRef.current.position.copy(vec3.three(position));
                 if (rotation) objectRef.current.rotation.setFromVector3(vec3.three(rotation));
 
-                //@ts-ignore
                 const bodyHandle = bodySystem.addBody(objectRef.current, options);
                 const body = bodySystem.getBody(bodyHandle);
                 if (!body) throw new Error('Body not found');
@@ -709,7 +716,6 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
         );
 
         // the context should update when a new handle is added
-        //@ts-ignore
         const contextValue: RigidBodyContext = useMemo(() => {
             return {
                 // the state, not the ref: this is what makes the context update once the body

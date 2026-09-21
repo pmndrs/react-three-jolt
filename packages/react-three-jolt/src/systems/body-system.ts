@@ -15,7 +15,7 @@ import {
     type SurfaceMaterial,
     SurfaceMaterialTable
 } from '../heightField/materials';
-import { Raw } from '../raw';
+import { castObject, Raw } from '../raw';
 import { devWarn, quat, vec3, withJolt } from '../utils';
 import { BodyState } from './body-state';
 import type { ConstraintSystem } from './constraint-system';
@@ -25,7 +25,9 @@ import {
     EventKind,
     FLUSH_ORDER,
     KIND_EVENT,
-    PayloadPool
+    PayloadPool,
+    type PooledBasic,
+    type PooledEnter
 } from './contact-events';
 import type { Emitter } from './emitter';
 import {
@@ -58,7 +60,33 @@ import {
 
 // TYPES ========================================
 export type BodyType = 'dynamic' | 'static' | 'kinematic' | 'rig';
-export type PendingAction = { action: string; handle: number; value: any };
+/**
+ * What a deferred body action carries, per action name. Deferring exists because a body cannot
+ * be touched from inside a Jolt callback; these are drained at the top of the next substep.
+ */
+export type PendingActionMap = {
+    mass: number;
+    position: THREE.Vector3;
+    rotation: THREE.Quaternion;
+    applyTorque: THREE.Vector3;
+    applyForce: THREE.Vector3;
+    addImpulse: THREE.Vector3;
+};
+
+/** One queued action, discriminated by `action` so `value` narrows with it. */
+export type PendingAction = {
+    [K in keyof PendingActionMap]: { action: K; handle: number; value: PendingActionMap[K] };
+}[keyof PendingActionMap];
+
+/** Extras `addHeightfield` accepts beyond the mesh itself (issues #45/#46). */
+/**
+ * Jolt `BodyCreationSettings` fields merged into every body a world creates.
+ *
+ * `BodyCreationSettings` is an emscripten class, so this is a partial *view* of it rather than
+ * a `Partial<Jolt.BodyCreationSettings>`: only the fields actually set are present, and
+ * `mergeBodyCreationSettings` copies them across by name.
+ */
+export type DefaultBodySettings = Partial<Record<keyof Jolt.BodyCreationSettings, unknown>>;
 
 /** Extras `addHeightfield` accepts beyond the mesh itself (issues #45/#46). */
 export interface HeightfieldBodyOptions {
@@ -215,7 +243,7 @@ export class BodySystem {
     shapeSystem: ShapeSystem;
 
     // lets defaults be set at the physics system level
-    defaultBodySettings: any = {};
+    defaultBodySettings: DefaultBodySettings = {};
     // Shape used when a body doesn't ask for one. Undefined keeps the per-geometry autodetect
     // in getShapeTypeFromGeometry. Settable from `<Physics defaultShape="box">`.
     defaultShape?: AutoShape;
@@ -636,8 +664,14 @@ export class BodySystem {
     }
 
     //* Loop Functions ===================================
-    createPendingAction(action: string, handle: number, value: any) {
-        this.pendingActions.push({ action, handle, value });
+    createPendingAction<K extends keyof PendingActionMap>(
+        action: K,
+        handle: number,
+        value: PendingActionMap[K]
+    ) {
+        // TS cannot see that `action` and `value` came from the same map entry once they are
+        // separate variables, so the union is reassembled here rather than at six call sites.
+        this.pendingActions.push({ action, handle, value } as PendingAction);
     }
     /**
      * Run at the top of every substep, before `Step()`.
@@ -650,7 +684,6 @@ export class BodySystem {
         if (deltaTime > 0 && this.kinematicTargets.size)
             for (const state of this.kinematicTargets) state.applyKinematicTarget(deltaTime);
         if (!this.pendingActions.length) return;
-        // { action: string, handle: number, value: any }
         // lets try this first utilizing setters
         this.pendingActions.forEach((action) => {
             const body = this.getBody(action.handle);
@@ -1098,16 +1131,16 @@ export class BodySystem {
         flipped: boolean,
         state1: BodyState | undefined,
         state2: BodyState | undefined
-        // biome-ignore lint/suspicious/noExplicitAny: one builder for both payload shapes
-    ): any {
+    ): PooledEnter | PooledBasic {
         const queue = this.eventQueue;
         const handle1 = queue.handle1(index);
         const handle2 = queue.handle2(index);
         const withManifold = type === 'collisionEnter' || type === 'collisionPersist';
-        // biome-ignore lint/suspicious/noExplicitAny: the two payload shapes share a builder
-        const payload: any = withManifold
-            ? this.payloads.acquireEnter()
-            : this.payloads.acquireBasic();
+        // `enter` is the same object as `payload` when there is a manifold; keeping the narrower
+        // reference is what lets the manifold block below be written without a cast, since TS
+        // cannot correlate `withManifold` with which branch of the union was taken.
+        const enter = withManifold ? this.payloads.acquireEnter() : undefined;
+        const payload: PooledEnter | PooledBasic = enter ?? this.payloads.acquireBasic();
 
         fillTarget(
             payload.target,
@@ -1124,20 +1157,20 @@ export class BodySystem {
         payload.flipped = flipped;
         payload.contactCount = queue.contactCount(index);
 
-        if (withManifold) {
+        if (enter) {
             // Jolt's normal points from body 1 toward body 2; ours points from `other` toward
             // `target`, i.e. the direction `target` moves to separate.
             const sign = flipped ? 1 : -1;
-            payload.normal.set(
+            enter.normal.set(
                 queue.normalX(index) * sign,
                 queue.normalY(index) * sign,
                 queue.normalZ(index) * sign
             );
-            payload.penetration = queue.penetration(index);
+            enter.penetration = queue.penetration(index);
             const points = queue.pointCount(index);
-            payload.pointCount = points;
-            this.payloads.sizePoints(payload, points);
-            for (let i = 0; i < points; i++) queue.readPoint(index, i, payload.points[i]);
+            enter.pointCount = points;
+            this.payloads.sizePoints(enter, points);
+            for (let i = 0; i < points; i++) queue.readPoint(index, i, enter.points[i]);
         }
         return payload;
     }
@@ -1173,7 +1206,9 @@ export class BodySystem {
         this.pendingActions = [];
         // Our own allocations, not listeners installed on the JoltInterface: these are freed even
         // when the interface belongs to another world (issue #95).
-        this.collisionGroups.forEach((collisionGroup) => Raw.module.destroy(collisionGroup));
+        this.collisionGroups.forEach((collisionGroup) => {
+            Raw.module.destroy(collisionGroup);
+        });
         this.collisionGroups.clear();
         if (this.groupFilterTable) {
             this.groupFilterTable.Release();
@@ -1236,13 +1271,18 @@ function fillTarget(
 // merge jolt Settings with optional object
 export function mergeBodyCreationSettings(
     settings: Jolt.BodyCreationSettings,
-    options?: Jolt.BodyCreationSettings
+    options?: Jolt.BodyCreationSettings | DefaultBodySettings
 ) {
     if (!options) return settings;
+    // embind: BodyCreationSettings' properties are emscripten accessors, so a key-by-key copy
+    // is the only way to merge two of them - and no index signature exists to type that with.
+    // The pair of casts is the whole unsafety, made once and explicitly, instead of the blanket
+    // suppression this used to carry.
+    const target = settings as unknown as Record<string, unknown>;
+    const source = options as unknown as Record<string, unknown>;
     // loop over the object keys and set the settings
-    for (const key in options) {
-        // @ts-expect-error
-        settings[key] = options[key];
+    for (const key in source) {
+        target[key] = source[key];
     }
     return settings;
 }
@@ -1259,11 +1299,11 @@ export function generateBodySettings(
     let ownsShape = isObject;
 
     // create position and quaternion from three to jolt
-    let position: any = new THREE.Vector3();
-    let quaternion: any = new THREE.Quaternion();
+    const threePosition = new THREE.Vector3();
+    const threeQuaternion = new THREE.Quaternion();
     if (isObject) {
-        position.copy(object.position);
-        quaternion.copy(object.quaternion);
+        threePosition.copy(object.position);
+        threeQuaternion.copy(object.quaternion);
     }
     // Jitter fixes a problem where rapidly created bodies jam each other
     // also allows nice effects like fountains when creating bodies
@@ -1275,9 +1315,9 @@ export function generateBodySettings(
             Math.random() * options.jitter.y,
             Math.random() * options.jitter.z
         );
-        position.add(jitter);
+        threePosition.add(jitter);
         // jitter the rotation too
-        quaternion.setFromEuler(
+        threeQuaternion.setFromEuler(
             new THREE.Euler(
                 Math.random() * options.jitter.x,
                 Math.random() * options.jitter.y,
@@ -1287,11 +1327,12 @@ export function generateBodySettings(
     }
     // reset the items to jolt types
     // BodyCreationSettings takes an RVec3 world space position in jolt-physics >=1.0
-    position = vec3.rjolt(position);
-    quaternion = quat.threeToJolt(quaternion);
+    const position = vec3.rjolt(threePosition);
+    const quaternion = quat.threeToJolt(threeQuaternion);
 
     // type bases on bodyType (Dynamic by default)
-    let layer, motionType;
+    let layer: number;
+    let motionType: Jolt.EMotionType;
     switch (options.bodyType) {
         case 'static':
             motionType = jolt.EMotionType_Static;
@@ -1382,7 +1423,7 @@ export function generateBodySettings(
         // belt and braces: a strategy that somehow left a mesh in place still needs *some* mass
         // and inertia, or the body has none at all
         settings.mOverrideMassProperties = jolt.EOverrideMassProperties_MassAndInertiaProvided;
-        let size: any = options?.size || new THREE.Vector3(1, 1, 1);
+        let size: THREE.Vector3 = options?.size || new THREE.Vector3(1, 1, 1);
         const mass = options?.mass || 200;
         if (isObject) size = new THREE.Box3().setFromObject(object).getSize(new Vector3());
         // `vec3.jolt` always allocates a vector we own; `SetMassAndInertiaOfSolidBox` copies it,
@@ -1441,57 +1482,58 @@ export function getThreeObjectForBody(body: Jolt.Body, color = '#E07A5F') {
         wireframe: true
     });
 
-    let threeObject;
+    let threeObject: THREE.Mesh;
 
-    let extent;
+    // Each branch downcasts into its own local instead of writing the subclass back over
+    // `shape` (which stays typed as the base `Jolt.Shape`, which is what made every accessor
+    // below need a suppression). `castObject` re-wraps the same pointer, so these are views -
+    // nothing to free, and `shape` itself still refers to the same object afterwards.
+    let extent: THREE.Vector3;
     switch (shape.GetSubType()) {
-        case Raw.module.EShapeSubType_Box:
-            shape = Raw.module.castObject(shape, Raw.module.BoxShape);
-            //@ts-expect-error
-            extent = vec3.three(shape.GetHalfExtent()).multiplyScalar(2);
+        case Raw.module.EShapeSubType_Box: {
+            const box = castObject(shape, Raw.module.BoxShape);
+            extent = vec3.three(box.GetHalfExtent()).multiplyScalar(2);
             threeObject = new THREE.Mesh(
                 new THREE.BoxGeometry(extent.x, extent.y, extent.z, 1, 1, 1),
                 material
             );
             break;
-        case Raw.module.EShapeSubType_Sphere:
-            shape = Raw.module.castObject(shape, Raw.module.SphereShape);
+        }
+        case Raw.module.EShapeSubType_Sphere: {
+            const sphere = castObject(shape, Raw.module.SphereShape);
             threeObject = new THREE.Mesh(
-                //@ts-expect-error
-                new THREE.SphereGeometry(shape.GetRadius(), 32, 32),
+                new THREE.SphereGeometry(sphere.GetRadius(), 32, 32),
                 material
             );
             break;
-        case Raw.module.EShapeSubType_Capsule:
-            shape = Raw.module.castObject(shape, Raw.module.CapsuleShape);
+        }
+        case Raw.module.EShapeSubType_Capsule: {
+            const capsule = castObject(shape, Raw.module.CapsuleShape);
             threeObject = new THREE.Mesh(
                 new THREE.CapsuleGeometry(
-                    //@ts-expect-error
-                    shape.GetRadius(),
-                    //@ts-expect-error
-                    2 * shape.GetHalfHeightOfCylinder(),
+                    capsule.GetRadius(),
+                    2 * capsule.GetHalfHeightOfCylinder(),
                     20,
                     10
                 ),
                 material
             );
             break;
-        case Raw.module.EShapeSubType_Cylinder:
-            shape = Raw.module.castObject(shape, Raw.module.CylinderShape);
+        }
+        case Raw.module.EShapeSubType_Cylinder: {
+            const cylinder = castObject(shape, Raw.module.CylinderShape);
             threeObject = new THREE.Mesh(
                 new THREE.CylinderGeometry(
-                    //@ts-expect-error
-                    shape.GetRadius(),
-                    //@ts-expect-error
-                    shape.GetRadius(),
-                    //@ts-expect-error
-                    2 * shape.GetHalfHeight(),
+                    cylinder.GetRadius(),
+                    cylinder.GetRadius(),
+                    2 * cylinder.GetHalfHeight(),
                     20,
                     1
                 ),
                 material
             );
             break;
+        }
         default:
             threeObject = new THREE.Mesh(createMeshForShape(shape), material);
             break;

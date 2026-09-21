@@ -4,7 +4,7 @@ import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { Raw } from '../../raw';
 import { vec3 } from '../../utils';
-import { QueryBase } from './query-base';
+import { type CastFailHandler, type CastSuccessHandler, QueryBase } from './query-base';
 
 type CollideShapeCollector =
     | Jolt.CollideShapeAllHitCollisionCollector
@@ -178,7 +178,10 @@ export class ShapeCollider extends QueryBase {
         }
     }
 
-    cast(successHandler?: any, failHandler?: any) {
+    cast(
+        successHandler?: CastSuccessHandler<CollisionResult>,
+        failHandler?: CastFailHandler
+    ): CollisionResult | CollisionResult[] | false {
         // clear the collector
         //if (this.hasCast && this.type !== 'closest')
         this.collector.Reset();
@@ -276,7 +279,7 @@ export class CollisionResult {
 
     constructor(
         _joltPhysicsSystem: Jolt.PhysicsSystem,
-        shapeMatrix: any,
+        shapeMatrix: THREE.Matrix4,
         mHit: Jolt.CollideShapeResult
     ) {
         //this.joltPhysicsSystem = joltPhysicsSystem;

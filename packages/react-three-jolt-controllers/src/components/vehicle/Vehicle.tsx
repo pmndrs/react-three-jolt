@@ -1,6 +1,6 @@
 import { useThree } from '@react-three/fiber';
 import { useConst } from '@react-three/jolt';
-import { useCommand } from '@react-three/jolt-addons';
+import { isCommandVector, useCommand } from '@react-three/jolt-addons';
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { Object3DSource, UseVehicleOptions, VehicleWheelOptions } from '../../hooks';
@@ -209,9 +209,10 @@ export function Vehicle(props: VehicleProps) {
         // `controls`) attached for the lifetime of the vehicle
         return vehicle.onPreStep(() => {
             const bodyPosition = vehicle.position;
-            if (controls) {
-                //@ts-ignore controls is typed as unknown by r3f
-                controls.target = bodyPosition.clone();
+            // r3f types `controls` as `unknown`; orbit/camera controls all expose a `target`
+            const orbitControls = controls as { target?: THREE.Vector3 } | null | undefined;
+            if (orbitControls) {
+                orbitControls.target = bodyPosition.clone();
             }
             camera.position.add(bodyPosition.clone().sub(oldPosition));
             oldPosition.copy(bodyPosition);
@@ -222,7 +223,8 @@ export function Vehicle(props: VehicleProps) {
     useCommand(
         'move',
         (info) => {
-            //@ts-ignore the command info is loosely typed by the addons package
+            // bound with `{ asVector: true }`, so the value is the two axis kind
+            if (!isCommandVector(info.value)) return;
             vehicle?.move(new THREE.Vector3(info.value.x, info.value.y, 0));
         },
         () => {

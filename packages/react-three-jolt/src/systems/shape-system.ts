@@ -23,12 +23,17 @@ import { Raw } from '../raw';
 import { type anyQuat, type anyVec3, devWarn, joltScratch, quat, vec3 } from '../utils';
 
 export class ShapeSystem {
-    private physicsSystem: Jolt.PhysicsSystem;
-    //@ts-expect-error
-    private bodyInterface: Jolt.BodyInterface;
+    /**
+     * The Jolt physics system this shape system belongs to.
+     *
+     * Public because nothing inside the class reads it - it was `private` and unread, as was a
+     * `bodyInterface` alongside it that hid behind a `@ts-expect-error` for exactly that reason
+     * (issue #11). The body interface is gone (`GetBodyInterface()` is a cheap lookup whenever
+     * one is actually wanted); this one stays as the handle callers reach the world through.
+     */
+    readonly physicsSystem: Jolt.PhysicsSystem;
     constructor(physicsSystem: Jolt.PhysicsSystem) {
         this.physicsSystem = physicsSystem;
-        this.bodyInterface = this.physicsSystem.GetBodyInterface();
     }
     // I'm not sure which functions to expose to the runtime
     //getShapeSettingsFromObject = (object: Object3D, shapeType?: AutoShape) => getShapeSettingsFromObject(object, shapeType);

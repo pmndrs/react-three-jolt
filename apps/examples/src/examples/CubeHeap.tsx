@@ -83,10 +83,10 @@ function CubeHeapInner() {
     // setup the teleporting of shapes
     useEffect(() => {
         if (fountainInterval.current) intervals.clearInterval(fountainInterval.current);
-        //@ts-ignore
+        //@ts-expect-error useSetInterval's handle type is not the ref's
         fountainInterval.current = intervals.setInterval(() => {
             const index = Math.floor(Math.random() * count);
-            //@ts-ignore
+            //@ts-expect-error the instanced body ref is loosely typed
             instancedRef.current![index].position = [Math.random() * 2, 20, Math.random() * 2];
         }, 1000 / 60);
     }, [instancedRef, count]);

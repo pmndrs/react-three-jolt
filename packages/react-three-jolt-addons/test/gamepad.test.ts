@@ -331,14 +331,19 @@ describe('Commander gamepad integration (#12)', () => {
         const removed: string[] = [];
         const nativeAdd = window.addEventListener.bind(window);
         const nativeRemove = window.removeEventListener.bind(window);
-        vi.spyOn(window, 'addEventListener').mockImplementation(((type: string, ...rest: []) => {
-            added.push(type);
-            return nativeAdd(type, ...rest);
-        }) as typeof window.addEventListener);
-        vi.spyOn(window, 'removeEventListener').mockImplementation(((type: string, ...rest: []) => {
-            removed.push(type);
-            return nativeRemove(type, ...rest);
-        }) as typeof window.removeEventListener);
+        // forward the *whole* argument list; `...rest: []` made these one-argument calls
+        vi.spyOn(window, 'addEventListener').mockImplementation(
+            (...args: Parameters<typeof window.addEventListener>) => {
+                added.push(args[0]);
+                return nativeAdd(...args);
+            }
+        );
+        vi.spyOn(window, 'removeEventListener').mockImplementation(
+            (...args: Parameters<typeof window.removeEventListener>) => {
+                removed.push(args[0]);
+                return nativeRemove(...args);
+            }
+        );
 
         const commander = new Commander();
         try {

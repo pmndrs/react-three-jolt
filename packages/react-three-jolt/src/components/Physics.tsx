@@ -19,6 +19,7 @@ import * as THREE from 'three';
 import { JoltContext, joltContext } from '../context';
 import { useMount, useSystemEvent, useUnmount } from '../hooks';
 import { initJolt, Raw } from '../raw';
+import type { DefaultBodySettings } from '../systems/body-system';
 import type { WorldEventMap } from '../systems/events';
 // physics system import
 import { deferWorldDestroy, PhysicsSystem } from '../systems/physics-system';
@@ -53,7 +54,8 @@ const DEFAULT_GRAVITY: [number, number, number] = [0, -9.81, 0];
 
 // Core component
 export type PhysicsProps = {
-    children: ReactNode;
+    /** Optional so `createElement(Physics, props, ...children)` typechecks as JSX does. */
+    children?: ReactNode;
 
     /**
      * World gravity. A tuple or `THREE.Vector3` is used as-is; a plain number is read as a
@@ -122,7 +124,7 @@ export type PhysicsProps = {
      * Jolt `BodyCreationSettings` merged into every body created by this world.
      * Applied before any body exists, so it also covers the first frame.
      */
-    defaultBodySettings?: any;
+    defaultBodySettings?: DefaultBodySettings;
 
     /**
      * Collision shape used for bodies that don't specify one, instead of the per geometry
@@ -130,8 +132,8 @@ export type PhysicsProps = {
      */
     defaultShape?: AutoShape;
 
-    /** A jolt-physics module (or a path to one) to initialise instead of the bundled default. */
-    module?: any;
+    /** A jolt-physics module factory to initialise instead of the bundled default. */
+    module?: () => Promise<typeof Jolt>;
 
     //* World events ----------------------------------------
     // Jolt's contact listener is global, so these are the *cheap* path: one dispatch per pair,
@@ -275,7 +277,6 @@ export const Physics: FC<PhysicsProps> = (props) => {
           : `${gravity.x},${gravity.y},${gravity.z}`;
     useEffect(() => {
         if (!physicsSystem) return;
-        //@ts-ignore number[] vs the tuple/vector union
         physicsSystem.setGravity(gravity);
         // biome-ignore lint/correctness/useExhaustiveDependencies: gravityKey stands in for the value of gravity
     }, [gravityKey, physicsSystem]);

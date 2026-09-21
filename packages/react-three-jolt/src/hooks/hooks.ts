@@ -44,7 +44,7 @@ export function useConst<T>(initialValue: T | (() => T)): T {
     const ref = useRef<{ value: T } | undefined>(undefined);
     if (ref.current === undefined) {
         ref.current = {
-            value: typeof initialValue === 'function' ? (initialValue as Function)() : initialValue
+            value: typeof initialValue === 'function' ? (initialValue as () => T)() : initialValue
         };
     }
     return ref.current.value;
@@ -88,8 +88,9 @@ export const useSetTimeout = (): UseSetTimeoutReturnType => {
     // Cleanup function.
     useEffect(
         () => () => {
+            // `Object.keys` stringifies the numeric handles it iterates
             for (const id of Object.keys(timeoutIds)) {
-                clearTimeout(id as any);
+                clearTimeout(Number(id));
             }
         },
         // useConst ensures this will never change, but react-hooks/exhaustive-deps doesn't know that
@@ -128,8 +129,9 @@ export const useSetInterval = (): UseSetIntervalReturnType => {
 
     useEffect(
         () => () => {
+            // `Object.keys` stringifies the numeric handles it iterates
             for (const id of Object.keys(intervalIds)) {
-                clearInterval(id as any);
+                clearInterval(Number(id));
             }
         },
         // useConst ensures this will never change, but react-hooks/exhaustive-deps doesn't know that

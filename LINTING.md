@@ -2,63 +2,76 @@
 
 `yarn lint` (`biome check .`) is wired into CI and must exit 0. To get there without
 hand-editing runtime logic, a handful of rules that were erroring across the codebase
-have been temporarily downgraded to `warn` in `biome.json`. None of these have a safe
-autofix in Biome, so fixing them for real requires a source-level (behavioral) change
-that's out of scope for a mechanical formatting/lint-baseline pass.
+were temporarily downgraded to `warn` in `biome.json`. Each one is raised back to
+`error` once its violations are gone.
 
-Re-enable each one (set back to `"error"`, or just remove the override to fall back to
-Biome's recommended default) once its warnings have been cleaned up.
+**NEVER run `biome check --write --unsafe`**, and never run `biome check --write` across
+files you did not edit. Format your own files with `yarn biome format --write <paths>`.
 
-**Cleaned up so far:** `correctness/noUnreachable` - the three dead `break`s after `return`
-in `constraint-system.ts` are gone, so the override has been removed and the rule is back
-at Biome's default (error). Counts below are
-from the baseline established in this pass; re-run `yarn lint` to see current counts.
+## Rules that have been cleaned up and re-enabled
 
-| Rule | Category | Baseline count | Why it's a warning for now |
+| Rule | Category | Baseline | Re-enabled in |
 | --- | --- | --- | --- |
-| `useIterableCallbackReturn` | suspicious | 26 errors | Flags `.forEach()` callbacks with an arrow-expression body that returns a value (e.g. `arr.forEach((x) => doThing(x))` where `doThing` returns something). Harmless in practice since the return value is discarded by `forEach`, but fixing every call site means rewriting to block-bodied arrows one by one. |
-| `noDoubleEquals` | suspicious | 19 errors | `==`/`!=` usage instead of `===`/`!==`. Biome only offers an **unsafe** fix (converting can change behavior when the operands aren't already the same type), so it wasn't auto-applied. Needs case-by-case review. |
-| `noImplicitAnyLet` | suspicious | 13 errors | `let`/`var` declared without an initializer or type annotation (e.g. `let texture;`). Needs real type annotations added per call site. |
-| `noStaticElementInteractions` (a11y) | a11y | 4 errors | `onClick`/etc. handlers on non-interactive elements (`<div>`, `<mesh>`-wrapped DOM, etc.) in the example app. Fixing properly means adding roles/keyboard handlers, a UX decision, not a mechanical one. |
-| `useButtonType` (a11y) | a11y | 1 error | `<button>` without an explicit `type` attribute. Defaulting to `type="button"` can change form-submission behavior if the button is ever moved inside a `<form>`, so it wasn't auto-applied. |
-| `noRedeclare` | suspicious | 1 error | `Routes` redeclared in the same scope in `apps/examples/src/App.tsx` (likely a duplicate import/identifier from the router). Needs a look at the actual import structure. |
+| `correctness/noUnreachable` | correctness | 3 errors | the lint-baseline pass (dead `break`s after `return` in `constraint-system.ts`) |
+| `suspicious/noTsIgnore` | suspicious | 208 warnings | the types pass (#144/#145/#11) - see below |
+| `suspicious/noDoubleEquals` | suspicious | 19 errors | the types pass - every `==`/`!=` is now `===`/`!==` |
+| `suspicious/noImplicitAnyLet` | suspicious | 13 errors | the types pass - the last two were `let layer, motionType` and `let threeObject` in `body-system.ts` |
+| `suspicious/useIterableCallbackReturn` | suspicious | 26 errors | the types pass - the 16 remaining `forEach` arrows got block bodies |
+| `complexity/noBannedTypes` | complexity | 14 warnings | the types pass - every bare `Function` is a real signature or a `(...args: never[]) => unknown` identity key |
 
-## Rules already at `warn` by Biome's own defaults (no override needed, but flagged here since they also have unsafe "safe" fixes)
+### `noTsIgnore` (issue #145)
 
-These two are already warnings under Biome's recommended defaults, but running
-`biome check --write` (not `biome format --write`, which is what `yarn format` runs)
-**will** try to apply their fixes, and in this codebase those fixes are not actually
-safe:
+`@ts-ignore` suppresses *any* error on the next line, including errors that no longer
+exist, so a suppression can outlive the problem it was added for and hide a new one.
+`@ts-expect-error` fails the build when the line underneath is actually fine, which is
+what makes it safe to keep.
 
-- **`suspicious/noTsIgnore`** (208 warnings) — Biome offers a "safe" fix that rewrites
-  `// @ts-ignore` to `// @ts-expect-error`. `@ts-expect-error` requires the following
-  line to actually have a type error, and many of the `@ts-ignore` comments in this
-  codebase (jolt-physics interop, mostly) suppress errors that only show up under
-  certain type-narrowing paths or don't currently error at all. Applying the fix
-  repo-wide broke the build (`TS2578: Unused '@ts-expect-error' directive`) in
-  `Heightfield.tsx`, `InstancedRigidBody.tsx`, `RigidBody.tsx`, `use-raycasters.tsx`,
-  `body-system.ts`, and `shapecasters.ts`. Left as-is; convert case by case if desired.
-- **`style/useImportType`** (60 warnings) — Biome offers a "safe" fix that splits a
+The rule is now `error`. There are **zero** `@ts-ignore` left in `packages/*/src`,
+`packages/*/test` and `apps/examples/src`.
+
+Biome offers an autofix for this rule, and **it is not safe to apply in bulk**: it
+rewrites every `@ts-ignore` to `@ts-expect-error`, and any suppression that was never
+needed then breaks the build with `TS2578: Unused '@ts-expect-error' directive`. The
+conversion was done by hand instead: convert, run `tsc`, and for each "unused directive"
+error delete the directive entirely, because it was covering nothing.
+
+`packages/*/test` is type checked too (`tsconfig.test.json` per package, run by that
+package's `test` script before vitest), so a suppression in a test cannot go stale
+unnoticed either.
+
+## Still downgraded
+
+| Rule | Category | Count | Why it's a warning for now |
+| --- | --- | --- | --- |
+| `noStaticElementInteractions` (a11y) | a11y | 4 warnings | `onClick`/etc. handlers on non-interactive elements (`<mesh>`, `<div>`) in the example app. Fixing properly means adding roles/keyboard handlers, a UX decision, not a mechanical one. |
+| `useButtonType` (a11y) | a11y | 1 warning | `<button>` without an explicit `type`. Defaulting to `type="button"` can change form-submission behaviour if the button is ever moved inside a `<form>`. |
+| `noRedeclare` | suspicious | 1 warning | `Routes` redeclared in the same scope in `apps/examples/src/App.tsx` (a duplicate identifier from the router import). Needs a look at the import structure. |
+
+## Rules already at `warn` by Biome's own defaults (no override needed)
+
+- **`style/useImportType`** (38 warnings) — Biome offers a "safe" fix that splits a
   default import into `import type X from '...'` when it thinks `X` is only used as a
-  type. It missed a few call sites where the default import (`React`) is also used as
-  a value elsewhere in the same file, which broke the build
+  type. It misses call sites where the default import (`React`) is also used as a value
+  elsewhere in the same file, which breaks the build
   (`TS1361: 'React' cannot be used as a value because it was imported using 'import type'`)
-  in `Heightfield.tsx`, `InstancedRigidBody.tsx`, and `Shape.tsx`. Left as-is.
+  in `Heightfield.tsx`, `InstancedRigidBody.tsx` and `Shape.tsx`. Left as-is.
+- `noUnusedImports`, `noUnusedVariables`, `noUnusedFunctionParameters`,
+  `noCommaOperator`, `useOptionalChain`, `noUnusedPrivateClassMembers`,
+  `suppressions/unused`, and a few `info` level style rules (`useNodejsImportProtocol`,
+  `useTemplate`, `noUselessFragments`, `noUselessTernary`, `noUselessConstructor`) are
+  warnings/info under Biome's defaults. They don't block `yarn lint`.
 
-**If you run `biome check --write --unsafe` or otherwise re-trigger these two fixes,
-re-run `yarn build` before committing** — they will not fail lint (they're warnings),
-but they can silently break the TypeScript build.
+**If you re-trigger `useImportType`'s fix, re-run `yarn build` before committing** — it
+will not fail lint (it's a warning), but it can silently break the TypeScript build.
 
-## Rules already `off` (unchanged from before this pass)
+## Rules deliberately `off`
 
-- `complexity/noForEach`, `suspicious/noExplicitAny`, `style/noNonNullAssertion` — this
-  is a physics/graphics interop-heavy codebase where these patterns are pervasive and
-  intentional; disabling them predates this pass.
-
-## Also warnings, not touched in this pass
-
-`noBannedTypes`, `noUnusedImports`, `noUnusedVariables`, `noUnusedFunctionParameters`,
-`noCommaOperator`, `useOptionalChain`, `noUnusedPrivateClassMembers`, and a few
-`info`-level style rules (`useNodejsImportProtocol`, `useTemplate`,
-`noUselessFragments`, `noUselessTernary`, `noUselessConstructor`) are already
-warnings/info under Biome's defaults. They don't block `yarn lint` and weren't changed.
+- `complexity/noForEach`, `style/noNonNullAssertion` — this is a physics/graphics
+  interop heavy codebase where these patterns are pervasive and intentional.
+- `suspicious/noExplicitAny` — still off, but `any` is no longer the default answer.
+  After the types pass there are **7** `any` tokens left in `packages/*/src`, all of
+  them variadic constraints that `unknown` cannot express:
+  `JoltClass<T>` (`raw.ts`, a constructor type that must match every embind class),
+  `EventMap`/`Entry.fn` (`emitter.ts`, a heterogeneous event map) and
+  `useEventCallback`'s generic bound (`hooks.ts`). Everything else is a real signature,
+  `unknown` plus a narrowing helper, or a single documented cast at the embind boundary.

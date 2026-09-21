@@ -26,14 +26,16 @@
                 "useButtonType": "warn"
             },
             "complexity": {
-                "noForEach": "off"
+                "noForEach": "off",
+                "noBannedTypes": "error"
             },
             "suspicious": {
                 "noExplicitAny": "off",
-                "noDoubleEquals": "warn",
-                "noImplicitAnyLet": "warn",
                 "noRedeclare": "warn",
-                "useIterableCallbackReturn": "warn"
+                "noDoubleEquals": "error",
+                "noImplicitAnyLet": "error",
+                "noTsIgnore": "error",
+                "useIterableCallbackReturn": "error"
             },
             "style": {
                 "noNonNullAssertion": "off"

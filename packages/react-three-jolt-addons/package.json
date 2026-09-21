@@ -48,7 +48,7 @@
         "CHANGELOG.md"
     ],
     "scripts": {
-        "test": "vitest run --coverage",
+        "test": "tsc -p tsconfig.test.json --noEmit && vitest run --coverage",
         "build": "tsc --noEmit && tsc -p tsconfig.build.json --emitDeclarationOnly --declarationMap && rollup --config rollup.config.mjs",
         "format": "biome format --write .",
         "lint": "biome check ."

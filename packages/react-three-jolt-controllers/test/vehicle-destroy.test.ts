@@ -97,11 +97,11 @@ function wheelWorldPosition(vehicle: VehicleManager, index: number) {
 // `BodySystem`'s contact listener, which throws on a body that was not registered with it - and
 // the car body is created straight off the body interface. That is a separate, pre-existing bug
 // (see the audit's note on `VehicleManager.ts:91`), not something these tests are about.
-function at(z: number) {
+function at(z: number): { bodyPosition: [number, number, number] } {
     return { bodyPosition: [0, 4, z] };
 }
 
-for (const type of ['fourWheel', 'twoWheel']) {
+for (const type of ['fourWheel', 'twoWheel'] as const) {
     test(`${type}: construct -> step -> destroy leaves no live jolt objects behind`, () => {
         const alloc = installAllocTracker(Raw, { types: TRACKED_TYPES });
         try {

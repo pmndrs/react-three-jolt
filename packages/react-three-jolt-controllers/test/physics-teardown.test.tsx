@@ -82,21 +82,25 @@ test('unmounting <Physics> with a character controller frees everything', async 
         const renderer = await create(<Tree onReady={onReady} />);
         await settle(() => system !== undefined);
         assert.isDefined(system, 'Physics never mounted its children');
+        // `system` is only ever assigned from inside a React effect, which TypeScript's control
+        // flow analysis cannot see: after the `system = undefined` reset above it is narrowed to
+        // `undefined`, which makes `system!` `never`. Read it once, here.
+        const world = system as unknown as PhysicsSystem;
 
         // the controller registered itself with the world
-        assert.equal(system!.disposableCount, 1, 'the controller did not register with the world');
+        assert.equal(world.disposableCount, 1, 'the controller did not register with the world');
         await act(async () => {
-            for (let i = 0; i < 10; i++) system!.onUpdate(1 / 60);
+            for (let i = 0; i < 10; i++) world.onUpdate(1 / 60);
         });
 
         await renderer.unmount();
         await drain();
 
-        assert.isTrue(system!.destroyed, 'the deferred teardown never ran');
+        assert.isTrue(world.destroyed, 'the deferred teardown never ran');
         assert.equal(Raw.interfaceCount, 0, 'the JoltInterface outlived the tree');
-        assert.equal(system!.bodySystem.bodies.size, 0, 'bodies outlived the tree');
-        assert.equal(system!.disposableCount, 0, 'a disposable outlived the tree');
-        assert.equal(system!.events.listenerCount('beforeStep'), 0, 'a step listener survived');
+        assert.equal(world.bodySystem.bodies.size, 0, 'bodies outlived the tree');
+        assert.equal(world.disposableCount, 0, 'a disposable outlived the tree');
+        assert.equal(world.events.listenerCount('beforeStep'), 0, 'a step listener survived');
 
         // The controller's own cleanup runs before the world dies now, so `releaseJoltObjects()`
         // is not skipped and every WASM object it owns is freed. The heap is the ground truth.

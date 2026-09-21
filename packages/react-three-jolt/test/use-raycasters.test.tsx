@@ -19,7 +19,7 @@
 // of the same wrapper) show up as failures.
 
 import { create } from '@react-three/test-renderer';
-import { act, useEffect } from 'react';
+import React, { act, useEffect } from 'react';
 import { assert, beforeAll, test } from 'vitest';
 import { Physics } from '../src/components/Physics';
 import { useAdvancedRaycaster, useMulticaster, useRaycaster } from '../src/hooks/use-raycasters';

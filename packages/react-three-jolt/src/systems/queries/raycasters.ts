@@ -2,9 +2,15 @@
 
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
-import { Raw } from '../../raw';
+import { Raw, wrapPointer } from '../../raw';
 import { type anyVec3, vec3 } from '../../utils';
-import { CastQueryBase, HitBase, QueryBase } from './query-base';
+import {
+    type CastFailHandler,
+    CastQueryBase,
+    type CastSuccessHandler,
+    HitBase,
+    QueryBase
+} from './query-base';
 
 type RaycasterCollector =
     | Jolt.CastRayAllHitCollisionCollector
@@ -104,10 +110,30 @@ export class Raycaster extends CastQueryBase<RaycastHit, RaycasterCollector> {
 // More advanced raycast with collector level customizing. Way more advanced,
 // probably never to be used but its here if you need it
 //TODO: This might have some bind/apply scope issues
+/** Called for each body the JS collector visits, before any of that body's hits. */
+export type AdvancedRaycasterBodyHandler = {
+    bivarianceHack(body: Jolt.Body, collector: Jolt.CastRayCollectorJS): void;
+}['bivarianceHack'];
+
+/**
+ * Called for each hit. Return a truthy value to shrink the collector's early-out fraction to
+ * this hit, i.e. to stop looking for anything further away.
+ */
+export type AdvancedRaycasterHitHandler = {
+    bivarianceHack(hit: RaycastHit, collector: Jolt.CastRayCollectorJS): boolean | undefined;
+}['bivarianceHack'];
+
+/** Called when the JS collector is reset, before the next cast collects anything. */
+export type AdvancedRaycasterResetHandler = {
+    bivarianceHack(collector: Jolt.CastRayCollectorJS): void;
+}['bivarianceHack'];
+
 export class AdvancedRaycaster extends Raycaster {
     declare collector: Jolt.CastRayCollectorJS;
-    //@ts-ignore
-    activeBody: Jolt.Body;
+    // Set by the OnBody callback, so it is genuinely absent until the first body is visited -
+    // `addHit` passes it through to RaycastHit's optional `bodyID`, which falls back to the
+    // hit's own mBodyID.
+    activeBody?: Jolt.Body;
     collisionCount = 0;
     hits: RaycastHit[] = [];
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
@@ -132,27 +158,26 @@ export class AdvancedRaycaster extends Raycaster {
         this.collector.AddHit = () => {};
     }
     // pass through for the onBody
-    onBody(handler: any) {
-        this.collector.OnBody = (body) => {
-            //@ts-ignore wrapPointer TS bug
-            body = Raw.module.wrapPointer(body, Raw.module.Body);
-            //@ts-ignore
+    onBody(handler: AdvancedRaycasterBodyHandler) {
+        // `bodyPtr` is a raw WASM address (that is what embind hands a JSImplementation), so it
+        // has to be wrapped before it is a Body. The wrapper is a view into memory Jolt owns -
+        // never free it, and never retain it past this callback.
+        this.collector.OnBody = (bodyPtr) => {
+            const body = wrapPointer(bodyPtr, Raw.module.Body);
             this.activeBody = body;
             handler(body, this.collector);
         };
     }
     // runs on every hit
-    addHit(handler: any) {
-        //@ts-ignore
-        this.collector.AddHit = (result: Jolt.RayCastResult) => {
-            //@ts-ignore wrap pointer TS bug
-            result = Raw.module.wrapPointer(result, Raw.module.RayCastResult);
+    addHit(handler: AdvancedRaycasterHitHandler) {
+        this.collector.AddHit = (resultPtr) => {
+            const result = wrapPointer(resultPtr, Raw.module.RayCastResult);
             const hit = new RaycastHit(
                 this.joltPhysicsSystem,
                 this.ray,
                 result,
                 this.collisionCount,
-                this.activeBody.GetID()
+                this.activeBody?.GetID()
             );
             this.collisionCount++;
             this.hits.push(hit);
@@ -160,7 +185,7 @@ export class AdvancedRaycaster extends Raycaster {
             if (bail) this.collector.UpdateEarlyOutFraction(result.mFraction);
         };
     }
-    onReset(handler?: any) {
+    onReset(handler?: AdvancedRaycasterResetHandler) {
         this.collector.Reset = () => {
             this.collisionCount = 0;
             this.hits = [];
@@ -176,15 +201,19 @@ export class AdvancedRaycaster extends Raycaster {
     // raw handler. Reset happens BEFORE the cast (clearing hits/collisionCount left over from
     // the previous call), not after - resetting afterwards would wipe out the hits this very
     // cast just collected before the caller ever sees them.
-    //@ts-ignore
-    cast(successHandler?: any, failHandler?: any) {
+    cast(
+        successHandler?: CastSuccessHandler<RaycastHit>,
+        failHandler?: CastFailHandler
+    ): RaycastHit | RaycastHit[] | undefined {
         if (this.hasCast) this.reset();
         this.hasCast = true;
         this.rawCast();
         if (this.hits.length > 0) {
             if (successHandler) {
                 if (this.type === 'all') {
-                    this.hits.forEach((hit) => successHandler(hit));
+                    this.hits.forEach((hit) => {
+                        successHandler(hit);
+                    });
                     return this.hits;
                 } else {
                     successHandler(this.hits[0]);
@@ -192,6 +221,7 @@ export class AdvancedRaycaster extends Raycaster {
                 }
             }
         } else if (failHandler) failHandler();
+        return undefined;
     }
 }
 
@@ -231,18 +261,31 @@ export class RaycastHit extends HitBase {
     */
 }
 
+/** One entry of {@link Multicaster.results}: the ray that was cast plus what it hit. */
+export interface MulticastResult {
+    origin: THREE.Vector3;
+    /** Set by `castRays()` (which is given explicit endpoints), not by `cast()`. */
+    destination?: THREE.Vector3;
+    /** Set by `cast()` (which shares one direction across every origin), not by `castRays()`. */
+    direction?: THREE.Vector3;
+    hits: RaycastHit | RaycastHit[];
+}
+
+/**
+ * `Multicaster`'s success callback, called once with every result and every hit of the whole
+ * batch. Method-style for the same bivariance reason as {@link CastSuccessHandler}.
+ */
+export type MulticastSuccessHandler = {
+    bivarianceHack(results: MulticastResult[], hits: RaycastHit[]): void;
+}['bivarianceHack'];
+
 // Multicast takes an array of positions and casts rays to all of them
 export class Multicaster extends QueryBase {
     raycaster: Raycaster;
     hits: RaycastHit[] = [];
     positions: THREE.Vector3[] = [];
     rays: { origin: THREE.Vector3; destination: THREE.Vector3 }[] = [];
-    results: {
-        origin: THREE.Vector3;
-        destination?: any;
-        direction?: any;
-        hits: RaycastHit | RaycastHit[];
-    }[] = [];
+    results: MulticastResult[] = [];
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         super(joltPhysicsSystem, joltInterface);
         this.raycaster = new Raycaster(joltPhysicsSystem, joltInterface);
@@ -272,17 +315,19 @@ export class Multicaster extends QueryBase {
     }
 
     // set the collector type
-    setCollector(type: any) {
+    setCollector(type: string) {
         this.raycaster.setCollector(type);
     }
-    //@ts-ignore cast with just the positions
-    cast(successHandler?: any, failHandler?: any) {
+    // cast with just the positions
+    cast(
+        successHandler?: MulticastSuccessHandler,
+        failHandler?: CastFailHandler
+    ): MulticastResult[] | undefined {
         this.hits = [];
         // results was appended to forever and never cleared, growing without bound across casts
         this.results = [];
         this.positions.forEach((position) => {
-            //@ts-ignore
-            this.raycaster.castFrom(position, (hit: RaycastHit | RaycastHit[]) => {
+            this.raycaster.castFrom(position, (hit) => {
                 if (Array.isArray(hit)) this.hits.push(...hit);
                 else this.hits.push(hit);
                 this.results.push({
@@ -297,13 +342,17 @@ export class Multicaster extends QueryBase {
             return this.results;
         }
         if (failHandler) failHandler();
+        return undefined;
     }
-    //@ts-ignore cast with the rays
-    castRays(successHandler?: any, failHandler?: any) {
+    // cast with the rays
+    castRays(
+        successHandler?: MulticastSuccessHandler,
+        failHandler?: CastFailHandler
+    ): MulticastResult[] | undefined {
         this.hits = [];
         this.results = [];
         this.rays.forEach((ray) => {
-            this.raycaster.castBetween(ray.origin, ray.destination, (hit: any) => {
+            this.raycaster.castBetween(ray.origin, ray.destination, (hit) => {
                 if (Array.isArray(hit)) this.hits.push(...hit);
                 else this.hits.push(hit);
                 this.results.push({
@@ -318,5 +367,6 @@ export class Multicaster extends QueryBase {
             return this.results;
         }
         if (failHandler) failHandler();
+        return undefined;
     }
 }

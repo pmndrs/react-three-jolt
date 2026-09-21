@@ -30,11 +30,6 @@ import {
 import { SKID_STARTED, WheelState } from './wheel-state';
 import { createWheelSettings, disposeGeneratedObject } from './wheels';
 
-// biome-ignore lint/suspicious/noExplicitAny: the Jolt constraint callbacks are untyped here
-type VehicleStepCallback = (vehicle: any, deltaTime: number, physicsSystem: any) => void;
-// biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-type VehicleActionCallback = (action: any) => void;
-
 /**
  * Issue #41: what a skidding wheel reports. The object handed to a listener is **pooled** - it
  * is the same one on every dispatch, so read what you need and copy anything you keep.
@@ -85,10 +80,10 @@ export type VehicleSkidListener = (event: VehicleSkidEvent) => void;
 export type VehicleEngineListener = (state: VehicleEngineState) => void;
 
 type VehicleEventMap = {
-    preStep: VehicleStepCallback;
-    postCollide: VehicleStepCallback;
-    postStep: VehicleStepCallback;
-    action: VehicleActionCallback;
+    preStep: VehicleStepListener;
+    postCollide: VehicleStepListener;
+    postStep: VehicleStepListener;
+    action: (action: string) => void;
     skidStart: VehicleSkidListener;
     skidEnd: VehicleSkidListener;
     engine: VehicleEngineListener;
@@ -125,12 +120,12 @@ export type VehicleActionListener = (action: string, vehicle: VehicleManager) =>
 export class VehicleManager {
     physicsSystem: PhysicsSystem;
     settings: ResolvedVehicleSettings;
-    //@ts-ignore assigned by createBody
-    carBody: Jolt.Body;
-    //@ts-ignore assigned by createConstraint
-    constraint: Jolt.VehicleConstraint;
-    //@ts-ignore assigned by createConstraint
-    controller: Jolt.VehicleController;
+    /** Assigned by `createBody()`, which the constructor calls. */
+    carBody!: Jolt.Body;
+    /** Assigned by `createConstraint()`, which the constructor calls. */
+    constraint!: Jolt.VehicleConstraint;
+    /** Assigned by `createConstraint()`, which the constructor calls. */
+    controller!: Jolt.VehicleController;
 
     // Listeners for the vehicle constraint callbacks and for actions, all on the one Emitter
     // primitive (issue #50) so removal never depends on function identity.
@@ -392,7 +387,9 @@ export class VehicleManager {
                 this.constraint.Release();
             }
             // wheel states only hold their own scratch vectors now the constraint is gone
-            this.wheels.forEach((wheel) => wheel.destroy());
+            this.wheels.forEach((wheel) => {
+                wheel.destroy();
+            });
             if (this.callbacks) Raw.module.destroy(this.callbacks);
             this.removeCarBody();
         }
@@ -652,7 +649,9 @@ export class VehicleManager {
 
         this.constraint = new Raw.module.VehicleConstraint(this.carBody, vehicle);
         //NOW we can create the wheelStates
-        wheelsToCreate.forEach((corner, index) => this.addWheelState(corner, index));
+        wheelsToCreate.forEach((corner, index) => {
+            this.addWheelState(corner, index);
+        });
 
         //set the collision tester that checks the wheels for collision with the floor
         let tester: Jolt.VehicleCollisionTester;
@@ -718,7 +717,6 @@ export class VehicleManager {
             body2,
             _subShapeID2
         ) => {
-            //@ts-ignore this is a TS bug in wrapPointer
             const body = Raw.module.wrapPointer(body2, Raw.module.Body) as Jolt.Body;
             return Math.sqrt(tireFriction * body.GetFriction()); // This is the default calculation
         };
@@ -754,18 +752,17 @@ export class VehicleManager {
         callbacks.SetVehicleConstraint(this.constraint);
     }
     // for actions
-    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-    triggerActions(action: any) {
+    triggerActions(action: string) {
         this.events.emit('action', action);
     }
     //explicit callback shorthands
-    onPreStep(listener: VehicleStepCallback): Unsubscribe {
+    onPreStep(listener: VehicleStepListener): Unsubscribe {
         return this.events.on('preStep', listener);
     }
-    onPostCollide(listener: VehicleStepCallback): Unsubscribe {
+    onPostCollide(listener: VehicleStepListener): Unsubscribe {
         return this.events.on('postCollide', listener);
     }
-    onPostStep(listener: VehicleStepCallback): Unsubscribe {
+    onPostStep(listener: VehicleStepListener): Unsubscribe {
         return this.events.on('postStep', listener);
     }
     /**
@@ -794,12 +791,10 @@ export class VehicleManager {
         return this.events.on('engine', listener);
     }
     // take an action type and filter it
-    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-    onAction(actionType: string, listener: (action: any, manager: VehicleManager) => void) {
+    onAction(actionType: string, listener: VehicleActionListener) {
         // Two subscriptions of the same filtered wrapper now unsubscribe independently, because
         // the handle closes over the entry rather than comparing function identity.
-        // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
-        return this.events.on('action', (action: any) => {
+        return this.events.on('action', (action) => {
             if (action === actionType) listener(action, this);
         });
     }

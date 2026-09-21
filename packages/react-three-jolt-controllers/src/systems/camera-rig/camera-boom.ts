@@ -614,12 +614,10 @@ export class CameraBoom {
 
         // get the minimum clear distance
         this.clearDistance =
-            // @ts-ignore
             this.pivotWorldSpace.clone().distanceTo(obstructions[0].position) -
             this.obstructionBuffer;
         // go through the obstructions, get their bodies, and check if any dont allow obstruction
-        for (const obstruction of obstructions as RaycastHit[]) {
-            //@ts-ignore
+        for (const obstruction of obstructions) {
             const body = this.physicsSystem.bodySystem.getBody(obstruction.bodyHandle);
             if (body) {
                 // check if we dont allow obstruction
@@ -641,8 +639,11 @@ export class CameraBoom {
         const collision = this.checkCollision();
         // if there are none bail
         if (!collision) return;
-        //@ts-ignore get the body collided. we know this is single...
-        const body = this.physicsSystem.bodySystem.getBody(collision.bodyHandle);
+        // the collider is a closest-hit one, so this is a single result - but narrow rather
+        // than assert, so an 'all' collider would read its first hit instead of `undefined`
+        const hit = Array.isArray(collision) ? collision[0] : collision;
+        if (!hit) return;
+        const body = this.physicsSystem.bodySystem.getBody(hit.bodyHandle);
         if (body && body.allowCollision === false) {
             // do a shapecast to this point
             this.isShapecasting = true;
@@ -685,7 +686,7 @@ export class CameraBoom {
     // cast vertical ray from minimum height and return min and max height
     castGroundRay() {}
     // test if the camera is obstructed
-    castObstructionRay() {
+    castObstructionRay(): RaycastHit[] | undefined {
         // if this has anything it will return a result otherwise null
         // we need to add an offset to the direction
         const origin = this.targetWorldSpace;
@@ -693,7 +694,12 @@ export class CameraBoom {
         const destination = this.cameraWorldSpace
             .clone()
             .add(direction.multiplyScalar(this.rearcastFactor));
-        return this.raycaster.castBetween(origin, destination);
+        // this raycaster is set to the 'all' collector in the constructor, so a hit is an
+        // array - but normalise anyway rather than casting: the caller indexes `[0]`, and a
+        // single hit reaching it would have been an undefined read.
+        const hits = this.raycaster.castBetween(origin, destination);
+        if (!hits) return undefined;
+        return Array.isArray(hits) ? hits : [hits];
     }
     castObstructionShape(): ShapecastHit | undefined {
         // if this has anything it will return a result otherwise null

@@ -15,11 +15,13 @@ import { CameraRigManager, type CameraRigOptions } from '../systems/camera-rig/c
  */
 export function useCameraRig(options: CameraRigOptions = {}) {
     const { physicsSystem } = useJolt();
-    //@ts-ignore
     const { camera, scene, controls } = useThree();
     const { set } = useThree(({ get, set }) => ({ get, set }));
-    //@ts-ignore disable the active controls
-    controls.enabled = false;
+    // disable the active controls. r3f types `controls` as `unknown` - anything at all can be
+    // installed as the scene's controls - but every implementation that matters (drei's,
+    // camera-controls') carries an `enabled` flag.
+    const activeControls = controls as { enabled?: boolean } | null | undefined;
+    if (activeControls) activeControls.enabled = false;
 
     // read inside useMemo so the first rig is built *with* the options without making the
     // manager's identity depend on a prop object that is new on every render

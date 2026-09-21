@@ -31,6 +31,20 @@ import {
     validScaleFor
 } from './shape-system';
 
+/**
+ * Any callable, used only as the identity key of the deprecated remove-by-function APIs.
+ *
+ * `never[]` parameters make it a supertype of every concrete listener signature without being
+ * the banned `Function`, which types nothing and permits `new listener()`.
+ */
+type ListenerKey = (...args: never[]) => unknown;
+
+/** What the deprecated {@link BodyState.addContactListener} accepts, for any of its three types. */
+type LegacyContactListener =
+    | BodyEventMap['collisionEnter']
+    | BodyEventMap['collisionExit']
+    | BodyEventMap['collisionPersist'];
+
 // Initital body object copied from r3/rapier's state object
 export class BodyState {
     meshType: 'instancedMesh' | 'mesh';
@@ -171,9 +185,9 @@ export class BodyState {
         return this.events.mask | this.internalMask;
     }
 
-    // References so we can modify the body directly
-    //@ts-ignore
-    private joltPhysicsSystem;
+    // References so we can modify the body directly.
+    // (`joltPhysicsSystem` used to be held here too, untyped behind a suppression, and was
+    // never read - only `bodyInterface`, derived from it in the constructor, ever is.)
     private bodyInterface: Jolt.BodyInterface;
     private bodySystem: BodySystem;
     //private collisionGroupChanged = false;
@@ -203,7 +217,6 @@ export class BodyState {
         this.object.userData.bodyHandle = this.handle;
 
         // set the references for direct manipulation
-        this.joltPhysicsSystem = joltPhysicsSystem;
         this.bodySystem = bodySystem;
         this.bodyInterface = joltPhysicsSystem.GetBodyInterface();
     }
@@ -243,14 +256,14 @@ export class BodyState {
     }
 
     /** Back compat so the deprecated identity-based removers can still find their handles. */
-    private legacySubs = new Map<Function, Unsubscribe[]>();
-    private trackLegacy(listener: Function, off: Unsubscribe): Unsubscribe {
+    private legacySubs = new Map<ListenerKey, Unsubscribe[]>();
+    private trackLegacy(listener: ListenerKey, off: Unsubscribe): Unsubscribe {
         const subs = this.legacySubs.get(listener);
         if (subs) subs.push(off);
         else this.legacySubs.set(listener, [off]);
         return off;
     }
-    private removeLegacy(listener: Function): void {
+    private removeLegacy(listener: ListenerKey): void {
         const subs = this.legacySubs.get(listener);
         if (!subs) return;
         this.legacySubs.delete(listener);
@@ -261,7 +274,7 @@ export class BodyState {
      * @deprecated use {@link onSleep} / {@link onWake}, which tell the two apart. This fires
      * for both, as it always did.
      */
-    addActivationListener(listener: Function): Unsubscribe {
+    addActivationListener(listener: (body: BodyState) => void): Unsubscribe {
         const handler = () => listener(this);
         const offSleep = this.events.on('sleep', handler);
         const offWake = this.events.on('wake', handler);
@@ -271,7 +284,7 @@ export class BodyState {
         });
     }
     /** @deprecated keep the function {@link addActivationListener} returns. */
-    removeActivationListener(listener: Function) {
+    removeActivationListener(listener: ListenerKey) {
         this.removeLegacy(listener);
     }
     /**
@@ -279,7 +292,10 @@ export class BodyState {
      * `(handle1, handle2, manifold, settings, count, context)` - the old arguments handed out
      * Jolt pointers that are freed before the handler could run.
      */
-    addContactListener(listener: Function, type: 'added' | 'removed' | 'persisted'): Unsubscribe {
+    addContactListener(
+        listener: LegacyContactListener,
+        type: 'added' | 'removed' | 'persisted'
+    ): Unsubscribe {
         const event =
             type === 'added'
                 ? 'collisionEnter'
@@ -295,7 +311,7 @@ export class BodyState {
      * `else if` chain, so a function registered for both `"added"` and `"persisted"` - which
      * `activateMotionSource` did - could only ever be removed from the first.
      */
-    removeContactListener(listener: Function) {
+    removeContactListener(listener: ListenerKey) {
         this.removeLegacy(listener);
     }
     // get the value of a contact pair
@@ -1033,7 +1049,8 @@ export class BodyState {
         rotZ?: boolean;
     }) {
         let newDOF = this.rawDOF;
-        const allowedDOFs = [
+        // `key` typed off `dof` itself so the lookups below index it without a suppression
+        const allowedDOFs: { key: keyof typeof dof; flag: number }[] = [
             { key: 'x', flag: Raw.module.EAllowedDOFs_TranslationX },
             { key: 'y', flag: Raw.module.EAllowedDOFs_TranslationY },
             { key: 'z', flag: Raw.module.EAllowedDOFs_TranslationZ },
@@ -1044,7 +1061,6 @@ export class BodyState {
 
         allowedDOFs.forEach((optionalDof) => {
             //console.log("checking", dof[optionalDof.key], dof[optionalDof.key] == undefined);
-            //@ts-ignore
             if (dof[optionalDof.key]) {
                 newDOF |= optionalDof.flag;
                 // leaving these logs because its annoying to retype
@@ -1056,9 +1072,7 @@ export class BodyState {
 					createBinaryString(newDOF)
 				);
 				*/
-            }
-            //@ts-ignore
-            else if (dof[optionalDof.key] !== undefined) {
+            } else if (dof[optionalDof.key] !== undefined) {
                 newDOF &= ~optionalDof.flag;
                 /*console.log(
 					"unsetting",
@@ -1259,13 +1273,16 @@ export class BodyState {
         if (sourceBody.isTeleporter) {
             //the target position is the linear vector
             const target = sourceBody.motionLinearVector;
-            this.bodySystem.createPendingAction('position', targetBody.handle, target);
-            // if the angle is set we'll use that for rotation
-            if (sourceBody.motionAngularVector)
+            if (target) this.bodySystem.createPendingAction('position', targetBody.handle, target);
+            // if the angle is set we'll use that for rotation. `motionAngularVector` is Euler
+            // radians, so it has to be converted - the raw Vector3 used to be handed straight to
+            // the body's quaternion setter, which read a `w` of `undefined` and produced NaN.
+            const angular = sourceBody.motionAngularVector;
+            if (angular)
                 this.bodySystem.createPendingAction(
                     'rotation',
                     targetBody.handle,
-                    sourceBody.motionAngularVector
+                    new Quaternion().setFromEuler(new THREE.Euler(angular.x, angular.y, angular.z))
                 );
             // bail
             return undefined;

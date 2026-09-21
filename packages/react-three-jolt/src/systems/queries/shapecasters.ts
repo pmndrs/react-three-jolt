@@ -232,7 +232,6 @@ export class ShapecastHit extends HitBase {
         // which hands back a pointer to ONE STATIC TEMPORARY per bound function (overwritten on
         // the next call, shared across every shapecast) - never destroy it. `vec3.three()`
         // copies the components straight out, so there is nothing to free here.
-        //@ts-ignore this function was added to jolt.js #155
         const position = vec3.three(shapecast.GetPointOnRay(mHit.mFraction));
         const shapeIdValue = mHit.mSubShapeID2.GetValue();
         const bodyHandle = bodyID

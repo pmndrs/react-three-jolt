@@ -24,6 +24,14 @@ import { ShapeCollider } from './queries/collider';
 import { AdvancedRaycaster, Multicaster, Raycaster } from './queries/raycasters';
 import { Shapecaster } from './queries/shapecasters';
 
+/**
+ * Any callable, used only as the identity key of the deprecated `removeStepListener(fn)`.
+ *
+ * `never[]` parameters make it a supertype of every concrete listener signature without being
+ * the banned `Function`, which types nothing and permits `new listener()`.
+ */
+type StepListenerKey = (...args: never[]) => unknown;
+
 // Hoisted so the per-step `forEach` does not allocate a fresh closure for every substep.
 const capturePose = (state: BodyState): void => {
     state.capturePose();
@@ -140,7 +148,7 @@ export class PhysicsSystem {
      * old removal API keeps working - it now removes *every* entry for that function, where it
      * used to remove at most one per list.
      */
-    private legacyStepSubs = new Map<Function, Unsubscribe[]>();
+    private legacyStepSubs = new Map<StepListenerKey, Unsubscribe[]>();
     private currentSubframe = 0;
 
     joltInterface!: Jolt.JoltInterface;
@@ -612,13 +620,13 @@ export class PhysicsSystem {
     /**
      * @deprecated use {@link onBeforeStep}, which is the same thing with a usable return value.
      */
-    addPreStepListener(listener: Function): Unsubscribe {
+    addPreStepListener(listener: StepCallback): Unsubscribe {
         return this.trackLegacyStepSub(listener, this.events.on('beforeStep', listener as never));
     }
     /**
      * @deprecated use {@link onAfterStep}.
      */
-    addPostStepListener(listener: Function): Unsubscribe {
+    addPostStepListener(listener: StepCallback): Unsubscribe {
         return this.trackLegacyStepSub(listener, this.events.on('afterStep', listener as never));
     }
     /**
@@ -627,13 +635,13 @@ export class PhysicsSystem {
      * @deprecated removal by function identity cannot work for the inline arrows every caller
      * actually passes. Keep the `Unsubscribe` returned by {@link onBeforeStep} instead.
      */
-    removeStepListener(listener: Function): void {
+    removeStepListener(listener: StepListenerKey): void {
         const subs = this.legacyStepSubs.get(listener);
         if (!subs) return;
         this.legacyStepSubs.delete(listener);
         for (const off of subs) off();
     }
-    private trackLegacyStepSub(listener: Function, off: Unsubscribe): Unsubscribe {
+    private trackLegacyStepSub(listener: StepListenerKey, off: Unsubscribe): Unsubscribe {
         const subs = this.legacyStepSubs.get(listener);
         if (subs) subs.push(off);
         else this.legacyStepSubs.set(listener, [off]);

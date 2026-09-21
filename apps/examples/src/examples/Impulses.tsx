@@ -58,14 +58,9 @@ export function Impulses() {
             >
                 <JoltMemoryRegistrar />
                 <Pointer />
-                {connectors.map(
-                    (
-                        props,
-                        i //@ts-ignore biome-ignore  Sphere props
-                    ) => (
-                        <Sphere key={i} {...props} />
-                    )
-                )}
+                {connectors.map((props, i) => (
+                    <Sphere key={i} {...props} />
+                ))}
             </Physics>
             <directionalLight
                 castShadow
@@ -130,7 +125,7 @@ function Sphere({ accent = false, color = 'white', ...props }) {
         const delta = Math.min(0.1, inDelta);
         const body = bodyRef.current as BodyState;
         body.addImpulse(body.position.clone().negate().multiplyScalar(0.2));
-        //@ts-ignore
+        //@ts-expect-error Material is the base type here, so `.color` is not declared
         easing.dampC(meshRef.current.material.color, color, 0.2, delta);
     });
     return (

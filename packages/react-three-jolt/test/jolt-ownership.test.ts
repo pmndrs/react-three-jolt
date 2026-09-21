@@ -67,8 +67,10 @@ describe('helper ownership', () => {
         const source = new Raw.module.Vec3(4, 5, 6);
         const rv = vec3.rjolt(source);
         const v = vec3.jolt(rv);
-        assert.notStrictEqual(rv, source);
-        assert.notStrictEqual(v, rv);
+        // Vec3 and RVec3 are distinct classes in the 1.1.0 typings, so the identity assertions
+        // are widened rather than compared across types
+        assert.notStrictEqual<unknown>(rv, source);
+        assert.notStrictEqual<unknown>(v, rv);
         assert.deepEqual([v.GetX(), v.GetY(), v.GetZ()], [4, 5, 6]);
         for (const o of [source, rv, v]) Raw.module.destroy(o);
     });

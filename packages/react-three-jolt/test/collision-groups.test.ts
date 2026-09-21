@@ -205,7 +205,9 @@ test('collision groups are freed when their bodies are removed', () => {
         assert.isDefined(ps.bodySystem.getCollisionGroup(handles[0]));
 
         settle(10);
-        handles.forEach((handle) => ps.bodySystem.removeBody(handle));
+        handles.forEach((handle) => {
+            ps.bodySystem.removeBody(handle);
+        });
 
         assert.equal(alloc.live(), before, 'removing the bodies leaked their collision groups');
         assert.isUndefined(ps.bodySystem.getCollisionGroup(handles[0]));
@@ -214,7 +216,9 @@ test('collision groups are freed when their bodies are removed', () => {
         // identity, so a second destroy of the same CollisionGroup fails here loudly.
         // (`foreignDestroys` is not asserted: only CollisionGroup is tracked, so every RVec3 /
         // Quat / BodyCreationSettings the body paths legitimately free counts as "foreign".)
-        handles.forEach((handle) => ps.bodySystem.removeBody(handle));
+        handles.forEach((handle) => {
+            ps.bodySystem.removeBody(handle);
+        });
         assert.equal(alloc.live(), before);
     } finally {
         alloc.uninstall();

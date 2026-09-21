@@ -84,17 +84,17 @@ export function BoundBoxes() {
     intervals.setInterval(() => {
       //rotate the slider core
       // get the current rotation
-      //@ts-ignore
+      //@ts-expect-error
       const baseQuat = body7Ref.current!.rotation;
       const newQuat = rotateQuaternion(baseQuat, 'x', 15);
-      //@ts-ignore
+      //@ts-expect-error
       body7Ref.current!.rotation = newQuat;
       console.log('rotating', newQuat);
 
-      //@ts-ignore
+      //@ts-expect-error
       sliderRef.current.SetTargetPosition(current++);
       console.log('setting target position', current);
-      //@ts-ignore
+      //@ts-expect-error
       physicsSystem.bodyInterface.ActivateBody(body8Ref.current.body.GetID());
     }, 3000);
   }, []);

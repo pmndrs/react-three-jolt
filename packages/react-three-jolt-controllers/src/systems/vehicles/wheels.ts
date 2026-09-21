@@ -84,20 +84,22 @@ export function createWheelSettings(
         applySuspensionSpring(wheel, wheelSettings.suspensionSpring);
     }
 
-    // everything else maps straight onto the jolt property of the same name
+    // everything else maps straight onto the jolt property of the same name.
+    // embind: the wheel settings' properties are emscripten accessors and the key is computed
+    // (`joltPropName`), so this one cast is what buys the whole loop its dynamic writes - it
+    // used to be a suppression on each of the two assignments.
+    const joltWheel = wheel as unknown as Record<string, unknown>;
     for (const [key, value] of Object.entries(wheelSettings)) {
         if (value === undefined || NON_JOLT_KEYS.has(key)) continue;
         const joltKey = joltPropName(key);
         if (VECTOR_KEYS.has(key)) {
             // by-value Vec3 properties: the assignment copies, the temporary is ours
             withJolt(value as Vector, (vector) => {
-                //@ts-expect-error indexing the emscripten wrapper by a computed property name
-                wheel[joltKey] = vector;
+                joltWheel[joltKey] = vector;
             });
             continue;
         }
-        //@ts-expect-error indexing the emscripten wrapper by a computed property name
-        wheel[joltKey] = value;
+        joltWheel[joltKey] = value;
     }
     return wheel;
 }
@@ -141,7 +143,10 @@ export function disposeGeneratedObject(object: THREE.Object3D) {
         if (!mesh.isMesh) return;
         mesh.geometry?.dispose();
         const material = mesh.material;
-        if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
+        if (Array.isArray(material))
+            material.forEach((entry) => {
+                entry.dispose();
+            });
         else if (material && material !== getSharedWheelMaterial()) material.dispose();
     });
     object.removeFromParent();

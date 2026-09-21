@@ -52,7 +52,9 @@ export class VehicleSystem {
         this.destroyed = true;
         this.unregisterFromWorld();
         this.detachFromLoop();
-        this.vehicles.forEach((vehicle) => vehicle.destroy());
+        this.vehicles.forEach((vehicle) => {
+            vehicle.destroy();
+        });
         this.vehicles.clear();
     }
 
