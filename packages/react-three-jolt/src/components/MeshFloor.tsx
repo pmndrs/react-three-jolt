@@ -13,7 +13,7 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useJolt } from '../hooks';
 import { Raw } from '../raw';
-import { createMeshFloor, createMeshFromShape } from '../utils/meshTools';
+import { createMeshFloor, createMeshFromShape } from '../utils/mesh-tools';
 
 export const MeshFloor = ({ size = 20, position = [0, 0, 0], ...rest }) => {
     const meshRef = useRef<THREE.Mesh>(null);

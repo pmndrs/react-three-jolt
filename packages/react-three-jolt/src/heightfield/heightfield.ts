@@ -23,7 +23,7 @@
  */
 
 import * as THREE from 'three';
-import { getValidatedHeightfieldSampleCount } from './Generators';
+import { getValidatedHeightfieldSampleCount } from './generators';
 import { type FbmOptions, fbm2, type NoiseKind, resolveNoise } from './noise';
 
 /** Distance between samples on x and z, and the multiplier applied to the height. */

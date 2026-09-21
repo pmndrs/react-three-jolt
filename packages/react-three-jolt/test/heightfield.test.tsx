@@ -23,12 +23,12 @@ vi.mock('@react-three/drei', () => ({
 
 // Only the image loader is mocked. The rest of the module is real, because the shape pipeline
 // imports `getValidatedHeightfieldSampleCount` from here to check the grid it is handed.
-vi.mock('../src/heightField/Generators', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('../src/heightField/Generators')>()),
+vi.mock('../src/heightfield/generators', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../src/heightfield/generators')>()),
     applyHeightmapToPlane: vi.fn()
 }));
 
-import { applyHeightmapToPlane } from '../src/heightField/Generators';
+import { applyHeightmapToPlane } from '../src/heightfield/generators';
 
 const mockApplyHeightmapToPlane = vi.mocked(applyHeightmapToPlane);
 
@@ -214,7 +214,7 @@ test('a generated heightfield creates its body synchronously, without loading an
     const captureBodySystem = (bs: BodySystem) => {
         bodySystem = bs;
     };
-    const { generateHeightfield } = await import('../src/heightField');
+    const { generateHeightfield } = await import('../src/heightfield');
     const { samples } = generateHeightfield({ size: 16, seed: 3 });
 
     const renderer = await create(

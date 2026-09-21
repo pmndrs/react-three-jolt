@@ -9,11 +9,17 @@ import {
     Quaternion,
     Vector3
 } from 'three';
-import type { SurfaceMaterialTable } from '../heightField/materials';
+import type { SurfaceMaterialTable } from '../heightfield/materials';
 import { Raw } from '../raw';
 
 import { anyQuat, anyVec3, devWarn, disposedGuard, joltScratch, quat, vec3 } from '../utils';
-import { type BodySystem, getThreeObjectForBody } from './body-system';
+// `BodySystem` is a type-only import: this file only ever holds a reference to one, it never
+// calls into `body-system.ts` at runtime, which is what breaks the cycle rollup used to flag
+// between this file and it (issue #165). `getThreeObjectForBody` genuinely doesn't need
+// `BodySystem` either, so it now lives in `body-types.ts` alongside the runtime-free surface
+// both files share.
+import type { BodySystem } from './body-system';
+import { getThreeObjectForBody } from './body-types';
 import { Emitter, type Unsubscribe } from './emitter';
 import { BODY_EVENT_BITS, type BodyEventMap, EventBit } from './events';
 import {

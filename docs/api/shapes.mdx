@@ -302,7 +302,7 @@ error naming the offending count rather than a silent failure — the plane is b
 
 ### Generation
 
-`heightField/heightfield.ts` builds Jolt-ready sample grids without an image, from noise or from
+`heightfield/heightfield.ts` builds Jolt-ready sample grids without an image, from noise or from
 your own callback:
 
 ```ts
@@ -339,7 +339,7 @@ of milliseconds; a 2048×2048 one is not, and will drop frames. There is no buil
 Jolt's `HeightFieldShapeSettings` carries a `PhysicsMaterialList` and one material index per
 **quad** (`(size - 1)^2` of them, row major), but its JS binding's `PhysicsMaterial` has no
 properties of its own — friction always comes from the two bodies in contact, combined as
-`sqrt(f1 * f2)`. `SurfaceMaterialTable` (`heightField/materials.ts`) bridges that gap: it creates
+`sqrt(f1 * f2)`. `SurfaceMaterialTable` (`heightfield/materials.ts`) bridges that gap: it creates
 one bare `PhysicsMaterial` per entry for the shape to index into, and remembers which pointer
 means which `{ friction, restitution, name }` so the contact listener can resolve a sub-shape id
 back to a friction value synchronously, inside `Step()`, and write it into that contact's

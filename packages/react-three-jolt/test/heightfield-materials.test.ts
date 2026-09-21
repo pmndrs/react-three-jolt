@@ -12,7 +12,7 @@ import {
     heightfieldMaterialIndices,
     heightfieldToGeometry,
     SurfaceMaterialTable
-} from '../src/heightField';
+} from '../src/heightfield';
 import { initJolt, Raw } from '../src/raw';
 import { PhysicsSystem } from '../src/systems/physics-system';
 import {

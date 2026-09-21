@@ -46,7 +46,7 @@ import {
     validScaleFor
 } from '../src/systems/shape-system';
 import { joltScratch, setDebug } from '../src/utils';
-import { createMeshFloor } from '../src/utils/meshTools';
+import { createMeshFloor } from '../src/utils/mesh-tools';
 import { installAllocTracker } from './jolt-alloc';
 
 //* Allocation tracking =====================================

@@ -1,5 +1,5 @@
 // Unit coverage for the heightmap-sampling helpers behind <Heightfield> (see #152). These
-// exercise `Generators.ts` directly, independent of React/jolt, covering:
+// exercise `generators.ts` directly, independent of React/jolt, covering:
 //   - the sample-count guard that stands in for Jolt's real HeightFieldShapeSettings constraints
 //     (square grid, edge length a multiple of the block size)
 //   - the Float32Array guard on the geometry's position attribute
@@ -11,7 +11,7 @@ import {
     applyHeightmapImgDataToPlane,
     getValidatedHeightfieldSampleCount,
     imageUrlToImageData
-} from '../src/heightField/Generators';
+} from '../src/heightfield/generators';
 
 function fakeImageData(width: number, height: number): ImageData {
     return { width, height, data: new Uint8ClampedArray(width * height * 4) } as ImageData;

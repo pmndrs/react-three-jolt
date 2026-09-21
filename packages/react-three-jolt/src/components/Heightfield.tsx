@@ -4,7 +4,7 @@ import { useTexture } from '@react-three/drei';
 // make it `import type` - don't).
 import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { applyHeightmapToPlane } from '../heightField/Generators';
+import { applyHeightmapToPlane } from '../heightfield/generators';
 import {
     type HeightfieldScale,
     type HeightGenerator,
@@ -13,8 +13,8 @@ import {
     type MaterialIndexGenerator,
     samplesFromGenerator,
     toSampleArray
-} from '../heightField/heightfield';
-import type { SurfaceMaterial } from '../heightField/materials';
+} from '../heightfield/heightfield';
+import type { SurfaceMaterial } from '../heightfield/materials';
 import { useJolt } from '../hooks';
 import type { Vector3Tuple } from '../types';
 import { devWarn } from '../utils';
@@ -130,7 +130,7 @@ export function Heightfield({
      * The generated geometry, when there is one. `samples` wins over `generator`; with neither,
      * this is `undefined` and the image path builds a plain `<planeGeometry>` below.
      *
-     * Generation is synchronous (see the module comment on `heightField/heightfield.ts`): a
+     * Generation is synchronous (see the module comment on `heightfield/heightfield.ts`): a
      * 512x512 field is a few milliseconds, anything much larger should be generated off the
      * render path and handed in through `samples`.
      */

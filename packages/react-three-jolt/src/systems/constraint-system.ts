@@ -186,7 +186,7 @@ export class ConstraintSystem {
 
     constructor(physicSystem: PhysicsSystem) {
         this.physicsSystem = physicSystem;
-        this.joltPhysicsSystem = physicSystem.physicsSystem;
+        this.joltPhysicsSystem = physicSystem.joltPhysicsSystem;
     }
 
     //* Creation ======================================================
