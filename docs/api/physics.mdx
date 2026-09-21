@@ -381,6 +381,8 @@ The object most of the world's behaviour lives on. Beyond the props above:
 | `addPreStepListener(fn)` / `addPostStepListener(fn)` / `removeStepListener(fn)` | **deprecated** aliases of the above |
 | `getRaycaster()` / `getAdvancedRaycaster()` / `getMulticaster()` / `getShapecaster()` / `getShapeCollider()` | [queries](/api/queries) |
 | `constraintSystem` | [constraints](/api/rigid-body#constraints) |
+| `registerDisposable(disposable)` | tie something to this world's lifetime — see [Destroying a world](#destroying-a-world) |
+| `destroy()` | tear the whole world down; idempotent |
 | `destroyed` | true once the world has been torn down |
 
 > [!NOTE]
@@ -391,10 +393,11 @@ The object most of the world's behaviour lives on. Beyond the props above:
 
 ## Stepping and the frame loop
 
-One `<Physics>` per world; multiple worlds in one app are supported (each gets its own Jolt
-interface), but only **three** live interfaces are allowed for memory reasons. A fourth
-`<Physics>` silently reuses the first world's interface instead of getting its own (with a
-warning under [`setDebug(true)`](/advanced/memory#debug-output)).
+One `<Physics>` per world; multiple worlds in one app are supported, each with its own Jolt
+interface. There is no fixed cap on how many can be live at once — instead every new world is
+checked against the real WASM heap before it is built. See [Destroying a
+world](#destroying-a-world) for what happens when there isn't room, and [Memory &
+lifecycle](/advanced/memory#reaching-the-module) for the heap numbers.
 
 To restart a world from scratch, change its `key`:
 
@@ -404,6 +407,54 @@ To restart a world from scratch, change its `key`:
 
 That unmounts the old `PhysicsSystem` (freeing its bodies and Jolt allocations) and builds a new
 one.
+
+## Destroying a world
+
+`<Physics>` calls `physicsSystem.destroy()` for you on unmount — you only need this section if
+you hold a `PhysicsSystem` outside the component (from `useJolt()`, kept in a ref) or you're
+writing something (a controller, a camera rig, a vehicle system, a query) whose lifetime should
+track the world's.
+
+**Deferred unmount.** React tears a parent's effects down before its children's, so `<Physics>`'s
+own unmount cleanup runs *before* `<RigidBody>` / `useConstraint` / controller cleanups
+underneath it. Destroying the Jolt interface right there would leave every child cleaning up
+against an already-dead world. Instead `<Physics>` schedules the real `destroy()` through a
+microtask queued during React's commit, which only runs once the whole commit — including every
+child's own cleanup — has finished. You don't do anything for this; it's why `<Physics key={...}>`
+churn and StrictMode's double-invoke both work out safely.
+
+**`registerDisposable(disposable)`** ties an object's lifetime to the world's, for anything a
+`<RigidBody>` doesn't already cover — a character controller, a camera rig, a vehicle system, a
+raycaster you built by hand:
+
+```ts
+const unregister = physicsSystem.registerDisposable(() => raycaster.destroy());
+// or an object: registerDisposable(vehicleManager) calls vehicleManager.destroy()
+
+// later, if you tear it down yourself first:
+unregister();
+```
+
+`destroy()` calls every registered disposable — while the world is still live, so each can still
+remove its own bodies and listeners normally — before it frees anything else. It is a safety net,
+not a substitute for your own cleanup: something that unmounts on its own should still call its
+own `destroy()`, which is expected to unregister itself. Registering after the world is already
+destroyed is a no-op (there's nothing left to tear down against).
+
+**The heap check.** The jolt-physics WASM builds ship a fixed **128 MB** heap with no growth, and
+one `JoltInterface` costs about **20 MB** of it — so roughly six worlds fit at once. Past that,
+building another one throws instead of letting emscripten abort the module for the rest of the
+page:
+
+```
+r3/jolt: not enough WASM heap for another physics world - 4.2MB free, about 21.0MB needed,
+6 world(s) already live. Call `destroy()` on a PhysicsSystem you no longer need (unmounting its
+<Physics> does this for you) before creating another one.
+```
+
+If you hit this in a test suite or a page that mounts/unmounts `<Physics>` quickly, the deferred
+destroy above may just not have run yet — flushing it (which the heap check itself does before
+giving up) is exactly what buys back the memory.
 
 ## `<Attractor>`
 

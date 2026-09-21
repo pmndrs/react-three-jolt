@@ -30,11 +30,24 @@ free(v); // the documented way to destroy something you own
 `JoltModule.module` is the module itself. `JoltModule` used to be called `Raw`, and `Raw` is
 still exported as an alias of the same object, so existing `Raw.module.*` code keeps working.
 
-Each `<Physics>` builds its own `JoltInterface` on that module and registers it under a
-monotonically increasing id (`system.interfaceId`, resolved with `JoltModule.getInterface(id)`,
-counted with `JoltModule.interfaceCount`). There is no cap on how many worlds you can mount, but
-each one costs about 20MB of the fixed 128MB WASM heap, so roughly six fit at once; past that
-`new PhysicsSystem()` throws rather than letting emscripten abort the module.
+Each `<Physics>` builds its own `JoltInterface` on that module and takes an id for it from
+`JoltModule.registerInterface(joltInterface)` — a monotonically increasing counter, never reused,
+so a stale id can never resolve to somebody else's world. `JoltModule.getInterface(id)` resolves
+it back (`undefined` once that world is destroyed), `JoltModule.releaseInterface(id)` drops the
+slot in `PhysicsSystem.destroy()` (it frees nothing itself — the caller destroys the interface),
+and `JoltModule.interfaceCount` / `JoltModule.liveInterfaceIds()` tell you how many worlds, and
+which, are live right now. This replaced a map keyed by React's `useId()` (issue #35): that key
+changes across remounts, so an unmount/remount grew the map instead of reusing a slot, and once it
+held enough entries a new `<Physics>` was silently handed an *old* world's interface.
+
+There is no fixed cap on how many worlds you can mount, but each one costs about **20 MB** of the
+fixed **128 MB** WASM heap the jolt-physics WASM builds ship with (no growth), so roughly six fit
+at once. Past that, `new PhysicsSystem()` throws — rather than letting emscripten abort the module
+for the rest of the page — with a message naming how much heap is free, how much is needed, and
+how many worlds are already live: `r3/jolt: not enough WASM heap for another physics world - ...`.
+See [`<Physics>`: Destroying a world](/api/physics#destroying-a-world) for the deferred-unmount
+mechanics that can make that check pass a tick later than you'd expect, and `registerDisposable`
+for tying non-body objects to a world's teardown.
 
 ## The three rules
 
@@ -181,6 +194,57 @@ Practical consequences:
 - Keeping a `BodyState` (or a handle) past its `<RigidBody>`'s lifetime is a use-after-free
   waiting to happen. Handles are recycled by Jolt, so a stale one may silently name a *different*
   body.
+
+> [!CAUTION]
+> **Never touch a `BodyState` after its world is destroyed (issue #227).** `BodyState.dispose()`
+> (called from `removeBody`) sets a `disposed` flag and clears its own bookkeeping — contacts,
+> listeners, surface materials — but as of this writing it does **not** yet gate every setter, so
+> `state.position = ...` on a body whose `<Physics>` has already unmounted reaches
+> `Jolt.Body.SetPosition` on a freed pointer. Because the module is a page-wide singleton with
+> immediate pointer reuse, the crash is a wasm trap (`memory access out of bounds` or
+> `null function`) that surfaces in whatever *other* world happens to be live at the time, not in
+> the code that caused it.
+>
+> The hazard is not the direct case — nobody writes `state.position = ...` right after
+> `physicsSystem.destroy()` — it's anything **asynchronous** that outlives the body: an
+> uncancelled `setTimeout`, a promise callback, an animation. The `Launcher` in the
+> `OneWayPlatform` demo (`apps/examples/src/examples/OneWayPlatform.tsx`) hit exactly this: a ball
+> scheduled its own relaunch with `setTimeout(launch, 700)`, and navigating away before the timer
+> fired left it writing `state.position`/`state.velocity` on a body whose world was already gone.
+>
+> The same applies to character controllers, camera rigs and vehicle managers — none of them throw
+> on stale access yet either. `QueryBase.destroyed` (see [Queries: shared
+> base](/api/queries#shared-base)) and `PhysicsSystem.destroyed` are the two places this check
+> already exists at the library level; treat everything else as your own responsibility until
+> #227 closes.
+
+The demo's fix is the pattern to copy until #227 lands a library-level guard: keep the timer
+handle so you can `clearTimeout` it on unmount, **and** re-check `physicsSystem.destroyed` inside
+the callback itself (a timer can already be in flight the instant its cleanup runs):
+
+```tsx
+import type { BodyState } from '@react-three/jolt';
+import { useJolt } from '@react-three/jolt';
+import { useCallback, useEffect, useRef } from 'react';
+import * as THREE from 'three';
+
+function Launcher({ x, body }: { x: number; body: React.MutableRefObject<BodyState | undefined> }) {
+    const { physicsSystem } = useJolt();
+    const relaunch = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+    const launch = useCallback(() => {
+        relaunch.current = undefined;
+        const state = body.current;
+        // the world can go away between the timer being set and it firing
+        if (!state || physicsSystem.destroyed) return;
+        state.position = new THREE.Vector3(x, 1, 0);
+    }, [x, physicsSystem, body]);
+
+    useEffect(() => () => clearTimeout(relaunch.current), []);
+
+    return null;
+}
+```
 
 ## Debug output
 

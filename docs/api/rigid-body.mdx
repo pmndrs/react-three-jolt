@@ -225,6 +225,34 @@ still worth tuning for a demo that has to feel solid:
   mid-air's worth of time and miss the next push. `<Physics defaultBodySettings={{ mAllowSleeping:
   false }}>` removes the question at the cost of never letting the scene idle.
 
+### Moving a static body
+
+`position`/`setPosition`, `rotation`/`setRotation` and `setPositionAndRotation` work on **every**
+motion type, including static bodies (issue #61) — `SetPosition`/`SetRotation` update the
+broadphase regardless of motion type, and the three.js object is brought along by a small "dirty
+statics" drain in `PhysicsSystem.onUpdate`, since the frame loop otherwise only walks bodies that
+can be awake (dynamic/kinematic).
+
+```ts
+// fine: an occasional reposition of scenery
+wall.current!.position = new THREE.Vector3(4, 0, 0);
+```
+
+It is a **teleport**, not simulation, whatever the motion type — the same reason `resetPoseCache()`
+is called for you on every write. For a static body specifically that means:
+
+- Nothing resting on it is carried along, the way a kinematic platform carries riders.
+- Sleeping neighbours are not woken by the move.
+- Contacts are resolved on the next step as if the body had always been at its new position —
+  there is no sweep, no intermediate collision.
+
+Moving a static body **every frame** is an anti-pattern for exactly those reasons: it looks like
+motion but has none of its physical consequences. Reach for `type="kinematic"` with
+[`setKinematicTarget`](#kinematic-platforms) (or `moveKinematic`) for anything that moves
+repeatedly — statics are for the occasional reposition of scenery (moving a platform into place at
+level start, snapping a door open). [`activateOnChange`](#activation) has no effect either way: a
+static body never activates, since a static is never simulated.
+
 ### Activation
 
 Setters that can move a body (`position`, `rotation`, `velocity`, `angularVelocity`, `scale`,
@@ -309,9 +337,12 @@ colour (and the per-instance colour on instanced bodies).
 
 `mass` is the body's *simulated* mass in kilograms, read from its motion properties rather than
 from the shape's density, so it reflects a `mass` prop or a later write. Static and kinematic
-bodies have infinite mass in Jolt and report `0`; setting it on one does nothing. Setting it
-scales the inertia tensor with it and leaves the body's [degrees of freedom](#degrees-of-freedom)
-untouched.
+bodies have infinite mass in Jolt and report `0`; setting it on one does nothing (a
+[`devWarn`](/advanced/memory#debug-output) names which motion type ignored it), and so does
+setting it to `0` or a negative number on a dynamic body. Setting it scales the inverse mass and
+the inertia tensor together and leaves the body's [degrees of freedom](#degrees-of-freedom)
+untouched — unlike going through Jolt's `SetMassProperties` directly, which would reset them to
+"all".
 
 ### Degrees of freedom
 
