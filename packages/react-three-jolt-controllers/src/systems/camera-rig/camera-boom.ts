@@ -180,8 +180,15 @@ export class CameraBoom {
     private readonly whiskerBoom = new THREE.Vector3();
     private readonly whiskerDirection = new THREE.Vector3();
 
-    /** radius currently realised in `collider.shape`, so setOptions can skip a no-op rebuild */
-    private colliderRadius?: number;
+    /**
+     * Radius currently realised in `collider.shape`, so `setCollisionRadius` can skip a no-op
+     * rebuild. Issue #210: this used to start `undefined`, so the *documented* default (0.3) was
+     * never actually owned by the boom - it only worked because `ShapeCollider`'s own default
+     * shape happens to be a `SphereShape(0.3)`. Seeding this to the same 0.3 gives the boom an
+     * explicit default (readable through {@link collisionRadius}) without rebuilding the shape
+     * `ShapeCollider` already constructed correctly.
+     */
+    private colliderRadius = 0.3;
 
     private destroyed = false;
 
@@ -282,6 +289,13 @@ export class CameraBoom {
     /** milliseconds since the last manual look command, `Infinity` if there has never been one */
     get timeSinceLook() {
         return this.lastLookTime === 0 ? Number.POSITIVE_INFINITY : Date.now() - this.lastLookTime;
+    }
+    /** Radius of the sphere used for the camera's collision test, in metres. @default 0.3 */
+    get collisionRadius(): number {
+        return this.colliderRadius;
+    }
+    set collisionRadius(radius: number) {
+        this.setCollisionRadius(radius);
     }
 
     //* Options ========================================

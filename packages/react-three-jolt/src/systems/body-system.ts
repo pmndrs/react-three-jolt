@@ -1340,7 +1340,7 @@ export function generateBodySettings(
             break;
         case 'kinematic':
             motionType = jolt.EMotionType_Kinematic;
-            layer = Layer.MOVING;
+            layer = Layer.KINEMATIC;
             break;
         case 'rig':
             motionType = jolt.EMotionType_Dynamic;
@@ -1366,6 +1366,7 @@ export function generateBodySettings(
                 break;
             case 'kinematic':
                 motionType = jolt.EMotionType_Kinematic;
+                layer = Layer.KINEMATIC;
                 break;
             default:
                 motionType = jolt.EMotionType_Dynamic;
@@ -1403,10 +1404,21 @@ export function generateBodySettings(
     }
 
     // create the settings
-    const settings = mergeBodyCreationSettings(
-        new jolt.BodyCreationSettings(shape, position, quaternion, motionType, layer),
-        options.bodySettings
+    const baseSettings = new jolt.BodyCreationSettings(
+        shape,
+        position,
+        quaternion,
+        motionType,
+        layer
     );
+    // Issue #210: Jolt only runs narrowphase on a pair when at least one side is Dynamic, so by
+    // default a kinematic body (Layer.KINEMATIC) never generates contacts against a static body
+    // or another kinematic one, no matter what the object layer pair filter allows - a moving
+    // platform would silently pass through a wall or another platform. This flag opts it in;
+    // `options.bodySettings` below can still override it explicitly.
+    if (motionType === jolt.EMotionType_Kinematic)
+        baseSettings.mCollideKinematicVsNonDynamic = true;
+    const settings = mergeBodyCreationSettings(baseSettings, options.bodySettings);
     // `GetMassProperties()` hands back a static temporary: read it, never destroy it.
     const shapeMass = isDynamic ? shape.GetMassProperties().mMass : 0;
     if (isDynamic && options.mass !== undefined && shapeMass > 0) {

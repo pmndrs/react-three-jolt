@@ -5,9 +5,18 @@
  * `PhysicsSystem`'s constructor through an `ObjectLayerPairFilterTable`, which starts with
  * everything disabled.
  *
- * `KINEMATIC` is reserved: kinematic bodies are currently created on `MOVING` (see
- * `body-system.ts`), but the id stays allocated so existing user code that references it keeps
- * working and so the filter tables are sized for it.
+ * `KINEMATIC` bodies (`generateBodySettings` in `body-system.ts`) get their own object layer
+ * rather than sharing `MOVING`, so they can be filtered independently. The pair filter enables
+ * `KINEMATIC` against `NON_MOVING`, `MOVING` and itself, so a kinematic platform still collides
+ * with static geometry, dynamic bodies and other kinematic bodies (issue #210). It shares the
+ * `MOVING` broad phase layer (see `bpInterface.MapObjectToBroadPhaseLayer` below) since it moves
+ * every frame the same way a dynamic body does.
+ *
+ * The pair filter is necessary but not sufficient for the `KINEMATIC` vs `NON_MOVING`/`KINEMATIC`
+ * pairs: Jolt only runs narrowphase on a pair when at least one side is Dynamic, so
+ * `generateBodySettings` also sets `BodyCreationSettings.mCollideKinematicVsNonDynamic` on every
+ * kinematic body, or a moving platform would silently pass through static geometry and other
+ * kinematic bodies no matter how this table is configured.
  */
 export const Layer = {
     MOVING: 0,
