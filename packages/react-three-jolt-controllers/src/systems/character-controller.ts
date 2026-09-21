@@ -168,6 +168,31 @@ export interface HeadHitInfo {
     previousVerticalSpeed: number;
 }
 
+/**
+ * Construction-time options for {@link CharacterControllerSystem}'s inner rigid body (issue #73).
+ *
+ * Both are read once, in the constructor: Jolt creates the inner body inside the
+ * `CharacterVirtual` constructor and offers no way to add, remove or re-layer one afterwards.
+ */
+export interface CharacterInnerBodyOptions {
+    /**
+     * Give the character a real rigid body in the simulation, so other bodies collide with it
+     * instead of passing through. Costs one extra body and the narrowphase work that implies.
+     *
+     * @default false
+     */
+    innerBody?: boolean;
+    /**
+     * Object layer for that body. `Layer.MOVING` collides with everything that moves;
+     * `Layer.KINEMATIC` is the closer description of what the body actually is (the character
+     * drives it, the solver never does) and is the right pick if you want to filter NPCs out of
+     * something without touching collision groups.
+     *
+     * @default Layer.MOVING
+     */
+    innerBodyLayer?: number;
+}
+
 export class CharacterControllerSystem {
     protected joltInterface: Jolt.JoltInterface;
     protected physicsSystem: PhysicsSystem;
@@ -385,8 +410,11 @@ export class CharacterControllerSystem {
     private readonly _stateUp = new THREE.Vector3();
     private readonly _stateNormal = new THREE.Vector3();
 
-    constructor(physicsSystem: PhysicsSystem) {
+    constructor(physicsSystem: PhysicsSystem, options?: CharacterInnerBodyOptions) {
         this.physicsSystem = physicsSystem;
+        // read before initCharacter(), which is the only moment Jolt lets us ask for one
+        this.innerBodyEnabled = options?.innerBody ?? false;
+        this.innerBodyLayer = options?.innerBodyLayer ?? Layer.MOVING;
         this.joltInterface = physicsSystem.joltInterface;
         this.bodySystem = physicsSystem.bodySystem;
         // Filters
@@ -412,6 +440,19 @@ export class CharacterControllerSystem {
         // Init the character contact listener
         this.initCharacterContactListener();
 
+        // The capsule has to exist *before* initCharacter(): CharacterVirtual copies mShape and
+        // mInnerBodyShape in its constructor, and there is no API to add an inner body later -
+        // `SetInnerBodyShape` only swaps the shape of one that already exists. This used to be
+        // left to the setCapsule() below, which meant the character was constructed with a null
+        // shape and an inner body could never be created (issue #73).
+        this.standingShape = this.createCapsuleShape(
+            0.5 * this.characterHeightStanding,
+            this.characterRadiusStanding
+        );
+        this.crouchingShape = this.createCapsuleShape(
+            0.5 * this.characterHeightCrouching,
+            this.characterRadiusCrouching
+        );
         this.initCharacter();
         // Set a default shape size (know it will be overwritten by the user
         this.setCapsule(1, 2);
@@ -425,6 +466,11 @@ export class CharacterControllerSystem {
         // even when nothing unmounted the component that made it (issue #162)
         this.unregisterFromWorld = this.physicsSystem.registerDisposable(this);
     }
+
+    /** Backing field for {@link hasInnerBody}; set once, by the constructor. */
+    private innerBodyEnabled = false;
+    /** The object layer the inner body is created on. See {@link CharacterInnerBodyOptions}. */
+    private innerBodyLayer: number = Layer.MOVING;
 
     /** Drops this controller from the physics system's disposables. Replaced in the constructor. */
     private unregisterFromWorld: () => void = () => {};
@@ -546,6 +592,37 @@ export class CharacterControllerSystem {
         );
         if (this.isDebugging) console.log('Shape Set Attempt:', setAttempt);
     }
+    /**
+     * Whether this character carries an inner rigid body (issue #73).
+     *
+     * A `CharacterVirtual` on its own is not part of the simulation: it collides *against* the
+     * world, but the world does not collide against it, so a crate pushed into an NPC passes
+     * straight through. Jolt's answer is `mInnerBodyShape` - the character creates and owns a
+     * real kinematic body, keeps it glued to its own position, and other bodies collide with
+     * that. This is what the standard (non-virtual) `Character` class is usually reached for,
+     * and it is the reason we don't need it: `Character` isn't exposed by jolt-physics, and
+     * upstream considers it inferior to this.
+     *
+     * Set through `innerBody` on the options / the `<CharacterController>` prop. Changing it
+     * after creation is not supported by Jolt for the *layer*, only the shape, so this is read
+     * only - build the controller with it on.
+     */
+    get hasInnerBody() {
+        return this.innerBodyEnabled;
+    }
+
+    /**
+     * The `BodyID` of the inner body, or `undefined` when there isn't one.
+     *
+     * The body belongs to the `CharacterVirtual`, which creates it on construction and destroys
+     * it with itself - do not remove it through `BodySystem`, and do not hold the ID past
+     * `destroy()`.
+     */
+    get innerBodyId(): Jolt.BodyID | undefined {
+        if (!this.innerBodyEnabled || this.destroyed || !this.character) return undefined;
+        return this.character.GetInnerBodyID();
+    }
+
     get standingShape() {
         return this.activeStandingShape;
     }
@@ -976,6 +1053,14 @@ export class CharacterControllerSystem {
         settings.mMaxSlopeAngle = MathUtils.degToRad(45.0);
         settings.mMaxStrength = 100;
         settings.mShape = this.standingShape;
+        // The inner body can only be asked for here: CharacterVirtual creates it in its
+        // constructor and there is no API to add one later (only `SetInnerBodyShape` to swap the
+        // shape of one that already exists). Shapes are reference counted and immutable, so
+        // handing it the same capsule the character itself uses is safe and costs nothing.
+        if (this.innerBodyEnabled) {
+            settings.mInnerBodyShape = this.standingShape;
+            settings.mInnerBodyLayer = this.innerBodyLayer;
+        }
         settings.mBackFaceMode = Raw.module.EBackFaceMode_CollideWithBackFaces;
         settings.mCharacterPadding = 0.02;
         settings.mPenetrationRecoverySpeed = 1;
@@ -1061,6 +1146,9 @@ export class CharacterControllerSystem {
 
         // finally set the shape
         this.shape = this.standingShape;
+        // the inner body is a separate shape reference and does not follow `SetShape`, so a
+        // resized character would otherwise keep colliding at its original size (issue #73)
+        if (this.innerBodyEnabled) this.character.SetInnerBodyShape(this.standingShape);
 
         // the character now holds its own reference on the new shape, so the references this
         // instance took for the previous pair can go. Destroying them outright (the commented
