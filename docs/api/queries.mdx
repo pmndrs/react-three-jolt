@@ -319,6 +319,38 @@ pools.
 `Shapecaster` behaves the same way: it has the same pooled drawing and the same normal-oriented
 markers, and its `destroy()` / `clearDebugging()` dispose the pools too.
 
+## Shared base
+
+`Raycaster`, `Shapecaster`, `ShapeCollider` and `Multicaster` used to each duplicate the same
+filter setup, destroy bookkeeping and (for the ray-like casters) debug-drawing code (issue #217).
+They now all extend a small hierarchy instead — useful mainly if you're building a fifth query
+type, or want to know exactly what `destroy()` covers:
+
+| class | extends | adds |
+| --- | --- | --- |
+| `QueryBase` | — | the `joltPhysicsSystem`/`joltInterface`/`bodyInterface` wiring, the four filters (`bpFilter`, `objectFilter`, `bodyFilter`, `shapeFilter`) that make a query cast as if a dynamic object, and an idempotent `destroy()` template |
+| `CastQueryBase<THit, TCollector>` | `QueryBase` | the collector lifecycle, the `cast()`/`castFrom()`/`castTo()`/`castBetween()` family, and the pooled debug-drawing machinery described [above](#debugging) |
+| `HitBase` | — | the shape every single-cast result shares: a `start`/`end`/`position` triple, a `bodyHandle`/`shapeIdValue` pair, and the `impactNormal` getter that turns those back into a live surface normal |
+
+`Raycaster` and `Shapecaster` extend `CastQueryBase` (and `AdvancedRaycaster` extends
+`Raycaster`); `ShapeCollider` and `Multicaster` extend `QueryBase` directly since neither uses the
+ray-cast collector family. `RaycastHit` and `ShapecastHit` both extend `HitBase`, which is why
+their fields line up exactly (see [`RaycastHit`](#raycasthit) above).
+
+`QueryBase` implements `destroy()` once, as a template: it flips an internal `destroyed` flag and
+calls the abstract `releaseResources()` every subclass implements for whatever else it allocated.
+**This means `destroy()` is idempotent on every query type now** — `Raycaster`, `Shapecaster`,
+`ShapeCollider` and `Multicaster` alike, not just `ShapeCollider` as before #217. Calling it twice
+is safe and the second call does nothing, because [`Raw.module.destroy()` on an
+already-freed object does not throw — it silently double-frees](/advanced/memory#the-three-rules).
+
+`successHandler`/`failHandler` on `cast()`/`castFrom()`/`castTo()`/`castBetween()` stay untyped
+(`any`) rather than a `(hit?: THit | THit[]) => void` alias: TypeScript checks a plain
+function-type parameter's parameter list contravariantly, so a caller passing a narrower callback
+— `(hit: RaycastHit) => void`, the shape every example above uses — would stop compiling even
+though `cast()` never actually calls it with `undefined` or an array unless the hit shape says so.
+Annotate your own handler's parameter as shown in the examples on this page.
+
 ## Lifetime
 
 Every caster allocates Jolt filters, a collector and settings objects on the WASM heap. They are
@@ -336,9 +368,9 @@ freed only by `destroy()`.
 
 - Anything from `physicsSystem.getShapecaster()` / `getShapeCollider()` / `getRaycaster()` is
   yours: pair it with `useUnmount(() => caster.destroy())`.
-- `destroy()` is idempotent on `ShapeCollider` — it also nulls out every field it freed, so a
-  stray call afterwards fails loudly instead of touching freed memory. Don't rely on that for the
-  others.
+- `destroy()` is idempotent on every query type — see [Shared base](#shared-base). `ShapeCollider`
+  goes one step further and also nulls out every field it freed, so a stray call afterwards fails
+  loudly instead of touching freed memory; the others just no-op on a second call.
 - There is no `useShapecaster` / `useShapeCollider` hook yet.
 
 ### Objects Jolt hands you

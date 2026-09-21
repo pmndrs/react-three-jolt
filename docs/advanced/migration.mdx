@@ -70,6 +70,8 @@ Everything that can break a compiling app, by package.
 | **`BodyEvents` / `WorldEvents` types** | in `types.ts` | deleted. They were unreachable and described signatures that were never dispatched. Use `BodyEventMap` / `WorldEventMap` |
 | **`BodyState.getPosition(true)`** | `Jolt.Vec3` | `Jolt.RVec3` |
 | **`vec3.jolt()` / `vec3.rjolt()` / `quat.jolt()`** | returned their argument when it already was a Jolt object | always return a **new object the caller owns** |
+| **`Raw.joltInterfaces` / `PhysicsSystem.maxInterfaces`** | a fixed three-world cache keyed by React's `useId()` | **gone.** [`JoltModule.registerInterface`/`getInterface`/`releaseInterface`/`interfaceCount`](/advanced/memory#reaching-the-module) replace it, with no fixed cap — see [Destroying a world](/api/physics#destroying-a-world) |
+| **`PhysicsSystem`'s constructor argument** | the interface cache key | a debug label only. `destroy(pid)`'s argument is likewise ignored. Both still compile |
 | **`jolt-physics`** | a dependency | a peer — add it to your app |
 | **`@react-three/drei`** | undeclared | a required peer |
 | **Console output** | ~17 unconditional `console.log`s | off unless you call `setDebug(true)` |
@@ -177,6 +179,49 @@ from only the first channel.
   hull rather than falling through the world ([#112](/api/shapes#trimeshes)).
 - `constraintSystem.constraints`, `removeConstraintsForBody()`, `removeAllConstraints()`, and
   typed `ConstraintType` / `ConstraintOptions` / `ConstraintTypeMap`.
+- **[`<Attractor>` / `useAttractor()`](/api/physics#<attractor>).** A point that pulls (or pushes)
+  every dynamic body within `range`, with rapier's three falloff curves — a
+  `@react-three/rapier` scene's attractors port across unchanged.
+- **[`<Physics debug>` collider renderer](/api/physics#debug) / `<Debug>`.** One wireframe per
+  body built from its real Jolt shape (so it shows what a dynamic trimesh actually fell back to),
+  coloured by motion type, plus constraint lines and `showContacts`. Replaces the old per-body
+  `debug` boolean.
+- **[Heightfield generation](/api/shapes#generation) and [surface materials](/api/shapes#surface-materials).**
+  `<Heightfield samples>` / `<Heightfield generator>` build terrain synchronously with no image or
+  loader; `generateHeightfield`, `samplesFromGenerator`, `heightfieldToGeometry`,
+  `validateHeightfieldSize`, `psrdnoise2` / `simplex2` / `fbm2`. `materials` / `materialIndex` give
+  individual quads their own friction/restitution via a new `SurfaceMaterialTable`.
+- **[Named collider components and `<RigidBody colliders>`](/api/colliders).** `<CuboidCollider>`,
+  `<BallCollider>`, `<CapsuleCollider>`, `<CylinderCollider>`, `<ConeCollider>`,
+  `<ConvexHullCollider>`, `<TrimeshCollider>`, `<HeightfieldCollider>` — rapier-compatible `args`
+  (half extents) over `<Shape>`. `<RigidBody colliders="cuboid" | "ball" | "hull" | "trimesh" | false>`
+  picks the auto shape rapier-style, or turns it off entirely.
+- **[Sub-shape identity on contacts](/api/rigid-body#which-part-of-a-compound-was-hit).**
+  `CollisionPayload.targetSubShape` / `otherSubShape` (`{ id, index, userData, descriptor }`), and
+  per-`<Shape>` `userData` / `name` / `onCollisionEnter` / `onCollisionPersist` / `onCollisionExit`
+  / `onSensorEnter` / `onSensorExit` scoped to that sub-shape.
+- **[`activateOnChange`](/api/rigid-body#activation) and [`matrixAutoUpdate`](/api/rigid-body#matrixautoupdate).**
+  Opt out of a mover setter waking a sleeping body, or of three's own per-object matrix recompute
+  in the frame sync.
+- **[Static bodies can be moved](/api/rigid-body#moving-a-static-body).** `position`/`rotation`
+  work on `type="static"` now; `BodySystem.movedStatics` drains once a frame so the object stays in
+  sync — scenes whose statics never move pay nothing.
+- **[`setKinematicTarget(position, rotation?)` / `clearKinematicTarget()`](/api/rigid-body#kinematic-platforms).**
+  A sticky target re-applied at the top of every substep, so a driven platform converges on it
+  however many substeps a frame runs, instead of `moveKinematic`'s one-shot nudge lurching once per
+  rendered frame.
+- **A shared query base.** `QueryBase` / `CastQueryBase` / `HitBase` — see [Queries: shared
+  base](/api/queries#shared-base). No public property, method or constructor signature changed;
+  worth knowing about because `destroy()` is now idempotent on *every* query type, not just
+  `ShapeCollider`.
+- **Real world teardown.** `PhysicsSystem.destroy()` walks the whole world in dependency order
+  instead of freeing the `JoltInterface` and stopping, `<Physics>` defers it past the React commit
+  so children clean up against a live world, and `registerDisposable()` ties a non-body object's
+  lifetime to the world. `JoltModule` (renamed from `Raw`, which is kept as an alias),
+  `getJoltModule()` and `free()` are exported from the package root. See [Destroying a
+  world](/api/physics#destroying-a-world) and [Memory & lifecycle](/advanced/memory).
+- **Unlimited concurrent worlds**, gated by the real WASM heap instead of a fixed cap of three —
+  see [the heap check](/advanced/memory#reaching-the-module).
 
 ### `@react-three/jolt-addons`
 
@@ -209,6 +254,24 @@ from only the first channel.
   `VehicleSystem` / `VehicleManager` and `WheelState` all have idempotent `destroy()` methods, and
   each system's pre-step listener is a stored reference so it can actually be removed. The
   components release everything on unmount, so mounting and unmounting them no longer leaks.
+- **[Character controller events](/api/controllers#events), `isMoving`, `isSliding` and
+  `isGrounded`.** `CharacterControllerSystem.events` is now public and typed
+  (`CharacterEventMap`): `move`, `stop`, `slide`, `slideEnd`, `jump`, `land`, `ground`, `airborne`,
+  `crouch`, `stand`, `contactAdded`, `contactPersisted`, `contactRemoved`, plus the existing
+  `action`. New `<CharacterController>` props for every one of them, `useCharacterEvent(system,
+  type, handler)`, and `moveThreshold` / `slideThreshold`. `isMoving`/`isSliding` used to be
+  declared fields nothing ever assigned — they're real getters now, alongside a new `isGrounded`.
+- **[`headAngle` / `onHeadHit`](/api/controllers#head-and-ceiling-collision).** A character bumping its
+  head on a ceiling/overhang no longer keeps its upward velocity until gravity alone brings it
+  back down — a contact within `headAngle` of straight-up cancels it, once per new contact.
+- **[Vehicle secondary physics](/api/controllers#secondary-physics).** `bodyRoll` (spring-damped
+  chassis tilt), `wheelSmoothing` (eased rendered suspension/steering), and `skid` detection with
+  `onSkidStart` / `onSkidEnd`, all on by default and independently configurable through
+  `vehicleSettings` (or `setBodyRoll()` / `setWheelSmoothing()` / `setSkid()` live). Plus
+  [engine/audio readouts](/api/controllers#readouts-and-events): `rpm`, `gear`, `shifting`,
+  `clutch`, `throttle`, `brakeInput`, `speed`, `speedKmh`, `skidding`, `onEngine(fn)`. `WheelState`
+  publishes `slipRatio`, `lateralSlip`, `isSkidding`, `hasContact`, `suspensionLength`,
+  `spinVelocity` and `spinAngle`.
 
 ## 7. Behaviour changes
 
@@ -230,6 +293,18 @@ from only the first channel.
   dangling. The same factory reference now reuses the module, and swapping to a *different* one
   while a world exists is refused with a warning. `<Physics>` also calls `suspend()`
   unconditionally now; toggling `module` used to change the number of hooks between renders.
+- **The three-world cap is gone, and unmounting actually frees the world.** Every `PhysicsSystem`
+  used to share a cache keyed by React's `useId()`, so a remount grew the map instead of reusing a
+  slot, and once it held three entries a fourth `<Physics>` was silently handed the *first* world's
+  interface — two components then shared bodies without either knowing, and the loser's filter
+  tables were orphaned. `destroy()` now really walks the world (disposables → constraints → bodies
+  → events → the interface → the listener objects), `<Physics>` defers it past the React commit so
+  children clean up against a live world, and mounting past the real heap limit (~six worlds) is an
+  actionable error instead of an `abort(OOM)` that kills the module. See [Destroying a
+  world](/api/physics#destroying-a-world).
+- `NUM_OBJECT_LAYERS` was `3` while `Layer` had four members (`Layer.RIG` included), so the
+  broadphase/object layer pair filter tables were one entry too small and wrote past their own end
+  — aliasing unrelated layer pairs. It's derived from `Layer` itself now (issue #95).
 
 ### Bodies and events
 
@@ -248,6 +323,27 @@ from only the first channel.
 - **`<Heightfield>`** no longer creates or leaks a stale body when `url` changes (or the component
   unmounts) while a previous image is still loading, and an invalid sample grid throws a clear
   error naming the count instead of failing silently.
+- **`BodyState.mass` reports the mass the simulation actually uses.** The getter used to read the
+  *shape's* density-derived mass, unrelated to a `mass` option or a later write; it now reads
+  `1 / MotionProperties.GetInverseMass()`. The setter (`MotionProperties.ScaleToMass`) scales the
+  inertia tensor with the mass and leaves the body's degrees of freedom alone, where the old path
+  pushed a fresh `MassProperties` through `SetMassProperties` and quietly unlocked every axis you
+  had locked. See [Material and mass](/api/rigid-body#material-and-mass).
+- **`<InstancedRigidBodyMesh count={0}>` mounts and grows to N**, instead of starting broken.
+- Setting a static body's `position`/`rotation` used to do nothing visible — it moved the Jolt body
+  but never synced the three.js object. `BodySystem.movedStatics` fixes that; see [Moving a static
+  body](/api/rigid-body#moving-a-static-body).
+- **`<RigidBody friction>` was declared and read by nothing.** It, `restitution` and the new
+  `gravityFactor` prop now go through the same reactive effect as `mass` and the damping props, and
+  that effect is keyed on the body instance rather than a non-reactive ref (so it also reaches a
+  body created later because it has `<Shape>` children) and tests `!== undefined` instead of
+  truthiness, so `friction={0}` and `gravityFactor={0}` are no longer read as "unset".
+- **`<RigidBody>` is a compound *host* now.** When it has to combine several shapes (sibling
+  colliders, an offset collider, a collider beside a mesh) its children register plain
+  `ShapeDescriptor`s and the body composes and owns the compound, instead of every child calling
+  `setActiveShape` and the last one silently winning. A lone collider with a `position`/`rotation`
+  becomes a one-child compound now, so its offset is honoured instead of dropped as a root
+  transform. Nothing changes for the common case (one `<Shape>`, or meshes only).
 
 ### Constraints
 
@@ -281,6 +377,19 @@ values change. New: `constraintSystem.constraints`, `removeConstraintsForBody()`
 - `ShapecastHit`'s constructor used to `destroy()` the by-value return of `GetPointOnRay()` — the
   binder's shared static temporary — and `impactNormal` leaked a `BodyID`, `SubShapeID` and
   `RVec3` per read. Both fixed.
+- `Shapecaster` never freed its default `SphereShape`, and its `shape` setter's
+  `RShapeCast.set_mShape()` call was dead code (only a read-only `mShape` getter exists on the
+  runtime binding) — setting `shape` after construction never took effect. Both fixed: the shape is
+  reference counted like `ShapeCollider`'s, and the setter rebuilds the live `RShapeCast`.
+- `useRaycaster` / `useAdvancedRaycaster` / `useMulticaster` only freed their **last** instance, at
+  unmount — a dependency change (`origin`/`direction`/`type`) built a fresh raycaster without
+  destroying the one it replaced. Each hook now destroys its previous instance on every dep change.
+- **`Raycaster`, `Shapecaster`, `ShapeCollider` and `Multicaster` now share `QueryBase` /
+  `CastQueryBase` / `HitBase`** (issue #217) instead of duplicating the same filter setup, destroy
+  bookkeeping and (for the ray-like casters) ~230 lines of debug-drawing code — see [Queries:
+  shared base](/api/queries#shared-base). No public signature changed, but `Multicaster.destroy()`
+  is idempotent now where it previously had no guard at all against being called twice (a
+  double-free of its owned `Raycaster`'s allocations).
 
 ### Shapes
 
@@ -295,6 +404,11 @@ values change. New: `constraintSystem.constraints`, `removeConstraintsForBody()`
 - `updateScaleShape` was a `console.warn` stub; it wraps the shape in a `ScaledShape`.
 - The shape system leaked one WASM object per point, vertex and triangle. Building a mesh collider
   from a 2k-triangle sphere left 3078 live Jolt objects behind; it now leaves none.
+- The heightfield descriptor's sample spacing was `planeWidth / sampleCount`, where `sampleCount`
+  samples actually span `sampleCount - 1` segments — so the physics field was one sample wider than
+  the mesh drawn on top of it. It's `planeWidth / (sampleCount - 1)` now, with
+  `addHeightfield`'s centring offset derived from the same numbers and the depth of a non-square
+  plane honoured on z. See [Generation](/api/shapes#generation).
 
 ### Input (`@react-three/jolt-addons`)
 

@@ -221,32 +221,55 @@ body. `isMutableCompoundShape(shape)`, `asMutableCompoundShape(shape)`, `subShap
 
 ## Heightfields
 
-`<Heightfield>` builds a plane, displaces it from a heightmap image, and creates a matching Jolt
-heightfield body.
+`<Heightfield>` builds a plane and creates a matching Jolt heightfield body. There are three ways
+to say what the terrain looks like, in order of precedence — `samples` wins over `generator`,
+which wins over `url`:
 
 ```tsx
 import { Heightfield } from '@react-three/jolt';
 
-<Heightfield url="/heightmap.png" size={128} width={256} height={256} />;
+<Heightfield samples={samples} size={64} scale={[2, 20, 2]} />;               // raw samples (#45)
+<Heightfield generator={(x, z) => Math.sin(x * 0.1) * 4} size={64} />;        // callback (#45)
+<Heightfield url="/heightmap.png" size={128} width={256} height={256} />;     // image, asynchronous
 ```
+
+`samples` and `generator` are **synchronous**: the geometry and the body exist by the time the
+component has mounted, so what is drawn and what is simulated are the same numbers. The `url`
+path still loads (and can be superseded or cancelled) asynchronously — changing `url` cancels the
+in-flight load and replaces the body, and at most one heightfield body exists per component at a
+time (issue #152).
 
 | prop | type | default | |
 | --- | --- | --- | --- |
-| `url` | `string` | — | heightmap image; also used as the display texture |
+| `url` | `string` | — | heightmap image; also used as the display texture. Ignored once `samples`/`generator` is set |
 | `texture` | `string` | — | use a different texture for display |
-| `width` / `height` | `number` | `128` | world size of the plane |
+| `width` / `height` | `number` | `128` | world size of the plane — ignored when `samples`/`generator` set `scale` |
 | `size` | `number` | `256` | **samples per edge** — see below |
-| `displacementScale` | `number` | `25.6` | maximum height |
+| `displacementScale` | `number` | `25.6` | maximum height, `url` path only |
+| `samples` | `Float32Array \| ArrayLike<number>` | — | ready-made height samples, `size * size` numbers, row major (`row * size + col`) |
+| `generator` | `(x: number, z: number) => number` | — | build the heights from a callback instead of samples/image — see [Generation](#generation) |
+| `scale` | `[x, y, z]` | `[1, 1, 1]` | distance between samples on x/z and the height multiplier; used by `samples`/`generator`. The field is `(size - 1) * scale` across |
+| `friction` | `number` | — | friction of the whole field (issue #46) |
+| `restitution` | `number` | — | restitution (bounciness) of the whole field |
+| `materials` | `SurfaceMaterial[]` | — | per-quad surface materials — see [Surface materials](#surface-materials) |
+| `materialIndex` | `(x, z) => number \| Uint8Array \| ArrayLike<number>` | — | which material each **quad** uses; only meaningful with 2+ `materials` |
+| `blockSize` | `number` | `2` | Jolt's heightfield block size; `size` must be a multiple of it |
+| `color` | `THREE.ColorRepresentation` | `'#8F2D56'` | material colour for the built-in plane material |
 | `position` | `Vector3Tuple` | — | |
+
+`materialIndex` (a callback) and `generator` are compared by identity, and `materials`/`samples`
+by value (an inline array literal is fine for `materials`) — but a function has no value equality,
+so a `materialIndex`/`generator` written inline creates a new function every render and rebuilds
+the body every render. Define it outside the component, or memoize it.
 
 ### The sample-size rule
 
-`size` is the number of height samples along each edge, and Jolt is strict about it. The grid
-must be:
+`size` is the number of height samples along each edge, and Jolt is strict about it (this is the
+same check `describeShape`'s `heightfield` path and `generateHeightfield` use). The grid must be:
 
 - **square** — `size × size` samples;
-- a **multiple of the block size** (`2` by default);
-- **at least two blocks** wide, i.e. `size >= 4`.
+- a **multiple of the block size** (`2` by default, the `blockSize` prop);
+- **at least two blocks** wide, i.e. `size >= 2 * blockSize`.
 
 A power of two is the most efficient but is not required. Break the rule and you get a thrown
 error naming the offending count rather than a silent failure — the plane is built with
@@ -257,8 +280,83 @@ error naming the offending count rather than a silent failure — the plane is b
 > rather than making one enormous field. Contact events on heightfields are unreliable: they fire
 > per triangle, which confuses the contact bookkeeping, so "stopped touching" may never arrive.
 
-Changing `url` cancels the in-flight load and replaces the body; at most one heightfield body
-exists per component at a time.
+### Generation
+
+`heightField/heightfield.ts` builds Jolt-ready sample grids without an image, from noise or from
+your own callback:
+
+```ts
+import { generateHeightfield, Heightfield } from '@react-three/jolt';
+
+// deterministic: the same options always produce the same samples, on any machine
+const { samples } = generateHeightfield({ size: 64, noise: 'psrd', octaves: 4, seed: 7 });
+
+<Heightfield samples={samples} size={64} scale={[2, 20, 2]} />;
+```
+
+| function | |
+| --- | --- |
+| `generateHeightfield(options)` | → `{ samples, size, min, max }`, from noise (`'psrd'`, `'simplex'`, or your own `(x, z) => value`) |
+| `samplesFromGenerator(size, generator, spacing?, blockSize?)` | → `{ samples, size, min, max }`, sampling any `(x, z) => height` callback — what `<Heightfield generator>` uses internally |
+| `heightfieldToGeometry(samples, size, scale?)` | → a `THREE.PlaneGeometry` with `size - 1` segments per edge, already rotated flat (+y up), one vertex per sample |
+| `validateHeightfieldSize(size, blockSize?)` | the [sample-size rule](#the-sample-size-rule) check, thrown or returned |
+| `toSampleArray(samples)` | normalise any `ArrayLike<number>` to the `Float32Array` Jolt wants |
+
+Both `generateHeightfield` and `generator` see **field-local world coordinates**: `(0, 0)` is the
+centre of the field, x grows with the column index and z with the row index, both scaled by
+`spacing`/`scale[0]`. That is exactly where the corresponding vertex of `heightfieldToGeometry`
+ends up, so `(x, z) => Math.sin(x * 0.1)` does what it looks like it does, and feeding that
+geometry to `bodySystem.addHeightfield` (what `<Heightfield>` does under the hood) round-trips the
+same numbers back out — render and physics can't drift apart.
+
+Generation is **synchronous**, on the calling thread: a 512×512 field with 4 octaves is a handful
+of milliseconds; a 2048×2048 one is not, and will drop frames. There is no built-in worker — pass
+`samples` you generated wherever you like (a worker, the server, a previous session) to
+`<Heightfield samples={...}>` and nothing here has to move off thread.
+
+### Surface materials
+
+Jolt's `HeightFieldShapeSettings` carries a `PhysicsMaterialList` and one material index per
+**quad** (`(size - 1)^2` of them, row major), but its JS binding's `PhysicsMaterial` has no
+properties of its own — friction always comes from the two bodies in contact, combined as
+`sqrt(f1 * f2)`. `SurfaceMaterialTable` (`heightField/materials.ts`) bridges that gap: it creates
+one bare `PhysicsMaterial` per entry for the shape to index into, and remembers which pointer
+means which `{ friction, restitution, name }` so the contact listener can resolve a sub-shape id
+back to a friction value synchronously, inside `Step()`, and write it into that contact's
+`ContactSettings.mCombinedFriction`/`mCombinedRestitution` — the same combine rules Jolt uses by
+default (`sqrt` for friction, `max` for restitution), so a material only replaces *its* side of
+the calculation.
+
+```tsx
+import { Heightfield, heightfieldMaterialIndices } from '@react-three/jolt';
+
+const materials = [
+    { name: 'ice', friction: 0.01, restitution: 0 },
+    { name: 'grip', friction: 2, restitution: 0 }
+];
+// low friction on -x, high friction on +x - called once per quad, at its centre
+const materialIndex = (x: number) => (x < 0 ? 0 : 1);
+
+<Heightfield generator={terrain} size={64} materials={materials} materialIndex={materialIndex} />;
+```
+
+With only one entry in `materials`, it applies to the whole field and no index map is needed.
+`heightfieldMaterialIndices(size, source, spacing?)` is what `<Heightfield>` calls internally to
+turn a `materialIndex` callback or array into the `Uint8Array` Jolt wants — use it directly when
+building a body with `bodySystem.addHeightfield()` yourself. Jolt stores one `uint8` per quad, so
+at most `MAX_SURFACE_MATERIALS` (256) materials per heightfield.
+
+> [!NOTE]
+> **Ownership**: materials are freed by the shape, not by you. `new PhysicsMaterial()` starts at
+> ref-count 0; building the list and assigning it to the shape settings takes it to 2, and
+> destroying the settings/list drops it back to the shape's own reference. Releasing the shape is
+> what frees the materials — `SurfaceMaterialTable.dispose()` only drops JS-side bookkeeping (the
+> pointer map and a scratch `SubShapeID`), never the materials themselves. You never call this
+> yourself for `<Heightfield>` — `BodyState.destroy()` disposes the table for you.
+
+`friction`/`restitution` passed directly to `<Heightfield>` (or `addHeightfield`'s options) set
+the whole body's values instead, same as any other body — they combine with `materials` only in
+that a quad with no material falls back to the body's own friction/restitution.
 
 ## Helper floors
 

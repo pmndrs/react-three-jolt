@@ -89,7 +89,7 @@ Movement and state:
 | `startRunning(speed?)` / `stopRunning()` | |
 | `setCrouched(crouched, forceUpdate?)` | swaps to the crouching capsule |
 | `position`, `rotation`, `linearVelocity` | three.js types, get/set |
-| `isMoving`, `isRunning`, `isCrouched`, `isSliding`, `isExhausted`, `isRotating`, `hangtime` | state |
+| `isMoving`, `isRunning`, `isCrouched`, `isSliding`, `isGrounded`, `isExhausted`, `isRotating`, `hangtime` | state |
 | `anchor` | the `BodyState` other things (like the camera rig) attach to |
 | `on(action, callback)` | subscribe to one action; returns an unsubscribe |
 | `addActionListener(fn)` | subscribe to *every* action; returns an unsubscribe |
@@ -137,10 +137,116 @@ Stair and floor behaviour maps onto Jolt's own settings: `walkStairsStepUp`,
 The character uses `Layer.RIG`, so it does not collide with other rigs — see
 [layers](/api/collision-groups#preset-layers).
 
-> [!NOTE]
-> There is no head-collision event (`onHeadHit` / `headAngle`) on this branch. Jolt reports six of
-> the eleven declared `CharacterContactListenerJS` callbacks for a `CharacterVirtual` stepping
-> against bodies, so the building blocks are there, but nothing surfaces a head hit yet.
+### Head and ceiling collision
+
+`ExtendedUpdate`'s own ground/wall/ceiling classification only tells Jolt how to *sweep* the
+character; it does nothing to the character's velocity. Without help, a character jumping into a
+low overhang keeps its upward velocity until gravity alone brings it back down, which reads as
+getting stuck under the ceiling for a beat too long (issue #88). `headAngle` and `onHeadHit` are
+the fix:
+
+```tsx
+import { CharacterController } from '@react-three/jolt-controllers';
+import type { HeadHitInfo } from '@react-three/jolt-controllers';
+
+<CharacterController
+    headAngle={Math.PI / 6} // default: 30 degrees
+    onHeadHit={(info: HeadHitInfo) => {
+        console.log('bonk', info.normal, info.previousVerticalSpeed);
+    }}
+/>;
+```
+
+| prop / member | | |
+| --- | --- | --- |
+| `headAngle` | `number` (radians) | half-angle of the cone around straight-up within which a contact counts as a head/ceiling hit rather than walkable ground or a wall. Default 30°. A contact whose normal satisfies `contactNormal · up < -cos(headAngle)` cancels the character's upward velocity |
+| `onHeadHit` | `(info: HeadHitInfo) => void` | called once per **new** contact inside that cone while the character is moving upward — not every step the contact persists, and not for ground/wall contacts |
+
+`HeadHitInfo` carries `normal` (world-space contact normal, pointing away from the obstacle
+towards the character) and `previousVerticalSpeed` (the up-axis speed at the moment of the hit,
+before it is cancelled). Both are set on the `CharacterControllerSystem` directly too
+(`characterSystem.headAngle`, `characterSystem.onHeadHit = ...`) if you're driving the system
+without the component.
+
+### Events
+
+`CharacterControllerSystem.events` is an `Emitter<CharacterEventMap>` — the same primitive
+`bodyState.on()` and the world's `<Physics on*>` use. Every movement event is an **edge**, derived
+once per pre-step from ground state and velocity relative to whatever is carrying the character,
+and every one of them is *also* emitted as an `'action'` under the same name, so the older
+`characterSystem.on('jump', fn)` (filtered-action) API and `characterSystem.events.on('jump', fn)`
+see the same things.
+
+```tsx
+import { useCharacterEvent } from '@react-three/jolt-controllers';
+
+<CharacterController
+    onMove={(speed) => console.log('moving', speed)}
+    onStop={() => console.log('stopped')}
+    onSlide={(speed) => console.log('sliding', speed)}
+    onSlideEnd={() => console.log('slide ended')}
+    onJump={(count) => console.log('jump', count)}
+    onLand={(airtime) => console.log('landed after', airtime, 's')}
+    onGround={() => console.log('grounded')}
+    onAirborne={() => console.log('airborne')}
+    onContactAdded={(payload) => console.log('touched', payload.handle)}
+/>;
+```
+
+`useCharacterEvent(system, type, handler)` is the imperative form the component's `on*` props are
+built from — subscribe from your own component once you have a `CharacterControllerSystem` (from
+`CharacterControllerContext`, or one you built yourself):
+
+```tsx
+import { useCharacterEvent } from '@react-three/jolt-controllers';
+import type { CharacterControllerSystem } from '@react-three/jolt-controllers';
+
+function Footsteps({ characterSystem }: { characterSystem?: CharacterControllerSystem }) {
+    useCharacterEvent(characterSystem, 'move', (speed) => {
+        if (speed > 4) playRunSfx();
+    });
+    return null;
+}
+```
+
+Like `useBodyEvent`, its dependency is *whether* a handler was passed rather than its identity, so
+an inline arrow does not resubscribe every render.
+
+`CharacterEventMap`:
+
+| event | payload | |
+| --- | --- | --- |
+| `action` | `(name, payload)` | every action, including all the ones below |
+| `move` | `speed: number` | started moving under its own power; `speed` is m/s relative to the ground |
+| `stop` | — | stopped moving under its own power |
+| `slide` | `speed: number` | started sliding down something too steep to stand on |
+| `slideEnd` | — | stopped sliding |
+| `jump` | `count: number` | a jump was accepted; which jump of the allowed sequence it was |
+| `land` | `airtime: number` | touched down, after being unsupported for `airtime` seconds |
+| `ground` | — | became supported by something (always paired with `land`) |
+| `airborne` | — | stopped being supported by anything |
+| `crouch` / `stand` | — | |
+| `contactAdded` / `contactPersisted` / `contactRemoved` | `CharacterContactPayload` | a contact with a body, forwarded from Jolt's `CharacterContactListener`. **Pooled** — read it inside the handler, don't keep it. Dispatched after the character update returns, never from inside `ExtendedUpdate` |
+
+`CharacterContactPayload` carries `body`/`object` (`undefined` for a Jolt body `BodySystem` never
+registered), `handle`, `subShapeId`, `position` (zeroed for `contactRemoved`, which Jolt gives no
+geometry) and `normal` (pointing from the character into the other body).
+
+Component props: `onMove`, `onStop`, `onSlide`, `onSlideEnd`, `onJump`, `onLand`, `onGround`,
+`onAirborne`, `onCrouch`, `onStand`, `onContactAdded`, `onContactPersisted`, `onContactRemoved` and
+`onAction` mirror the event map one-for-one, plus `moveThreshold` (default 0.5 m/s — the relative
+speed above which the character counts as moving) and `slideThreshold` (default 0.5 m/s, along the
+surface). Nothing subscribes for a prop you don't pass, so an unused contact stream costs one `&`
+per contact and nothing else.
+
+> [!CAUTION]
+> Everything in `CharacterEventMap` is dispatched **after** `ExtendedUpdate` returns — Jolt's
+> `CharacterContactListener` fires from inside it, where adding or removing a body is illegal and
+> the pointers it hands the callback are into memory Jolt reuses. Never call anything that adds,
+> removes, or otherwise mutates bodies from inside a listener registered here — by the time your
+> handler runs the step has already finished, but the contract still matters for the payload
+> itself: it is pooled (one object reused for every contact in a step), so copy what you need and
+> return.
 
 ## CameraRig
 
@@ -401,6 +507,110 @@ overrides the `wheelOffsetHorizontal` / `wheelOffsetVertical` layout helpers),
 `resolveVehicleSettings(settings)` are exported if you want to inspect or pre-merge them. Your
 settings are merged **over** the defaults — a motorcycle built with a custom mass or custom wheels
 no longer silently gets the defaults back.
+
+### Secondary physics
+
+Three presentational layers sit on top of the constraint (issue #41) — none of them touch the
+simulation, they only read what Jolt solved and drive the three.js objects (and the readouts a
+game needs for particles, skid marks and engine audio) from that. All three are **on by default**
+and independently configurable through `vehicleSettings`, and each can be turned off with `false`:
+
+```tsx
+<Vehicle
+    type="fourWheel"
+    vehicleSettings={{
+        bodyRoll: { maxAngle: 0.15, referenceAcceleration: 6 },
+        wheelSmoothing: false,
+        skid: { longitudinalSlip: 2 }
+    }}
+/>;
+```
+
+**`bodyRoll`** — a spring-damped visual tilt of the chassis *object* (never the physics body),
+driven by the chassis' own acceleration rotated into its local frame: a steady turn leans the body
+outwards, exactly like a real sprung mass. Because the manager owns that object's local rotation
+while this is on, rotate your model inside a wrapper if you need to orient it yourself.
+
+| option | default | |
+| --- | --- | --- |
+| `maxAngle` | `0.1` rad (~5.7°) | the most the body may lean sideways |
+| `maxPitchAngle` | `maxAngle / 2` | the most it may pitch under acceleration/braking |
+| `referenceAcceleration` | `9.81` m/s² | the acceleration that produces the full `maxAngle` — lower for floatier, raise for stiffer |
+| `stiffness` | `120` | spring constant pulling the tilt towards its target |
+| `damping` | `20` | damping of that spring; `2 * sqrt(stiffness)` is critical |
+
+**`wheelSmoothing`** — easing applied to what the wheels *render*, so a wheel doesn't snap between
+two suspension lengths or steering angles the solver happens to land on between frames. Wheel spin
+is Jolt's own, integrated from its angular velocity, and is never eased.
+
+| option | default | |
+| --- | --- | --- |
+| `suspension` | `0.04` s | time constant for rendered suspension travel — ~63% of the way to Jolt's value every this many seconds. `0` renders it raw |
+| `steering` | `0.05` s | the same, for the rendered steering angle |
+
+**`skid`** — when a wheel counts as skidding, compared against Jolt's own per-wheel slip. The
+thresholds are deliberately generous: a longitudinal slip ratio of 3 (the wheel spinning at four
+times the speed of the ground under it) is an ordinary standing start in a 500 N·m car.
+
+| option | default | |
+| --- | --- | --- |
+| `longitudinalSlip` | `1.5` | the \|slipRatio\| a wheel has to exceed to be skidding |
+| `lateralSlip` | `0.25` rad (~14°) | the \|lateralSlip\| a wheel has to exceed |
+| `minLateralSpeed` | `0.5` m/s | below this speed, lateral slip never counts — Jolt's `atan2(lateral, |longitudinal|)` reports a right angle for a parked, noise-only car |
+| `release` | `0.7` | the fraction of those thresholds a skidding wheel has to fall back under |
+| `releaseTime` | `0.12` s | how long it has to stay under `release` before `skidEnd` fires |
+| `requireContact` | `true` | wheels not touching anything never skid |
+
+Change any of the three live, on the manager: `vehicle.setBodyRoll(settings | false)`,
+`vehicle.setWheelSmoothing(settings | false)`, `vehicle.setSkid(settings | false)`. Turning
+`bodyRoll` off puts the chassis object back to level; turning `skid` off ends every skid currently
+running, so a listener that started a particle effect still gets its `skidEnd`.
+
+### Readouts and events
+
+```tsx
+import { useVehicle } from '@react-three/jolt-controllers';
+import { useEffect } from 'react';
+
+function Dashboard() {
+    const vehicle = useVehicle({ type: 'fourWheel' });
+
+    useEffect(() => {
+        if (!vehicle) return;
+        const offSkid = vehicle.onSkidStart((e) => spawnSkidMark(e.position, e.name));
+        const offEngine = vehicle.onEngine(({ rpm, gear, throttle }) => {
+            engineSound.playbackRate = 0.5 + rpm / 6000;
+            engineSound.volume = 0.2 + 0.8 * throttle;
+        });
+        return () => {
+            offSkid();
+            offEngine();
+        };
+    }, [vehicle]);
+
+    return null;
+}
+```
+
+| member | | |
+| --- | --- | --- |
+| `rpm` | `number` | the engine's current RPM, `0` with no engine (a destroyed vehicle) |
+| `gear` | `number` | `0` in neutral, `1..n` forward, negative in reverse |
+| `shifting` | `boolean` | true while the transmission is between gears |
+| `clutch` | `number` | clutch friction, 0..1 |
+| `throttle` / `brakeInput` | `number` | driver input, 0..1 |
+| `speed` / `speedKmh` | `number` | chassis' signed forward speed, m/s / km/h |
+| `skidding` | `boolean` | true while any wheel is over the skid thresholds |
+| `onSkidStart(fn)` / `onSkidEnd(fn)` | `(event: VehicleSkidEvent) => void` | a wheel crossed (or released) the skid thresholds |
+| `onEngine(fn)` | `(state: VehicleEngineState) => void` | the engine readout, once per physics step |
+
+Every readout getter reads a Jolt static temporary or a number — none of it allocates. Both event
+payloads are **pooled** (the same object every dispatch): `VehicleSkidEvent` carries `wheel`,
+`name` (`'fl' | 'fr' | 'bl' | 'br'` or `'front' | 'back'`), `index`, `slipRatio`, `lateralSlip`,
+`position` (world space, also pooled — copy it if you keep it) and `speedKmh`. `VehicleEngineState`
+carries `rpm`, `gear`, `throttle`, `brake`, `speed`, `speedKmh`, `shifting`, `clutch` and
+`skidding`. `onEngine`'s handler is skipped entirely (no state object is even filled) unless
+something is subscribed, so an unused dashboard costs nothing per step.
 
 ### `VehicleFourWheel`
 
