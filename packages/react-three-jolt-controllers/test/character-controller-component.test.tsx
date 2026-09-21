@@ -3,11 +3,12 @@
 // arrow that `removeStepListener` (identity based) could never find. Mounting and unmounting the
 // component therefore left one dead listener per mount stepping a freed CharacterVirtual.
 
-import { Physics, type PhysicsSystem, RigidBody, useJolt } from '@react-three/jolt';
+import { Physics, type PhysicsSystem, Raw, RigidBody, useJolt } from '@react-three/jolt';
 import { create } from '@react-three/test-renderer';
 import React, { act, useEffect } from 'react';
 import { assert, test } from 'vitest';
 import { CharacterController } from '../src/components/CharacterController';
+import type { CharacterControllerSystem } from '../src/systems/character-controller';
 
 // r3f's test renderer drives React directly, so opt in to act's queue flushing
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -126,6 +127,64 @@ test('<CharacterController onGround onLand> registers and unregisters with the c
         for (let i = 0; i < 60; i++) system!.onUpdate(1 / 60);
     });
     assert.equal(log.length, before, 'a handler outlived the component');
+
+    await renderer.unmount();
+});
+
+// Issue #212: `radius`/`height`/`position` were accepted but `setCapsule` was commented out and
+// `position` only ever offset the rendered child object3D relative to the character, never the
+// actual `CharacterVirtual`. All three now reach the real Jolt object.
+test('<CharacterController radius height position> reach the CharacterVirtual', async () => {
+    let system: AnyPhysicsSystem | undefined;
+    const onReady = (s: AnyPhysicsSystem) => {
+        system = s;
+    };
+    const ccRef = React.createRef<CharacterControllerSystem>();
+
+    const Harness2 = ({
+        onReady: ready,
+        ...props
+    }: {
+        onReady: (system: AnyPhysicsSystem) => void;
+        [key: string]: unknown;
+    }) => {
+        const { physicsSystem } = useJolt();
+        useEffect(() => {
+            ready(physicsSystem as unknown as AnyPhysicsSystem);
+        }, [physicsSystem, ready]);
+        return <CharacterController ref={ccRef} {...props} />;
+    };
+
+    const renderer = await create(
+        <Physics>
+            <Harness2 onReady={onReady} radius={0.6} height={1.8} position={[3, 7, -2]} />
+        </Physics>
+    );
+    await settle(() => system !== undefined && ccRef.current !== null);
+    assert.isDefined(system, 'Physics never mounted its children');
+    assert.isNotNull(ccRef.current, 'the ref was never assigned');
+
+    const cc = ccRef.current!;
+    // capsule dimensions reached setCapsule()
+    assert.equal(cc.characterRadiusStanding, 0.6, 'radius never reached the capsule');
+    assert.equal(cc.characterHeightStanding, 1.8, 'height never reached the capsule');
+
+    // the shape actually set on the CharacterVirtual is a capsule of that radius/half-height,
+    // wrapped in a RotatedTranslatedShape so the character's origin sits at its feet
+    const outer = Raw.module.castObject(cc.shape, Raw.module.RotatedTranslatedShape);
+    const inner = Raw.module.castObject(outer.GetInnerShape(), Raw.module.CapsuleShape);
+    assert.closeTo(inner.GetRadius(), 0.6, 1e-5, 'the capsule shape radius does not match');
+    assert.closeTo(
+        inner.GetHalfHeightOfCylinder(),
+        0.9, // setCapsule() passes 0.5 * height as CapsuleShapeSettings' half-height-of-cylinder
+        1e-5,
+        'the capsule shape height does not match'
+    );
+
+    // position reached the CharacterVirtual, not just a local offset on the child object3D
+    assert.closeTo(cc.position.x, 3, 1e-5, 'position.x never reached the character');
+    assert.closeTo(cc.position.y, 7, 1e-5, 'position.y never reached the character');
+    assert.closeTo(cc.position.z, -2, 1e-5, 'position.z never reached the character');
 
     await renderer.unmount();
 });

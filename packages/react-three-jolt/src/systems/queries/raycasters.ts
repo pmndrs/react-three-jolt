@@ -73,6 +73,7 @@ export class Raycaster extends CastQueryBase<RaycastHit, RaycasterCollector> {
                 ? Raw.module.EBackFaceMode_IgnoreBackFaces
                 : Raw.module.EBackFaceMode_CollideWithBackFaces
         );
+        this.doCullBackFaces = value;
     }
 
     //* Methods ---------------------------------------

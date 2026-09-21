@@ -85,6 +85,22 @@ test('"all" collector returns both boxes', () => {
     rc.destroy();
 });
 
+// Issue #210 item 1: the setter wrote `RayCastSettings.mBackFaceMode*` but never updated the
+// `doCullBackFaces` backing field, so the getter always echoed back whatever the constructor set
+// it to (true) no matter what was assigned afterwards.
+test('cullBackFaces getter reflects the last value assigned to it', () => {
+    const rc = ps.getRaycaster();
+    assert.isTrue(rc.cullBackFaces, 'default should be true');
+
+    rc.cullBackFaces = false;
+    assert.isFalse(rc.cullBackFaces, 'getter did not pick up the new value');
+
+    rc.cullBackFaces = true;
+    assert.isTrue(rc.cullBackFaces, 'getter did not pick up the value going back to true');
+
+    rc.destroy();
+});
+
 test('AdvancedRaycaster casts without throwing (JSImplementation members were missing)', () => {
     const arc = new AdvancedRaycaster(ps.physicsSystem, ps.joltInterface);
     arc.origin = new THREE.Vector3(0, 0, -10);

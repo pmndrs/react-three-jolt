@@ -38,10 +38,20 @@ export function useCharacterEvent<K extends keyof CharacterEventMap>(
     }, [system, enabled, type, callback]);
 }
 
-interface CControllerProps extends Omit<ThreeElements['object3D'], 'ref' | 'children'> {
+export interface CControllerProps extends Omit<ThreeElements['object3D'], 'ref' | 'children'> {
     children?: ReactNode;
+    /** Capsule radius, in metres. Wired to `setCapsule` at creation and on every change. @default 1 */
     radius?: number;
+    /** Capsule height, in metres. Wired to `setCapsule` at creation and on every change. @default 2 */
     height?: number;
+    /**
+     * Where the character spawns (and is teleported to on every change) - the actual
+     * `CharacterVirtual` position, not just a local transform on the rendered children. Inherited
+     * from `object3D`, but handled separately: the underlying `<object3D>` this creates is a
+     * child of the character's own three object, so applying `position` to it as well would
+     * offset the visuals from the capsule instead of moving the capsule (issue #212).
+     */
+    position?: ThreeElements['object3D']['position'];
     debug?: boolean;
 
     //* Events (issues #79, #80, and the `onAction` half of #50) -------------
@@ -86,12 +96,17 @@ interface CControllerProps extends Omit<ThreeElements['object3D'], 'ref' | 'chil
      */
     onHeadHit?: (info: HeadHitInfo) => void;
 }
-export const CharacterController: React.FC<CControllerProps> = memo(
-    forwardRef((props, forwardedRef) => {
+// The `ref` on `<CharacterController>` hands back the `CharacterControllerSystem` itself (see the
+// comment on `characterRef.current = newCCS` below) - `forwardRef`'s type parameters say so
+// explicitly, rather than the previous `React.FC<CControllerProps>` annotation, which quietly
+// erased the ref from the public type even though the runtime always supported it (issue #212).
+export const CharacterController = memo(
+    forwardRef<CharacterControllerSystem, CControllerProps>((props, forwardedRef) => {
         const {
             children,
             radius = 1,
             height = 2,
+            position,
             debug = true,
             onMove,
             onStop,
@@ -114,7 +129,7 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             ...objectProps
         } = props;
         // pass the body via the ref
-        const characterRef = useForwardedRef(forwardedRef);
+        const characterRef = useForwardedRef<CharacterControllerSystem | null>(forwardedRef);
 
         const objectRef = useRef<THREE.Object3D>(null);
 
@@ -136,7 +151,9 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             // expose the controller through the forwarded ref (this is what the ref was always
             // for; nothing ever assigned it, so `ref` silently stayed null)
             characterRef.current = newCCS;
-            //newCCS.setCapsule(radius, height);
+            // radius/height/position are applied by the effects below, which run right after this
+            // one on the same mount (issue #212) - `characterSystem` only becomes defined once
+            // `setCharacterSystem` below commits, so nothing has stepped the controller yet.
 
             setCharacterSystem(newCCS);
             // destroy on unload. `destroy()` frees every jolt object the controller owns and
@@ -154,6 +171,33 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             if (!characterSystem) return;
             characterSystem.debug = debug;
         }, [characterSystem, debug]);
+
+        // radius/height were accepted but never reached the CharacterVirtual (issue #212):
+        // `setCapsule` rebuilds both the standing and crouching shapes and pushes the standing
+        // one onto the character immediately, at creation and on every later change.
+        useEffect(() => {
+            if (!characterSystem) return;
+            characterSystem.setCapsule(radius, height);
+        }, [characterSystem, radius, height]);
+
+        // `position` used to be silently absorbed into `objectProps` and applied to the child
+        // `<object3D>` instead of the character itself, so it never moved the capsule (issue
+        // #212). Normalize whatever shape `object3D.position` accepts (a Vector3, a tuple or a
+        // uniform scalar) the same way `<Vehicle position>` does, then drive the actual
+        // `CharacterVirtual` position with it, at creation and on every later change.
+        const [px, py, pz] =
+            position === undefined
+                ? [undefined, undefined, undefined]
+                : typeof position === 'number'
+                  ? [position, position, position]
+                  : position instanceof THREE.Vector3
+                    ? [position.x, position.y, position.z]
+                    : position;
+        useEffect(() => {
+            if (!characterSystem || px === undefined || py === undefined || pz === undefined)
+                return;
+            characterSystem.position = new THREE.Vector3(px, py, pz);
+        }, [characterSystem, px, py, pz]);
 
         //* Events -------------------------------------------
         // Each of these is an effect whose cleanup is the unsubscribe handle, keyed on the
@@ -254,11 +298,6 @@ export const CharacterController: React.FC<CControllerProps> = memo(
         const contextValue: CharacterControllerContextValue = {
             characterSystem
         };
-
-        // if you change the radius or height, you need to update the capsule
-        useEffect(() => {
-            //if (characterSystem) characterSystem.setCapsule(radius, height);
-        }, [radius, height]);
 
         return (
             <CharacterControllerContext.Provider value={contextValue}>

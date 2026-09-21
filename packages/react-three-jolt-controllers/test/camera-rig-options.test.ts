@@ -4,10 +4,14 @@
 // in through the constructor / `initialize()`, and `setOptions()` updates a live rig instead of
 // rebuilding it.
 
-import { initJolt, PhysicsSystem } from '@react-three/jolt';
+import { initJolt, PhysicsSystem, Raw } from '@react-three/jolt';
 import * as THREE from 'three';
 import { assert, beforeAll, test } from 'vitest';
 import { CameraRigManager } from '../src/systems/camera-rig/camera-rig-system';
+
+/** Narrow a collider's `activeShape` down to `SphereShape` so `GetRadius()` is available. */
+const sphereRadiusOf = (boom: { collider: { activeShape: unknown } }) =>
+    Raw.module.castObject(boom.collider.activeShape, Raw.module.SphereShape).GetRadius();
 
 let ps: PhysicsSystem;
 const newScene = () => new THREE.Scene();
@@ -131,6 +135,37 @@ test('the default rig is unchanged: 5 metres back, level, unrotated', () => {
     assert.equal(rig.controls.yaw, 0);
     assert.equal(rig.controls.pitch, 0);
     assert.closeTo(rig.controls.cameraSpace.position.z, 5, 1e-9);
+    rig.destroy();
+});
+
+// Issue #210 item 3: `CameraBoomOptions.collisionRadius` documented `@default 0.3` but the boom
+// had no initialiser backing it - the number only worked by coincidence, because
+// `ShapeCollider`'s own default shape happens to be a `SphereShape(0.3)`. The boom now owns the
+// value explicitly (readable through `collisionRadius`) and the collider's shape follows it.
+test('collisionRadius defaults to 0.3 and the collider shape matches it', () => {
+    const rig = new CameraRigManager(newScene(), ps);
+    assert.equal(rig.controls.collisionRadius, 0.3);
+    assert.closeTo(
+        sphereRadiusOf(rig.controls),
+        0.3,
+        1e-5,
+        "the collider's shape does not match the option"
+    );
+    rig.destroy();
+});
+
+test('an explicit collisionRadius option is realised on the collider at construction', () => {
+    const rig = new CameraRigManager(newScene(), ps, { collisionRadius: 0.75 });
+    assert.equal(rig.controls.collisionRadius, 0.75);
+    assert.closeTo(sphereRadiusOf(rig.controls), 0.75, 1e-5);
+    rig.destroy();
+});
+
+test('collisionRadius follows setOptions on a live rig', () => {
+    const rig = new CameraRigManager(newScene(), ps);
+    rig.setOptions({ collisionRadius: 1.5 });
+    assert.equal(rig.controls.collisionRadius, 1.5);
+    assert.closeTo(sphereRadiusOf(rig.controls), 1.5, 1e-5);
     rig.destroy();
 });
 

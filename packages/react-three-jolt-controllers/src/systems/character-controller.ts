@@ -300,7 +300,16 @@ export class CharacterControllerSystem {
     jumpDegradeFactor = 0.5;
     hangtime = 0;
     runningTimeLimit = 5000;
-    exauhstionTimeLimit = 7000;
+    exhaustionTimeLimit = 7000;
+    /**
+     * @deprecated misspelling of {@link exhaustionTimeLimit}, kept as an alias for one release.
+     */
+    get exauhstionTimeLimit(): number {
+        return this.exhaustionTimeLimit;
+    }
+    set exauhstionTimeLimit(value: number) {
+        this.exhaustionTimeLimit = value;
+    }
     debugVerbose = false;
 
     //-------------------------------------------
@@ -1452,13 +1461,13 @@ export class CharacterControllerSystem {
             this.runningTimer = setTimeout(() => {
                 this.isExhausted = true;
                 this.activeSpeed = this.characterSpeedExhausted;
-                this.triggerActionListeners('exhausted', this.exauhstionTimeLimit);
+                this.triggerActionListeners('exhausted', this.exhaustionTimeLimit);
                 // once exhausted, we can never stop.
                 this.exhaustionTimer = setTimeout(() => {
                     this.isExhausted = false;
                     this.activeSpeed = this.characterSpeed;
-                    this.triggerActionListeners('exausted', false);
-                }, this.exauhstionTimeLimit);
+                    this.triggerActionListeners('exhausted', false);
+                }, this.exhaustionTimeLimit);
             }, this.runningTimeLimit);
     }
     stopRunning() {

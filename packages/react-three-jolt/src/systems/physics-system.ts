@@ -268,6 +268,11 @@ export class PhysicsSystem {
         const objectFilter = new jolt.ObjectLayerPairFilterTable(NUM_OBJECT_LAYERS);
         objectFilter.EnableCollision(Layer.NON_MOVING, Layer.MOVING);
         objectFilter.EnableCollision(Layer.MOVING, Layer.MOVING);
+        // kinematic bodies (issue #210) collide the same way a moving body does: with static
+        // geometry, with dynamic bodies, and with each other.
+        objectFilter.EnableCollision(Layer.NON_MOVING, Layer.KINEMATIC);
+        objectFilter.EnableCollision(Layer.MOVING, Layer.KINEMATIC);
+        objectFilter.EnableCollision(Layer.KINEMATIC, Layer.KINEMATIC);
         objectFilter.DisableCollision(Layer.NON_MOVING, Layer.RIG);
         objectFilter.DisableCollision(Layer.MOVING, Layer.RIG);
         objectFilter.DisableCollision(Layer.RIG, Layer.RIG);
@@ -281,8 +286,9 @@ export class PhysicsSystem {
         );
         bpInterface.MapObjectToBroadPhaseLayer(Layer.NON_MOVING, BP_LAYER_NON_MOVING);
         bpInterface.MapObjectToBroadPhaseLayer(Layer.MOVING, BP_LAYER_MOVING);
-        // kinematic bodies are created on Layer.MOVING today, but the entry has to be mapped:
-        // an unmapped object layer means the broadphase reads a slot nothing ever wrote.
+        // kinematic bodies are created on their own object layer (Layer.KINEMATIC) but share the
+        // MOVING broad phase layer - they move every frame just like dynamic bodies, so grouping
+        // them together keeps the broadphase's moving/non-moving split meaningful.
         bpInterface.MapObjectToBroadPhaseLayer(Layer.KINEMATIC, BP_LAYER_MOVING);
         bpInterface.MapObjectToBroadPhaseLayer(Layer.RIG, BP_LAYER_RIG);
         const settings = new jolt.JoltSettings();
