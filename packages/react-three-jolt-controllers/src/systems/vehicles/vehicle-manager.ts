@@ -103,7 +103,7 @@ const BR_WHEEL = 3;
 export type VehicleStepListener = (
     vehicle: Jolt.VehicleConstraint,
     deltaTime: number,
-    physicsSystem: Jolt.PhysicsSystem
+    joltPhysicsSystem: Jolt.PhysicsSystem
 ) => void;
 export type VehicleActionListener = (action: string, vehicle: VehicleManager) => void;
 
@@ -374,7 +374,7 @@ export class VehicleManager {
         // React destroys a parent's effects before its children's, so `<Physics>` may already
         // have freed the JoltInterface - touching jolt after that traps in wasm (issue #82).
         if (!this.physicsSystem.destroyed) {
-            const joltPhysicsSystem = this.physicsSystem.physicsSystem;
+            const joltPhysicsSystem = this.physicsSystem.joltPhysicsSystem;
             if (this.constraintStepListener) {
                 joltPhysicsSystem.RemoveStepListener(this.constraintStepListener);
                 Raw.module.destroy(this.constraintStepListener);
@@ -695,11 +695,11 @@ export class VehicleManager {
         // so it must not be destroyed separately
         this.constraint.SetVehicleCollisionTester(tester);
         this.constraint.AddRef();
-        this.physicsSystem.physicsSystem.AddConstraint(this.constraint);
+        this.physicsSystem.joltPhysicsSystem.AddConstraint(this.constraint);
         // SUPER IMPORTANT WEIRD LOOP LISTENER. AddStepListener keeps a raw pointer, so this one
         // is ours to remove and free.
         this.constraintStepListener = new Raw.module.VehicleConstraintStepListener(this.constraint);
-        this.physicsSystem.physicsSystem.AddStepListener(this.constraintStepListener);
+        this.physicsSystem.joltPhysicsSystem.AddStepListener(this.constraintStepListener);
     }
     //* Event Listeners and Triggers ========================
 

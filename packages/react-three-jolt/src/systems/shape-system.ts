@@ -17,8 +17,8 @@ import {
     Vector3
 } from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
-import { getValidatedHeightfieldSampleCount } from '../heightField/Generators';
-import { type SurfaceMaterial, SurfaceMaterialTable } from '../heightField/materials';
+import { getValidatedHeightfieldSampleCount } from '../heightfield/generators';
+import { type SurfaceMaterial, SurfaceMaterialTable } from '../heightfield/materials';
 import { Raw } from '../raw';
 import { type anyQuat, type anyVec3, devWarn, joltScratch, quat, vec3 } from '../utils';
 
@@ -31,9 +31,9 @@ export class ShapeSystem {
      * (issue #11). The body interface is gone (`GetBodyInterface()` is a cheap lookup whenever
      * one is actually wanted); this one stays as the handle callers reach the world through.
      */
-    readonly physicsSystem: Jolt.PhysicsSystem;
-    constructor(physicsSystem: Jolt.PhysicsSystem) {
-        this.physicsSystem = physicsSystem;
+    readonly joltPhysicsSystem: Jolt.PhysicsSystem;
+    constructor(joltPhysicsSystem: Jolt.PhysicsSystem) {
+        this.joltPhysicsSystem = joltPhysicsSystem;
     }
     // I'm not sure which functions to expose to the runtime
     //getShapeSettingsFromObject = (object: Object3D, shapeType?: AutoShape) => getShapeSettingsFromObject(object, shapeType);
@@ -972,7 +972,7 @@ const createMeshShapeSettings = (
  * `mMaterialIndices` is one `uint8` per quad - `(sampleCount - 1)^2`, row major - and Jolt only
  * looks at it when there is more than one material. The `PhysicsMaterialList` is copied into the
  * settings (and again into the shape), so the list is ours to destroy while the materials inside
- * it are ref-counted by the shape; see `heightField/materials.ts` for the verified ref counts.
+ * it are ref-counted by the shape; see `heightfield/materials.ts` for the verified ref counts.
  */
 const applyHeightfieldMaterials = (
     shapeSettings: Jolt.HeightFieldShapeSettings,
@@ -1765,7 +1765,7 @@ export const generateHeightfieldShapeFromThree = (
 
 // Take a complex Jolt shape and generate a ThreeJS geometry.
 // Taken from the Jolt JS examples. This used to exist twice, byte for byte, as
-// `createMeshForShape` here and `createMeshFromShape` in utils/meshTools.ts; both names still
+// `createMeshForShape` here and `createMeshFromShape` in utils/mesh-tools.ts; both names still
 // resolve to this one implementation.
 // Note on memory: `AABox::sBiggest()`, `Quat::sIdentity()` and `Shape::GetCenterOfMass()` return
 // pointers to static temporaries inside the binder, not allocations - destroying them would free

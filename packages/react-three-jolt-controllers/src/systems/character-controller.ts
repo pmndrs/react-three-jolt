@@ -536,7 +536,7 @@ export class CharacterControllerSystem {
     set shape(shape: Jolt.Shape) {
         const setAttempt = this.character.SetShape(
             shape,
-            1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
+            1.5 * this.physicsSystem.joltPhysicsSystem.GetPhysicsSettings().mPenetrationSlop,
             // both filters are built in the constructor and only cleared by destroy()
             this.filters.movingBPFilter!,
             this.filters.movingLayerFilter!,
@@ -993,7 +993,7 @@ export class CharacterControllerSystem {
             // sZero()/sIdentity() are static temporaries too: not allocations, never destroyed
             Raw.module.RVec3.prototype.sZero(),
             Raw.module.Quat.prototype.sIdentity(),
-            this.physicsSystem.physicsSystem
+            this.physicsSystem.joltPhysicsSystem
         );
         if (this.characterContactListener)
             this.character.SetListener(this.characterContactListener);
@@ -1333,7 +1333,7 @@ export class CharacterControllerSystem {
             .clone()
             .multiplyScalar(linearVelocity.dot(characterUp));
         const groundVelocity = this.groundVelocity;
-        const gravity = vec3.joltToThree(this.physicsSystem.physicsSystem.GetGravity());
+        const gravity = vec3.joltToThree(this.physicsSystem.joltPhysicsSystem.GetGravity());
 
         let newVelocity: THREE.Vector3;
         const movingTowardsGround = currentVerticalVelocity.y - groundVelocity.y < 0.1;
@@ -1411,7 +1411,7 @@ export class CharacterControllerSystem {
             const newShape = crouched ? this.crouchingShape : this.standingShape;
             const tryShape = this.character.SetShape(
                 newShape,
-                1.5 * this.physicsSystem.physicsSystem.GetPhysicsSettings().mPenetrationSlop,
+                1.5 * this.physicsSystem.joltPhysicsSystem.GetPhysicsSettings().mPenetrationSlop,
                 // both filters are built in the constructor and only cleared by destroy()
                 this.filters.movingBPFilter!,
                 this.filters.movingLayerFilter!,

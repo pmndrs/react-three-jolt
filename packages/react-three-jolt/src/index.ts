@@ -2,7 +2,7 @@ import * as _fiber from '@react-three/fiber';
 
 export * from './components';
 export * from './constants';
-export * from './heightField';
+export * from './heightfield';
 export * from './hooks';
 // The jolt-physics module singleton. Exported so the add-on packages (and anyone writing
 // against Jolt directly) can reach the same module every <Physics> world is built on.

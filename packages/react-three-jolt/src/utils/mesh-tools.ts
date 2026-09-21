@@ -5,7 +5,7 @@ import { Raw } from '../raw';
 import { createShapeFromSettings, releaseShape } from '../systems/shape-system';
 
 // `createMeshFromShape` lives in systems/shape-system.ts now - it used to exist here and there
-// byte for byte. Re-exported so existing imports from utils/meshTools keep working.
+// byte for byte. Re-exported so existing imports from utils/mesh-tools keep working.
 export { createMeshFromShape } from '../systems/shape-system';
 
 // create a heightfeild type floor

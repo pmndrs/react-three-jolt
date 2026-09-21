@@ -14,7 +14,7 @@ import { MathUtils } from 'three';
 import { Layer, NUM_BROAD_PHASE_LAYERS, NUM_OBJECT_LAYERS } from '../constants';
 import { Raw } from '../raw';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
-import { anyVec3, joltScratch, vec3 } from '../utils';
+import { anyVec3, devWarn, joltScratch, vec3 } from '../utils';
 import { BodyState } from './body-state';
 import { BodySystem } from './body-system';
 import { ConstraintSystem } from './constraint-system';
@@ -152,8 +152,24 @@ export class PhysicsSystem {
     private currentSubframe = 0;
 
     joltInterface!: Jolt.JoltInterface;
-    // TODO: Rename this to joltPhysicsSystem
-    physicsSystem!: Jolt.PhysicsSystem;
+    /** The raw Jolt `PhysicsSystem` handle this world wraps. */
+    joltPhysicsSystem!: Jolt.PhysicsSystem;
+    /**
+     * @deprecated Renamed to {@link joltPhysicsSystem} (issue #28) - this class is itself
+     * `PhysicsSystem`, so a field called `physicsSystem` on it was ambiguous with every other
+     * class's `physicsSystem` (which holds *this* wrapper, not the raw Jolt object). Kept as a
+     * forwarding getter for one release; warns once via `devWarn` (enable with `setDebug(true)`).
+     */
+    private warnedDeprecatedPhysicsSystem = false;
+    get physicsSystem(): Jolt.PhysicsSystem {
+        if (!this.warnedDeprecatedPhysicsSystem) {
+            this.warnedDeprecatedPhysicsSystem = true;
+            devWarn(
+                'r3/jolt: PhysicsSystem.physicsSystem is deprecated, use PhysicsSystem.joltPhysicsSystem instead (issue #28).'
+            );
+        }
+        return this.joltPhysicsSystem;
+    }
     bodyInterface!: Jolt.BodyInterface;
     bodySystem!: BodySystem;
     constraintSystem!: ConstraintSystem;
@@ -309,8 +325,8 @@ export class PhysicsSystem {
 
         /* get interfaces */
 
-        this.physicsSystem = this.joltInterface.GetPhysicsSystem();
-        this.bodyInterface = this.physicsSystem.GetBodyInterface();
+        this.joltPhysicsSystem = this.joltInterface.GetPhysicsSystem();
+        this.bodyInterface = this.joltPhysicsSystem.GetBodyInterface();
 
         /* cleanup */
         // NOTE: `settings` is only a shell - the JoltInterface took ownership of the three filter
@@ -325,7 +341,7 @@ export class PhysicsSystem {
 
         // start the chain of systems/services
         this.constraintSystem = new ConstraintSystem(this);
-        this.bodySystem = new BodySystem(this.physicsSystem);
+        this.bodySystem = new BodySystem(this.joltPhysicsSystem);
         // so removing a body also removes the constraints attached to it (issue #82)
         this.bodySystem.constraintSystem = this.constraintSystem;
         // bodies read the world's step timing through this (e.g. moveKinematic's default delta)
@@ -687,25 +703,25 @@ export class PhysicsSystem {
     }
     getRaycaster() {
         this.assertAlive('getRaycaster()');
-        return this.trackQuery(new Raycaster(this.physicsSystem, this.joltInterface));
+        return this.trackQuery(new Raycaster(this.joltPhysicsSystem, this.joltInterface));
     }
     getAdvancedRaycaster() {
         this.assertAlive('getAdvancedRaycaster()');
-        return this.trackQuery(new AdvancedRaycaster(this.physicsSystem, this.joltInterface));
+        return this.trackQuery(new AdvancedRaycaster(this.joltPhysicsSystem, this.joltInterface));
     }
     getMulticaster() {
         this.assertAlive('getMulticaster()');
-        return this.trackQuery(new Multicaster(this.physicsSystem, this.joltInterface));
+        return this.trackQuery(new Multicaster(this.joltPhysicsSystem, this.joltInterface));
     }
     // -- Shapecaster
     getShapecaster() {
         this.assertAlive('getShapecaster()');
-        return this.trackQuery(new Shapecaster(this.physicsSystem, this.joltInterface));
+        return this.trackQuery(new Shapecaster(this.joltPhysicsSystem, this.joltInterface));
     }
     //* Colliders ===================================
     getShapeCollider() {
         this.assertAlive('getShapeCollider()');
-        return this.trackQuery(new ShapeCollider(this.physicsSystem, this.joltInterface));
+        return this.trackQuery(new ShapeCollider(this.joltPhysicsSystem, this.joltInterface));
     }
 
     //* Utility methods ----------------------------
@@ -721,7 +737,7 @@ export class PhysicsSystem {
         // call (a `new Vec3` and the one `vec3.jolt` made of it) and destroy neither; it runs
         // from a useEffect on every `gravity` prop change, so use the shared scratch vector.
         const newGravity: anyVec3 = typeof gravity === 'number' ? [0, -gravity, 0] : gravity;
-        this.physicsSystem.SetGravity(joltScratch.vec3(newGravity));
+        this.joltPhysicsSystem.SetGravity(joltScratch.vec3(newGravity));
         if (this.debug) console.log('gravity set', typeof gravity, vec3.three(newGravity));
     }
 }

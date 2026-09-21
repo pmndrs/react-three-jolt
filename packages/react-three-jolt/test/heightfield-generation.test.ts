@@ -12,7 +12,7 @@ import {
     samplesFromGenerator,
     simplex2,
     validateHeightfieldSize
-} from '../src/heightField';
+} from '../src/heightfield';
 import { initJolt } from '../src/raw';
 import { PhysicsSystem } from '../src/systems/physics-system';
 import { describeShape, type HeightfieldShapeDescriptor } from '../src/systems/shape-system';
