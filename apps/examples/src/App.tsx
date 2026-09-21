@@ -108,7 +108,9 @@ export function ControlWrapper(props: any) {
     }, [position, controls]);
     return <CameraControls makeDefault {...rest} />;
 }
-type Routes = {
+// Renamed from `Routes` (pre-existing `lint/suspicious/noRedeclare`): it collided with
+// react-router's own `Routes` component, imported above for the `<Routes>` JSX below.
+type RouteMap = {
     [key: string]: {
         position?: number[];
         target?: number[];
@@ -119,7 +121,7 @@ type Routes = {
     };
 };
 
-const routes: Routes = {
+const routes: RouteMap = {
     '': {
         position: [2, 5, 30],
         target: [0, 1, 10],

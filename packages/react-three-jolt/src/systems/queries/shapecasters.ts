@@ -112,9 +112,11 @@ export class Shapecaster extends CastQueryBase<ShapecastHit, ShapecasterCollecto
         this.setOrigin();
     }
     get direction(): THREE.Vector3 {
+        if (this.checkDestroyed()) return new THREE.Vector3();
         return vec3.three(this.shapecast.mDirection);
     }
     set direction(value: anyVec3) {
+        if (this.checkDestroyed()) return;
         const newVec = vec3.three(value);
         this.shapecast.mDirection.Set(newVec.x, newVec.y, newVec.z);
     }
@@ -122,6 +124,7 @@ export class Shapecaster extends CastQueryBase<ShapecastHit, ShapecasterCollecto
         return this.doIgnoreBackfaceTriangles;
     }
     set ignoreBackfaceTriangles(value) {
+        if (this.checkDestroyed()) return;
         this.doIgnoreBackfaceTriangles = value;
         if (value)
             this.shapecastSettings.mBackFaceModeTriangles =
@@ -134,6 +137,7 @@ export class Shapecaster extends CastQueryBase<ShapecastHit, ShapecasterCollecto
         return this.doIgnoreBackfaceConvex;
     }
     set ignoreBackfaceConvex(value) {
+        if (this.checkDestroyed()) return;
         this.doIgnoreBackfaceConvex = value;
         if (value)
             this.shapecastSettings.mBackFaceModeConvex = Raw.module.EBackFaceMode_IgnoreBackFaces;
@@ -146,6 +150,7 @@ export class Shapecaster extends CastQueryBase<ShapecastHit, ShapecasterCollecto
         return this.activeShape;
     }
     set shape(value: Jolt.Shape) {
+        if (this.checkDestroyed()) return;
         if (value === this.activeShape) return;
         // Shape is reference counted (RefTarget) and starts life with a refcount of 0. AddRef()
         // here means a caller that later Release()s (or reassigns) its own reference to `value`
@@ -172,6 +177,10 @@ export class Shapecaster extends CastQueryBase<ShapecastHit, ShapecasterCollecto
 
     //* Methods ---------------------------------------
     setOrigin() {
+        // issue #227: unlike `ShapeCollider`, `releaseResources()` frees `this.shapecast` without
+        // nulling the field, so an unguarded call here would double-free it and then rebuild a
+        // shapecast out of filters that are gone too.
+        if (this.checkDestroyed()) return;
         Raw.module.destroy(this.shapecast);
         this.initializeShapecast();
         //const translation = vec3.jolt(this.activePosition);

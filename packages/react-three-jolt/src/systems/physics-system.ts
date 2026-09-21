@@ -666,27 +666,40 @@ export class PhysicsSystem {
         if (this.destroyed)
             throw new Error(`r3/jolt: ${what} on a destroyed PhysicsSystem ("${this.label}")`);
     }
+    /**
+     * Tie a freshly built query object to this world's lifetime (issue #215): if nobody calls its
+     * own `destroy()`, `PhysicsSystem.destroy()` will - before the JoltInterface it queries
+     * against is freed - instead of leaking its filters/collector/ray forever. The query's own
+     * `destroy()` unregisters it again, so a caller that *does* clean up after itself doesn't
+     * leave a dangling entry in the world's disposables.
+     */
+    private trackQuery<
+        T extends { destroy(): void; setWorldUnregister(unregister: () => void): void }
+    >(query: T): T {
+        query.setWorldUnregister(this.registerDisposable(query));
+        return query;
+    }
     getRaycaster() {
         this.assertAlive('getRaycaster()');
-        return new Raycaster(this.physicsSystem, this.joltInterface);
+        return this.trackQuery(new Raycaster(this.physicsSystem, this.joltInterface));
     }
     getAdvancedRaycaster() {
         this.assertAlive('getAdvancedRaycaster()');
-        return new AdvancedRaycaster(this.physicsSystem, this.joltInterface);
+        return this.trackQuery(new AdvancedRaycaster(this.physicsSystem, this.joltInterface));
     }
     getMulticaster() {
         this.assertAlive('getMulticaster()');
-        return new Multicaster(this.physicsSystem, this.joltInterface);
+        return this.trackQuery(new Multicaster(this.physicsSystem, this.joltInterface));
     }
     // -- Shapecaster
     getShapecaster() {
         this.assertAlive('getShapecaster()');
-        return new Shapecaster(this.physicsSystem, this.joltInterface);
+        return this.trackQuery(new Shapecaster(this.physicsSystem, this.joltInterface));
     }
     //* Colliders ===================================
     getShapeCollider() {
         this.assertAlive('getShapeCollider()');
-        return new ShapeCollider(this.physicsSystem, this.joltInterface);
+        return this.trackQuery(new ShapeCollider(this.physicsSystem, this.joltInterface));
     }
 
     //* Utility methods ----------------------------

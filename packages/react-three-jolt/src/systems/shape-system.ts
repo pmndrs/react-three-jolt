@@ -62,22 +62,17 @@ export class ShapeSystem {
  * ========================================================================== */
 
 /**
- * Shape types that can be inferred from (or forced onto) a three.js geometry.
- * `compound` is accepted as an alias of `staticCompound` for backwards compatibility.
+ * Every descriptor tag the pipeline understands (implemented or reserved), and everything
+ * `<Shape type>` / `<RigidBody shape>` / `<Physics defaultShape>` accept (issue #211).
+ *
+ * `AutoShape` and `ShapeType` used to be two separate unions - `AutoShape` had `'compound'` but
+ * lacked the decorator/compound tags (`staticCompound`/`mutableCompound`/`scaled`/
+ * `offsetCenterOfMass`), while `ShapeType` had those four but not `'compound'`. A prop typed
+ * `AutoShape` therefore rejected `type="mutableCompound"` even though `describeShapeFromOptions`
+ * (which every one of those props eventually calls) has always understood it. They are now one
+ * union: `'compound'` is kept as a documented alias of `'staticCompound'`, normalised by
+ * {@link normaliseShapeType} before anything else looks at it.
  */
-export type AutoShape =
-    | 'box'
-    | 'sphere'
-    | 'capsule'
-    | 'taperedCapsule'
-    | 'cylinder'
-    | 'taperedCylinder'
-    | 'convex'
-    | 'trimesh'
-    | 'compound'
-    | 'heightfield';
-
-/** Every descriptor tag the pipeline understands (implemented or reserved). */
 export type ShapeType =
     | 'box'
     | 'sphere'
@@ -88,10 +83,17 @@ export type ShapeType =
     | 'convex'
     | 'trimesh'
     | 'heightfield'
+    | 'compound'
     | 'staticCompound'
     | 'mutableCompound'
     | 'scaled'
     | 'offsetCenterOfMass';
+
+/**
+ * @deprecated alias of {@link ShapeType} - the two unions were collapsed into one in issue #211.
+ * Kept so existing imports of `AutoShape` (and props typed with it) keep compiling unchanged.
+ */
+export type AutoShape = ShapeType;
 
 export type Vec3Tuple = [number, number, number];
 /** Quaternion as `[x, y, z, w]` - the order three.js and Jolt both use. */
@@ -270,6 +272,20 @@ export type ShapeOptions = {
     blockSize?: number;
     children?: ShapeDescriptor[];
 
+    //* decorator shapes (issue #211: `describeShapeFromOptions` used to have no case for either
+    //  tag, so `type="scaled"`/`type="offsetCenterOfMass"` silently fell through to a unit box) -
+    /** the shape `'scaled'`/`'offsetCenterOfMass'` wrap. Required for either type. */
+    child?: ShapeDescriptor;
+    /**
+     * `type: 'scaled'`'s per-axis scale. Named apart from `<Shape scale>` (`number[] | number`,
+     * always wraps whatever shape it built, regardless of `type`) - this is the exact
+     * `Vec3Tuple` a `ScaledShapeDescriptor` carries, and only means anything with `type="scaled"`.
+     * @default [1, 1, 1]
+     */
+    decoratorScale?: Vec3Tuple;
+    /** `'offsetCenterOfMass'`'s shift, in the child's local space. @default [0, 0, 0] */
+    centerOfMass?: Vec3Tuple;
+
     //* heightfield, described from raw samples rather than a mesh (issue #155) ---
     /** `sampleCount * sampleCount` height samples, row major. */
     heights?: NumberArray;
@@ -370,7 +386,7 @@ type PossibleGeometry =
 
 export type DescribeShapeOptions = {
     /** force a shape type instead of inferring one from the geometry */
-    type?: AutoShape | ShapeType;
+    type?: ShapeType;
     /** convex radius for the box/cylinder paths (clamped to what Jolt accepts) */
     convexRadius?: number;
     /** heightfield block size */
@@ -386,10 +402,15 @@ export type DescribeShapeOptions = {
     applyObjectScale?: boolean;
 };
 
-/** `compound` is the historical name for a static compound. */
-const normaliseShapeType = (type?: AutoShape | ShapeType): ShapeType | undefined => {
+/**
+ * `'compound'` is the historical name for a static compound (issue #211): every entry point that
+ * takes a {@link ShapeType} runs it through here first, so `'compound'` and `'staticCompound'`
+ * always produce identical descriptors. Exported so callers outside this file (a custom shape
+ * pipeline, a test) can apply the same normalisation instead of re-implementing it.
+ */
+export const normaliseShapeType = (type?: ShapeType): ShapeType | undefined => {
     if (!type) return undefined;
-    return (type === 'compound' ? 'staticCompound' : type) as ShapeType;
+    return type === 'compound' ? 'staticCompound' : type;
 };
 
 /**
@@ -699,7 +720,7 @@ export function describeShape(
  * and the old `generateShapeSettings` take into a `ShapeDescriptor`.
  */
 export function describeShapeFromOptions(
-    type: AutoShape | ShapeType = 'box',
+    type: ShapeType = 'box',
     options: ShapeOptions = {}
 ): ShapeDescriptor {
     const shapeType = normaliseShapeType(type) as ShapeType;
@@ -784,6 +805,29 @@ export function describeShapeFromOptions(
         case 'staticCompound':
         case 'mutableCompound':
             return { type: shapeType, children: options.children ?? [] };
+        case 'scaled': {
+            if (!options.child)
+                throw new Error(
+                    "react-three-jolt: a 'scaled' shape needs `child` - the ShapeDescriptor it scales"
+                );
+            return {
+                type: 'scaled',
+                child: options.child,
+                scale: options.decoratorScale ?? [1, 1, 1]
+            };
+        }
+        case 'offsetCenterOfMass': {
+            if (!options.child)
+                throw new Error(
+                    "react-three-jolt: an 'offsetCenterOfMass' shape needs `child` - the " +
+                        'ShapeDescriptor whose centre of mass it moves'
+                );
+            return {
+                type: 'offsetCenterOfMass',
+                child: options.child,
+                centerOfMass: options.centerOfMass ?? [0, 0, 0]
+            };
+        }
         default: {
             // a bare number means a cube of that size; anything vector shaped is x/y/z
             const size =

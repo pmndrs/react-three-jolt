@@ -370,7 +370,10 @@ test('unmounting a whole <Physics> tree returns the allocation tracker to baseli
 
         // the world is real: bodies, a constraint, and it steps
         assert.equal(system!.constraintSystem.constraints.size, 1, 'no constraint was created');
-        assert.equal(system!.disposableCount, 1, 'the controller did not register itself');
+        // 3, not 1: the controller itself, plus the raycaster and shape collider it built through
+        // `getRaycaster()`/`getShapeCollider()` - issue #215 has those register themselves too,
+        // so a query a caller forgets to `destroy()` is still freed by the world's own teardown.
+        assert.equal(system!.disposableCount, 3, 'the controller and its queries did not register');
         await act(async () => {
             for (let i = 0; i < 20; i++) system!.onUpdate(1 / 60);
         });

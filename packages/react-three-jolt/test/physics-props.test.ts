@@ -261,7 +261,8 @@ test('<Physics> passes every simulation prop through to PhysicsSystem', async ()
             timeStep: 1 / 90,
             maxSubSteps: 2,
             paused: true,
-            defaultShape: 'sphere'
+            defaultShape: 'sphere',
+            defaultDynamicMeshStrategy: 'error'
         })
     );
 
@@ -273,6 +274,11 @@ test('<Physics> passes every simulation prop through to PhysicsSystem', async ()
     assert.equal(world.maxSubSteps, 2, 'maxSubSteps prop was dropped');
     assert.isTrue(world.paused, 'paused prop was dropped');
     assert.equal(world.bodySystem.defaultShape, 'sphere', 'defaultShape prop was dropped');
+    assert.equal(
+        world.bodySystem.defaultDynamicMeshStrategy,
+        'error',
+        'defaultDynamicMeshStrategy prop was dropped'
+    );
 
     await renderer.unmount();
 });
@@ -288,6 +294,7 @@ test('<Physics> defaults match the documented ones', async () => {
     assert.equal(world.maxSubSteps, 5);
     assert.isFalse(world.paused);
     assert.isUndefined(world.bodySystem.defaultShape);
+    assert.isUndefined(world.bodySystem.defaultDynamicMeshStrategy);
 
     await renderer.unmount();
 });

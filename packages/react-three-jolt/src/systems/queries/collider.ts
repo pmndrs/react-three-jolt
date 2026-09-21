@@ -121,6 +121,7 @@ export class ShapeCollider extends QueryBase {
         return this.activeShape;
     }
     set shape(shape: Jolt.Shape) {
+        if (this.checkDestroyed()) return;
         if (shape === this.activeShape) return;
         // Shape is reference counted (RefTarget) and starts life with a refcount of 0. AddRef()
         // here means a caller that later Release()s (or reassigns) its own reference to `shape`
@@ -161,6 +162,7 @@ export class ShapeCollider extends QueryBase {
     //* Methods =======================================
     // set the collector
     setCollector(type: CollectorTypeString = 'closest') {
+        if (this.checkDestroyed()) return;
         //console.log('setting collector', type);
         // destroy exising collector
         if (this.collector) Raw.module.destroy(this.collector);
@@ -182,6 +184,7 @@ export class ShapeCollider extends QueryBase {
         successHandler?: CastSuccessHandler<CollisionResult>,
         failHandler?: CastFailHandler
     ): CollisionResult | CollisionResult[] | false {
+        if (this.checkDestroyed()) return false;
         // clear the collector
         //if (this.hasCast && this.type !== 'closest')
         this.collector.Reset();
@@ -230,6 +233,7 @@ export class ShapeCollider extends QueryBase {
     //* Internal Methods ===============================
     // set the matrix for the cast
     setJoltMatrix() {
+        if (this.checkDestroyed()) return;
         // Mutate the persistent scratch position/rotation and centerOfMassTransform in place
         // instead of allocating a new RMat44 every call. This runs from every position/rotation/
         // matrix setter, and CameraBoom.checkCollision sets `collider.position` every frame, so a

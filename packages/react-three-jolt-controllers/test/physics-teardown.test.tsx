@@ -128,7 +128,11 @@ test('a camera rig and a vehicle system built by hand are torn down with the wor
 
     const rig = new CameraRigManager(new THREE.Scene(), system);
     const vehicles = new VehicleSystem(system);
-    assert.equal(system.disposableCount, 2, 'the rig/vehicle system did not register themselves');
+    // 5, not 2: the rig and the vehicle system themselves, plus the raycaster/shapecaster/shape
+    // collider the rig's `CameraBoom` builds through `getRaycaster()`/`getShapecaster()`/
+    // `getShapeCollider()` - issue #215 has those register themselves too, so a query nobody
+    // explicitly destroys is still freed by the world's own teardown.
+    assert.equal(system.disposableCount, 5, 'the rig/vehicle system did not register themselves');
 
     system.onUpdate(1 / 60);
     system.destroy();

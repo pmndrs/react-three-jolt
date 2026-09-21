@@ -18,6 +18,7 @@ import { useBodyEvent, useForwardedRef, useJolt, useUnmount } from '../hooks';
 import {
     type AutoShape,
     type BodyState,
+    type DynamicMeshStrategy,
     describeObject,
     descriptorKey,
     generateShape,
@@ -89,6 +90,20 @@ interface RigidBodyProps {
      * shapes first, then the colliders in mount order.
      */
     colliders?: RigidBodyColliders;
+    /**
+     * What a **dynamic** body does with a trimesh shape (issue #112, #211). Jolt has no
+     * mesh-vs-mesh collision, so an unconverted trimesh on a dynamic body falls straight through
+     * the world. This was always reachable on `bodySystem.addBody`'s `GenerateBodyOptions` but
+     * had no way to reach it from `<RigidBody>` itself.
+     *
+     * - left out (default): falls back to `<Physics defaultDynamicMeshStrategy>`, then
+     *   `'convex'` - warn and use a convex hull of the same points.
+     * - `'error'`: throw instead, so the mistake is loud.
+     * - `'decompose'`: reserved for a convex decomposition; currently throws with an explanation.
+     *
+     * No effect on a static or kinematic body - a trimesh is always fine there.
+     */
+    dynamicMeshStrategy?: DynamicMeshStrategy;
     debug?: boolean;
     /**
      * Receives the {@link BodyState} once the body exists. `| undefined` because the usual
@@ -272,6 +287,7 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             type,
             shape,
             colliders,
+            dynamicMeshStrategy,
             position,
             rotation,
             onlyInitialize,
@@ -426,9 +442,15 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             const composed: ShapeDescriptor = compound
                 ? { type: 'staticCompound', children: parts }
                 : parts[0];
-            // #112: jolt cannot simulate a dynamic body holding a mesh shape. The automatic path
-            // in `generateBodySettings` does this for itself; a shape we hand over is ours.
-            const descriptor = isDynamicType(type) ? makeDescriptorDynamicSafe(composed) : composed;
+            // #112/#211: jolt cannot simulate a dynamic body holding a mesh shape. The automatic
+            // path in `generateBodySettings` does this for itself (and reads the same fallback
+            // chain - see `BodySystem.createBody`); a shape we hand over here is ours to convert.
+            const descriptor = isDynamicType(type)
+                ? makeDescriptorDynamicSafe(
+                      composed,
+                      dynamicMeshStrategy ?? bodySystem.defaultDynamicMeshStrategy
+                  )
+                : composed;
 
             const key = descriptorKey(descriptor);
             if (key === composedKey.current) return;
@@ -444,7 +466,16 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
             const state = rigidBodyRef.current as BodyState | undefined;
             if (state) state.shapeDescriptor = descriptor;
             setActiveShape(next);
-        }, [combining, subShapeVersion, colliders, autoShape, type, rigidBodyRef]);
+        }, [
+            combining,
+            subShapeVersion,
+            colliders,
+            autoShape,
+            type,
+            rigidBodyRef,
+            dynamicMeshStrategy,
+            bodySystem
+        ]);
 
         // the body is created after the shape, so it misses the assignment above exactly once
         useEffect(() => {
@@ -483,7 +514,11 @@ export const RigidBody: React.FC<RigidBodyProps> = memo(
                     shape: activeShape,
                     bodyType: type,
                     shapeType: autoShape,
-                    shapeDescriptor: composedDescriptor.current
+                    shapeDescriptor: composedDescriptor.current,
+                    // #211: reaches `generateBodySettings` for the plain "auto shape from meshes,
+                    // no compound" case; when `activeShape` is already set, the compound effect
+                    // above already converted any trimesh, so this has nothing left to do there.
+                    dynamicMeshStrategy
                 };
                 //put the initial position, rotation, scale, and quaternion in the options
                 if (position) objectRef.current.position.copy(vec3.three(position));

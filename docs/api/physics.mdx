@@ -39,8 +39,9 @@ frame rather than rebuilding the world.
 | `updatePriority` | `number` | `0` | mount only |
 | `updateLoop` | `'follow' \| 'independent'` | `'follow'` | mount only |
 | `debug` | `boolean` | `false` | reactive |
-| `defaultShape` | [`AutoShape`](/api/shapes#autoshape) | — | reactive |
+| `defaultShape` | [`ShapeType`](/api/shapes#shapetype) | — | reactive |
 | `defaultBodySettings` | `Jolt.BodyCreationSettings` fields | — | reactive |
+| `defaultDynamicMeshStrategy` | `'convex' \| 'decompose' \| 'error'` | — | reactive |
 | `module` | Jolt module initializer | `jolt-physics` | mount only |
 
 Plus the world [event props](#world-events): `onCollisionEnter`, `onCollisionPersist`,
@@ -185,6 +186,12 @@ and you rarely want the screen filled with lasers. Turn debugging on per caster 
 The collision shape used for bodies that don't ask for one, instead of guessing from each
 geometry. `<Physics defaultShape="box">` is the Jolt equivalent of rapier's `colliders` prop.
 Individual `<RigidBody shape="...">` props still win. See [Shapes](/api/shapes).
+
+### `defaultDynamicMeshStrategy`
+
+World wide fallback for `<RigidBody dynamicMeshStrategy>` (issue #211): what a **dynamic** body
+does with a trimesh shape when it doesn't say for itself. A per-body `dynamicMeshStrategy` always
+wins. See [Trimeshes](/api/shapes#trimeshes).
 
 ### `defaultBodySettings`
 

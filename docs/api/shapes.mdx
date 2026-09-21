@@ -37,10 +37,10 @@ Override per body, or for the whole world:
 <Physics defaultShape="box">{children}</Physics>
 ```
 
-### `AutoShape`
+### `ShapeType`
 
 ```ts
-type AutoShape =
+type ShapeType =
     | 'box'
     | 'sphere'
     | 'capsule'
@@ -49,14 +49,21 @@ type AutoShape =
     | 'taperedCylinder'
     | 'convex'
     | 'trimesh'
+    | 'heightfield'
     | 'compound'
-    | 'heightfield';
+    | 'staticCompound'
+    | 'mutableCompound'
+    | 'scaled'
+    | 'offsetCenterOfMass';
 ```
 
-These are the types that can be inferred from — or forced onto — a geometry. `compound` is an
-alias of `staticCompound`. The [descriptor pipeline](#the-shape-pipeline) has a slightly larger
-set, `ShapeType`, which adds `staticCompound`, `mutableCompound`, `scaled` and
-`offsetCenterOfMass`.
+`<Shape type>`, `<RigidBody shape>` and `<Physics defaultShape>` all accept this one union
+(issue #211 — it used to be two separate, slightly different unions called `AutoShape` and
+`ShapeType`; `AutoShape` still exists as a deprecated alias of `ShapeType` so old imports keep
+compiling). `'compound'` is a documented alias of `'staticCompound'`, normalised before anything
+else looks at it — `type="compound"` and `type="staticCompound"` always produce identical
+descriptors. `'scaled'` and `'offsetCenterOfMass'` are decorator shapes: they wrap a `child`
+descriptor rather than describing geometry directly (see [the shape pipeline](#the-shape-pipeline)).
 
 ### Scaled meshes
 
@@ -90,8 +97,21 @@ builds a convex hull of the same points instead. Pick a different behaviour with
 Static (and kinematic) bodies keep a real mesh shape. The converted body's mass and inertia come
 from the hull's real `GetMassProperties()` rather than a fabricated solid box.
 
-`dynamicMeshStrategy` is a **body option**, not a `<RigidBody>` or `<Physics>` prop — today the
-only way to set it is to create the body yourself:
+Set it per body with `<RigidBody dynamicMeshStrategy>`, or world wide with
+`<Physics defaultDynamicMeshStrategy>` (issue #211 — a per-body value always wins over the
+world's default):
+
+```tsx
+// this one body throws instead of silently converting
+<RigidBody type="dynamic" dynamicMeshStrategy="error">
+    <mesh geometry={importedTrimeshGeometry} />
+</RigidBody>
+
+// every dynamic body that doesn't say otherwise
+<Physics defaultDynamicMeshStrategy="error">{children}</Physics>
+```
+
+It is also still a `GenerateBodyOptions` field for anyone building bodies directly:
 
 ```ts
 const handle = bodySystem.addBody(mesh, { shapeType: 'trimesh', dynamicMeshStrategy: 'error' });
@@ -148,7 +168,7 @@ A `<RigidBody>` containing a `<Shape>` waits for it before creating the body, an
 
 | prop | type | |
 | --- | --- | --- |
-| `type` | `AutoShape \| ShapeType` | default `'box'` |
+| `type` | [`ShapeType`](#shapetype) | default `'box'` |
 | `position` | `number[]` | offset within the parent compound. Default `[0, 0, 0]` |
 | `rotation` | `[number, number, number]` | Euler, radians. Default `[0, 0, 0]` |
 | `scale` | `number[] \| number` | wraps the generated shape in a `ScaledShape` |
@@ -345,8 +365,8 @@ body), an informational `offset`, and an optional `userData`.
 | `offsetCenterOfMass` | `child`, `centerOfMass` |
 
 > [!NOTE]
-> The tags are `convex` and `trimesh` — there is no `convexHull` or `mesh`. `compound` exists only
-> in [`AutoShape`](#autoshape), where it is normalised to `staticCompound`.
+> The tags are `convex` and `trimesh` — there is no `convexHull` or `mesh`. `compound` is accepted
+> everywhere too, as a documented alias normalised to `staticCompound` (see [`ShapeType`](#shapetype)).
 
 `offsetCenterOfMass` moves a shape's centre of mass without moving the shape: the classic
 self-righting "weeble", and how you stop a vehicle or a character tipping over.
