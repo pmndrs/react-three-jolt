@@ -5,6 +5,7 @@ import {
     Raycaster,
     RaycastHit,
     RigidBody,
+    useMouseRaycaster,
     useMulticaster,
     useRaycaster,
     useSetTimeout,
@@ -14,10 +15,11 @@ import { Floor } from '@react-three/jolt-addons';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 // we have to wrap the demo so we can provide the physics component
 
 export function RaycastSimpleDemo() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
 
     // Reset the restitution
     // body settings so shapes dont bounce
@@ -27,6 +29,7 @@ export function RaycastSimpleDemo() {
     return (
         <>
             <Physics
+                module={module}
                 paused={paused}
                 key={physicsKey}
                 interpolate={interpolate}
@@ -34,7 +37,9 @@ export function RaycastSimpleDemo() {
                 gravity={22}
                 defaultBodySettings={defaultBodySettings}
             >
+                <JoltMemoryRegistrar />
                 <RaycastSimple />
+                <MouseRaycasterDemo />
             </Physics>
             <directionalLight
                 castShadow
@@ -248,4 +253,21 @@ function RaycastSimple() {
             </RigidBody>
         </>
     );
+}
+
+// issue #47 - useMouseRaycaster fires a raycaster from the mouse/camera every frame. Turning on
+// the raycaster's own marker debugging shows off both the hook AND the issue #48 fix at once: the
+// hit marker's ring/normal-line now orients itself to whatever surface the cursor is over, and
+// stays a single pooled marker (no growing scene graph) as the mouse moves every frame.
+function MouseRaycasterDemo() {
+    const { scene } = useThree();
+    const { raycaster } = useMouseRaycaster();
+
+    useEffect(() => {
+        raycaster.initDebugging(scene);
+        raycaster.lineColor = '#FFB627';
+        raycaster.drawMarkers = true;
+    }, [raycaster, scene]);
+
+    return null;
 }

@@ -3,12 +3,16 @@ so much and can be reused for things like NPC's */
 
 import {
     type BodySystem,
+    createShapeFromSettings,
+    Emitter,
     generateBodySettings,
     joltScratch,
     Layer,
     type PhysicsSystem,
     quat,
     Raw,
+    releaseShape,
+    type Unsubscribe,
     vec3
 } from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
@@ -23,6 +27,10 @@ interface CharacterFilters {
     bodyFilter: Jolt.BodyFilterJS;
     shapeFilter: Jolt.ShapeFilter;
 }
+
+// biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
+export type CharacterActionCallback = (action: any, payload?: any) => void;
+type CharacterEventMap = { action: CharacterActionCallback };
 
 export class CharacterControllerSystem {
     protected joltInterface: Jolt.JoltInterface;
@@ -53,7 +61,10 @@ export class CharacterControllerSystem {
         shapeFilter: new Raw.module.ShapeFilter()
     };
 
-    protected actionListeners: any = [];
+    /** Action events, on the shared Emitter primitive (issue #50). */
+    protected events = new Emitter<CharacterEventMap>();
+    /** Back compat so the deprecated `removeActionListener(fn)` still finds its handles. */
+    private legacyActionSubs = new Map<Function, Unsubscribe[]>();
 
     // configurable options
 
@@ -106,8 +117,23 @@ export class CharacterControllerSystem {
     // private properties
     //active speed allows variable running speeds
     private activeSpeed = 6;
-    private runningTimer: any;
-    protected crouchingInterval: any;
+    private runningTimer: ReturnType<typeof setTimeout> | undefined;
+    protected crouchingInterval: ReturnType<typeof setInterval> | undefined;
+    private exhaustionTimer: ReturnType<typeof setTimeout> | undefined;
+    private jumpTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /** true once `destroy()` has run; every jolt object below is freed and nulled out by then */
+    private destroyed = false;
+    private anchorHandle: number | undefined;
+
+    /**
+     * The *exact* function registered with the physics system. `removeStepListener` matches by
+     * identity, so registering an inline arrow (which is what this used to do) made the listener
+     * impossible to remove and left a destroyed character being stepped against freed memory -
+     * issue #138. An instance arrow field is created once per instance, so add and remove see
+     * the same object.
+     */
+    private readonly handlePreStep = (deltaTime: number) => this.prePhysicsUpdate(deltaTime);
 
     // shapes of the character
     private activeStandingShape!: Jolt.Shape;
@@ -161,16 +187,99 @@ export class CharacterControllerSystem {
         this.setCapsule(1, 2);
         // create the rig anchor
         this.createAnchor();
-        // Finally, attach to main loop
-        this.physicsSystem.addPreStepListener((deltaTime: number) =>
-            this.prePhysicsUpdate(deltaTime)
-        );
+        // Finally, attach to main loop. Keep the handle: this used to be an inline arrow passed
+        // to `addPreStepListener`, which `removeStepListener` could never match by identity, so
+        // a destroyed character carried on being pre-stepped against a freed CharacterVirtual.
+        this.detachFromLoop = this.physicsSystem.onBeforeStep(this.handlePreStep);
     }
-    // cleanup
+    /** Unsubscribes the pre-step callback. Replaced in the constructor. */
+    private detachFromLoop: () => void = () => {};
+
+    /**
+     * Free everything this controller owns: the step subscription, every timer, the three meshes
+     * and every `new Raw.module.*` allocation (issue #138). Idempotent - a second call is a no-op,
+     * so an explicit `destroy()` plus a React unmount (or StrictMode's double invoke) is safe.
+     */
     destroy() {
-        // remove itself from the scene
+        if (this.destroyed) return;
+        this.destroyed = true;
+
+        // stop being stepped before anything is freed: everything below is memory the step reads
+        this.detachFromLoop();
+        this.detachFromLoop = () => {};
+        this.clearTimers();
+        // the action listeners live on the Emitter now (issue #50/#187), so dropping them means
+        // clearing it and the legacy subscription bookkeeping rather than emptying an array
+        this.events.clear();
+        this.legacyActionSubs.clear();
+
+        // three side ---------------------------------------------------
         this.removeFromScene();
-        //todo: destroy the character
+        if (this.standingMesh) this.destroyDebugMesh(this.standingMesh);
+        if (this.crouchingMesh) this.destroyDebugMesh(this.crouchingMesh);
+        this.threeCharacter.geometry.dispose();
+        (this.threeCharacter.material as THREE.Material).dispose();
+        this.threeObject.userData.body = undefined;
+
+        // jolt side ----------------------------------------------------
+        // React destroys a parent's effects before its children's, so `<Physics>` can already
+        // have freed the JoltInterface - and with it every body, shape and the world these
+        // objects live in. Touching jolt after that traps in wasm (issue #82), so only drop the
+        // references in that case.
+        if (!this.physicsSystem.destroyed) this.releaseJoltObjects();
+
+        this.character = undefined as unknown as Jolt.CharacterVirtual;
+        this.characterContactListener = undefined;
+        this.activeStandingShape = undefined as unknown as Jolt.Shape;
+        this.activeCrouchingShape = undefined as unknown as Jolt.Shape;
+        this.updateSettings = undefined as unknown as Jolt.ExtendedUpdateSettings;
+        this.filters = {
+            objectVsBroadPhaseLayerFilter: undefined,
+            objectLayerPairFilter: undefined,
+            movingBPFilter: undefined,
+            movingLayerFilter: undefined,
+            bodyFilter: undefined as unknown as Jolt.BodyFilterJS,
+            shapeFilter: undefined as unknown as Jolt.ShapeFilter
+        };
+        this._tmpVec3 = undefined as unknown as Jolt.Vec3;
+        this.anchor = undefined;
+        this.anchorHandle = undefined;
+    }
+
+    private clearTimers() {
+        if (this.crouchingInterval) clearInterval(this.crouchingInterval);
+        if (this.runningTimer) clearTimeout(this.runningTimer);
+        if (this.exhaustionTimer) clearTimeout(this.exhaustionTimer);
+        if (this.jumpTimer) clearTimeout(this.jumpTimer);
+        this.crouchingInterval = undefined;
+        this.runningTimer = undefined;
+        this.exhaustionTimer = undefined;
+        this.jumpTimer = undefined;
+    }
+
+    /** every `new Raw.module.*` this class owns, freed in dependency order */
+    private releaseJoltObjects() {
+        const jolt = Raw.module;
+        // the anchor is a real body in the simulation; it has to go before the world does
+        if (this.anchorHandle !== undefined) this.bodySystem.removeBody(this.anchorHandle);
+
+        // the character holds a pointer to the contact listener, so it goes first
+        if (this.character) jolt.destroy(this.character);
+        if (this.characterContactListener) jolt.destroy(this.characterContactListener);
+
+        // shapes are reference counted: give back the reference `createShapeFromSettings` took
+        // (the character held its own, which its destructor above has just dropped).
+        releaseShape(this.activeStandingShape);
+        releaseShape(this.activeCrouchingShape);
+
+        if (this.updateSettings) jolt.destroy(this.updateSettings);
+        // NOTE: `objectVsBroadPhaseLayerFilter` / `objectLayerPairFilter` are borrowed from the
+        // JoltInterface (`GetObjectVsBroadPhaseLayerFilter()`), not ours - never destroy those.
+        if (this.filters.movingBPFilter) jolt.destroy(this.filters.movingBPFilter);
+        if (this.filters.movingLayerFilter) jolt.destroy(this.filters.movingLayerFilter);
+        if (this.filters.bodyFilter) jolt.destroy(this.filters.bodyFilter);
+        if (this.filters.shapeFilter) jolt.destroy(this.filters.shapeFilter);
+        if (this._tmpVec3) jolt.destroy(this._tmpVec3);
     }
     //* Properties ========================================
     get debug() {
@@ -465,18 +574,18 @@ export class CharacterControllerSystem {
             }
         };
 
-        // jolt-physics 0.32 grew the CharacterContactListener interface (persisted/removed
-        // contacts, and the character-vs-character variants). Emscripten's JSImplementation
-        // binding throws "a JSImplementation must implement all functions" the moment Jolt calls
-        // one that JavaScript has not assigned, so every remaining callback gets the no-op /
-        // accept-everything behaviour this listener had before those functions existed.
+        // jolt-physics 0.32 grew the CharacterContactListener interface. Emscripten's
+        // JSImplementation binding throws "a JSImplementation must implement all functions" the
+        // moment Jolt calls one that JavaScript has not assigned - but the check is lazy, one
+        // per call site, so only the callbacks Jolt actually reaches have to exist.
+        //
+        // Measured against jolt-physics 1.1.0 (test/character-contact-listener.test.ts): Jolt
+        // calls exactly six of the eleven declared callbacks for a CharacterVirtual stepping
+        // against bodies. The five character-vs-character variants only fire once a
+        // CharacterVsCharacterCollision is installed, which this controller never does, so
+        // their no-op assignments were dead code and are gone. The test fails if that changes.
         this.characterContactListener.OnContactPersisted = () => {};
         this.characterContactListener.OnContactRemoved = () => {};
-        this.characterContactListener.OnCharacterContactValidate = () => true;
-        this.characterContactListener.OnCharacterContactAdded = () => {};
-        this.characterContactListener.OnCharacterContactPersisted = () => {};
-        this.characterContactListener.OnCharacterContactRemoved = () => {};
-        this.characterContactListener.OnCharacterContactSolve = () => {};
     }
     // create the core character
     initCharacter() {
@@ -489,12 +598,17 @@ export class CharacterControllerSystem {
         settings.mCharacterPadding = 0.02;
         settings.mPenetrationRecoverySpeed = 1;
         settings.mPredictiveContactDistance = 0.1;
-        settings.mSupportingVolume = new Raw.module.Plane(
+        // `sAxisY()` is a static temporary returned by value - it must never be destroyed (see
+        // the memory notes in core's shape-system.ts). `mSupportingVolume` is a Plane by value,
+        // so the assignment copies and the plane we built here is ours to free.
+        const supportingVolume = new Raw.module.Plane(
             Raw.module.Vec3.prototype.sAxisY(),
             -this.characterRadiusStanding
         );
+        settings.mSupportingVolume = supportingVolume;
         this.character = new Raw.module.CharacterVirtual(
             settings,
+            // sZero()/sIdentity() are static temporaries too: not allocations, never destroyed
             Raw.module.RVec3.prototype.sZero(),
             Raw.module.Quat.prototype.sIdentity(),
             this.physicsSystem.physicsSystem
@@ -503,13 +617,17 @@ export class CharacterControllerSystem {
 
         this.threeObject.userData.body = this.character;
 
-        // TODO: Destroy all the jolt stuff now its created
+        // CharacterVirtual has copied everything it needs out of the settings by now
+        Raw.module.destroy(supportingVolume);
+        Raw.module.destroy(settings);
     }
 
     // create the anchor object for rigs
     private createAnchor() {
-        const shapeSettings = new Raw.module.SphereShapeSettings(0.5);
-        const shape = Raw.module.castObject(shapeSettings.Create().Get(), Raw.module.SphereShape);
+        // `Create().Get()` hands back a shape owned by a *static* ShapeResult whose reference is
+        // dropped by the next Create() anywhere in the process; createShapeFromSettings takes a
+        // real reference (and destroys the settings) so the shape survives until we release it.
+        const shape = createShapeFromSettings(new Raw.module.SphereShapeSettings(0.5));
         const bodySettings = generateBodySettings(shape, {
             bodyType: 'kinematic'
         });
@@ -517,15 +635,15 @@ export class CharacterControllerSystem {
         anchor.SetIsSensor(true);
         this.anchorID = anchor.GetID();
         // we have to generate a correct bodyState
-        const anchorHandle = this.physicsSystem.bodySystem.addExistingBody(
+        this.anchorHandle = this.physicsSystem.bodySystem.addExistingBody(
             new THREE.Object3D(),
             anchor
         );
-        this.anchor = this.physicsSystem.bodySystem.getBody(anchorHandle);
+        this.anchor = this.physicsSystem.bodySystem.getBody(this.anchorHandle);
 
-        // cleanup
-        Raw.module.destroy(shapeSettings);
+        // cleanup: the settings and the body both hold their own reference on the shape now
         Raw.module.destroy(bodySettings);
+        releaseShape(shape);
     }
     // set the capsule shape for the character
     setCapsule(radius: number, height: number) {
@@ -538,37 +656,18 @@ export class CharacterControllerSystem {
             this.characterRadiusCrouching = radius;
         }
 
-        const positionStanding = new Raw.module.Vec3(
-            0,
-            0.5 * this.characterHeightStanding + this.characterRadiusStanding,
-            0
+        // shapes from a previous call are released once the new ones are in place, below
+        const previousStanding = this.activeStandingShape;
+        const previousCrouching = this.activeCrouchingShape;
+
+        this.standingShape = this.createCapsuleShape(
+            0.5 * this.characterHeightStanding,
+            this.characterRadiusStanding
         );
-        const positionCrouching = new Raw.module.Vec3(
-            0,
-            0.5 * this.characterHeightCrouching + this.characterRadiusCrouching,
-            0
+        this.crouchingShape = this.createCapsuleShape(
+            0.5 * this.characterHeightCrouching,
+            this.characterRadiusCrouching
         );
-        const rotation = Raw.module.Quat.prototype.sIdentity();
-        this.standingShape = new Raw.module.RotatedTranslatedShapeSettings(
-            positionStanding,
-            rotation,
-            new Raw.module.CapsuleShapeSettings(
-                0.5 * this.characterHeightStanding,
-                this.characterRadiusStanding
-            )
-        )
-            .Create()
-            .Get();
-        this.crouchingShape = new Raw.module.RotatedTranslatedShapeSettings(
-            positionCrouching,
-            rotation,
-            new Raw.module.CapsuleShapeSettings(
-                0.5 * this.characterHeightCrouching,
-                this.characterRadiusCrouching
-            )
-        )
-            .Create()
-            .Get();
 
         // if the debug meshes already exist, destroy them
         if (this.standingMesh) this.destroyDebugMesh(this.standingMesh);
@@ -580,11 +679,32 @@ export class CharacterControllerSystem {
         // finally set the shape
         this.shape = this.standingShape;
 
-        // cleanup
-        // This looks correct but crashes things...
-        // TODO resolve cleaning up
-        //Raw.module.destroy(standingSettings);
-        //Raw.module.destroy(crouchedSettings);
+        // the character now holds its own reference on the new shape, so the references this
+        // instance took for the previous pair can go. Destroying them outright (the commented
+        // out `destroy(standingSettings)` this replaces) is what used to crash: shapes are
+        // reference counted and the character was still using them.
+        releaseShape(previousStanding);
+        releaseShape(previousCrouching);
+    }
+
+    /**
+     * A capsule offset so the character's origin sits at its feet.
+     *
+     * Ownership: `RotatedTranslatedShapeSettings` holds the inner `CapsuleShapeSettings` in a
+     * `RefConst`, so destroying the outer settings (which `createShapeFromSettings` does) frees
+     * the inner one too - freeing it here as well would be a double free. The position vector is
+     * copied into the settings, so that one *is* ours.
+     */
+    private createCapsuleShape(halfHeight: number, radius: number): Jolt.Shape {
+        const position = new Raw.module.Vec3(0, halfHeight + radius, 0);
+        const settings = new Raw.module.RotatedTranslatedShapeSettings(
+            position,
+            // static temporary, not an allocation - never destroy it
+            Raw.module.Quat.prototype.sIdentity(),
+            new Raw.module.CapsuleShapeSettings(halfHeight, radius)
+        );
+        Raw.module.destroy(position);
+        return createShapeFromSettings(settings);
     }
     //* Scene Functions ========================================
     // attach the character to a scene
@@ -601,6 +721,9 @@ export class CharacterControllerSystem {
     //* loop functions ========================================
 
     prePhysicsUpdate(deltaTime: number) {
+        // `destroy()` removes this from the step listeners, but a listener captured mid-step (or
+        // a caller driving the update by hand) must not dereference the freed CharacterVirtual.
+        if (this.destroyed) return;
         // locks the character in a up position
         // TODO: consider angular velocity to slightly rotate (wolfram GDC2014)
         this.applyRotation();
@@ -760,6 +883,7 @@ export class CharacterControllerSystem {
     }
     // TODO Fix this
     setCrouched = (crouched: boolean, forceUpdate?: boolean) => {
+        if (this.destroyed) return;
         if (crouched !== this.isCrouched || forceUpdate) {
             // clear any crouching intervals (if we were blocked to stand)
             if (this.crouchingInterval) clearInterval(this.crouchingInterval);
@@ -795,13 +919,17 @@ export class CharacterControllerSystem {
 
     // Primary Movement functions =============================
     jump() {
+        if (this.destroyed) return;
         this.isJumping = true;
         // TODO, is this still needed?
-        setTimeout(() => {
+        // timer handles are kept so destroy() can clear them - an unmounted controller must not
+        // keep firing callbacks that touch freed jolt objects.
+        this.jumpTimer = setTimeout(() => {
             this.isJumping = false;
         }, 100);
     }
     startRunning(speed?: any) {
+        if (this.destroyed) return;
         if (!this.allowRunning || this.isExhausted || this.isCrouched) return;
         const newSpeed = speed || this.characterSpeed * 2;
         this.activeSpeed = newSpeed;
@@ -814,7 +942,7 @@ export class CharacterControllerSystem {
                 this.activeSpeed = this.characterSpeedExhausted;
                 this.triggerActionListeners('exhausted', this.exauhstionTimeLimit);
                 // once exhausted, we can never stop.
-                setTimeout(() => {
+                this.exhaustionTimer = setTimeout(() => {
                     this.isExhausted = false;
                     this.activeSpeed = this.characterSpeed;
                     this.triggerActionListeners('exausted', false);
@@ -828,26 +956,37 @@ export class CharacterControllerSystem {
     }
 
     //* Action Listener Functions ----------------------------
-    addActionListener = (listener: any) => {
-        this.actionListeners.push(listener);
+    /** Subscribe to every action. Returns the unsubscribe. */
+    addActionListener = (listener: CharacterActionCallback): Unsubscribe => {
+        const off = this.events.on('action', listener);
+        const subs = this.legacyActionSubs.get(listener);
+        if (subs) subs.push(off);
+        else this.legacyActionSubs.set(listener, [off]);
+        return off;
     };
-    removeActionListener = (listener: any) => {
-        this.actionListeners = this.actionListeners.filter((l: any) => l !== listener);
+    /**
+     * @deprecated identity based removal; keep the function {@link addActionListener} returns.
+     * Removes every subscription made for `listener`.
+     */
+    removeActionListener = (listener: CharacterActionCallback) => {
+        const subs = this.legacyActionSubs.get(listener);
+        if (!subs) return;
+        this.legacyActionSubs.delete(listener);
+        for (const off of subs) off();
     };
+    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
     triggerActionListeners = (action: any, payload?: any) => {
         if (this.isDebugging && this.debugVerbose)
             console.log('Character Controller:', action, payload);
-        //@ts-ignore
-        this.actionListeners.forEach((listener) => listener(action, payload));
+        this.events.emit('action', action, payload);
     };
     // watch function takes an action and a callback and adds the correct listener
-    on = (action: any, callback: any) => {
-        const listener = (a: any) => {
-            if (a === action) callback();
-        };
-        this.addActionListener(listener);
-        return () => this.removeActionListener(listener);
-    };
+    // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
+    on = (action: any, callback: (action: any, payload?: any) => void): Unsubscribe =>
+        // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
+        this.events.on('action', (a: any, payload?: any) => {
+            if (a === action) callback(a, payload);
+        });
 
     //* Debug mesh functions =================================
     // create a debug mesh for the character with arrow shape

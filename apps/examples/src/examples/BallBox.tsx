@@ -1,16 +1,20 @@
 //import * as THREE from "three";
 import { useThree } from '@react-three/fiber';
 import { Physics, RigidBody } from '@react-three/jolt';
-import InitJolt from 'jolt-physics';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 import { BoxContainer } from './Bodies/BoxContainer';
 import Changer from './Bodies/Changer';
 import { JoltBolt } from './Bodies/joltBolt';
 import Scaler from './Bodies/Scaler';
 
 export function BallBox() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    // This demo used to hardcode `module={InitJolt}` (a static `import InitJolt from
+    // 'jolt-physics'` duplicating raw.ts's own dynamic default import - it also tripped
+    // rolldown's [INEFFECTIVE_DYNAMIC_IMPORT] warning). It now follows the same
+    // app-wide build-variant selector as every other demo (see joltModules.ts).
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
     const { controls, camera } = useThree();
     //* disable controls
     useEffect(() => {
@@ -108,7 +112,7 @@ export function BallBox() {
     return (
         <>
             <Physics
-                module={InitJolt}
+                module={module}
                 paused={paused}
                 key={physicsKey}
                 interpolate={interpolate}
@@ -116,6 +120,7 @@ export function BallBox() {
                 gravity={gravity}
                 defaultBodySettings={defaultBodySettings}
             >
+                <JoltMemoryRegistrar />
                 {showPrompt && (
                     <mesh position={[0, -1, 0]} receiveShadow onClick={promptUser}>
                         <sphereGeometry args={[10, 32, 32]} />

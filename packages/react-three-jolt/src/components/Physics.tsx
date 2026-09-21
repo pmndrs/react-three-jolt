@@ -17,8 +17,9 @@ import React, {
 import { suspend } from 'suspend-react';
 import * as THREE from 'three';
 import { JoltContext, joltContext } from '../context';
-import { useMount, useUnmount } from '../hooks';
+import { useMount, useSystemEvent, useUnmount } from '../hooks';
 import { initJolt, Raw } from '../raw';
+import type { WorldEventMap } from '../systems/events';
 // physics system import
 import { PhysicsSystem } from '../systems/physics-system';
 import type { AutoShape } from '../systems/shape-system';
@@ -124,6 +125,37 @@ export type PhysicsProps = {
 
     /** A jolt-physics module (or a path to one) to initialise instead of the bundled default. */
     module?: any;
+
+    //* World events ----------------------------------------
+    // Jolt's contact listener is global, so these are the *cheap* path: one dispatch per pair,
+    // where the per body `<RigidBody on*>` props are the fan-out. `target` is the body with the
+    // lower handle, so a world wide counter is right without dividing by two.
+    /** Any two bodies started touching. Fires once per pair. */
+    onCollisionEnter?: WorldEventMap['collisionEnter'];
+    /** Any two bodies stopped touching. Fires once per pair. */
+    onCollisionExit?: WorldEventMap['collisionExit'];
+    /** Any two bodies are still touching. Fires once per pair, per step. */
+    onCollisionPersist?: WorldEventMap['collisionPersist'];
+    /** Anything started overlapping any sensor. */
+    onSensorEnter?: WorldEventMap['sensorEnter'];
+    /** Anything stopped overlapping any sensor. */
+    onSensorExit?: WorldEventMap['sensorExit'];
+    /** Rapier compatible alias for {@link onSensorEnter}. */
+    onIntersectionEnter?: WorldEventMap['sensorEnter'];
+    /** Rapier compatible alias for {@link onSensorExit}. */
+    onIntersectionExit?: WorldEventMap['sensorExit'];
+    /** Any body was deactivated by Jolt's sleeping logic. */
+    onSleep?: WorldEventMap['sleep'];
+    /** Any body was activated. */
+    onWake?: WorldEventMap['wake'];
+    /**
+     * Every simulated body has gone to sleep: the world has stopped moving. Edge triggered off
+     * a count the activation listener maintains, so it costs one comparison per step rather
+     * than a per-frame scan.
+     */
+    onSettled?: WorldEventMap['settled'];
+    /** The number of awake bodies changed. `(active, total)`. */
+    onActivityChange?: WorldEventMap['activityChange'];
 };
 
 export const Physics: FC<PhysicsProps> = (props) => {
@@ -140,18 +172,28 @@ export const Physics: FC<PhysicsProps> = (props) => {
         defaultBodySettings,
         defaultShape,
 
+        onCollisionEnter,
+        onCollisionExit,
+        onCollisionPersist,
+        onSensorEnter,
+        onSensorExit,
+        onIntersectionEnter,
+        onIntersectionExit,
+        onSleep,
+        onWake,
+        onSettled,
+        onActivityChange,
+
         //possible module or path?
         module
     } = props;
 
     // =================================================
     //* Module initialization
-    //if the user passed a module path try to load it
-    if (module) {
-        suspend(() => initJolt(module), ['jolt', module]);
-    } else {
-        suspend(() => initJolt(), ['jolt']);
-    }
+    // One unconditional `suspend` call, keyed on the module (issue #137). Branching the hook
+    // itself on `module` being defined changed the number of hooks between renders the moment
+    // the prop was toggled, which React rejects outright.
+    suspend(() => (module ? initJolt(module) : initJolt()), ['jolt', module ?? 'default']);
     // =================================================
     const jolt = Raw.module;
     const pid = useId();
@@ -228,6 +270,19 @@ export const Physics: FC<PhysicsProps> = (props) => {
             physicsSystem.bodySystem.defaultBodySettings = defaultBodySettings;
     }, [defaultBodySettings, physicsSystem]);
 
+    //* World events ------------------------------------
+    // Each of these is an effect whose cleanup is the unsubscribe; handler identity is not a
+    // dependency, so inline arrows do not resubscribe on every render.
+    useSystemEvent(physicsSystem, 'collisionEnter', onCollisionEnter);
+    useSystemEvent(physicsSystem, 'collisionExit', onCollisionExit);
+    useSystemEvent(physicsSystem, 'collisionPersist', onCollisionPersist);
+    useSystemEvent(physicsSystem, 'sensorEnter', onSensorEnter ?? onIntersectionEnter);
+    useSystemEvent(physicsSystem, 'sensorExit', onSensorExit ?? onIntersectionExit);
+    useSystemEvent(physicsSystem, 'sleep', onSleep);
+    useSystemEvent(physicsSystem, 'wake', onWake);
+    useSystemEvent(physicsSystem, 'settled', onSettled);
+    useSystemEvent(physicsSystem, 'activityChange', onActivityChange);
+
     // set the context
     useEffect(() => {
         if (!physicsSystem) return;
@@ -236,6 +291,7 @@ export const Physics: FC<PhysicsProps> = (props) => {
             physicsSystem,
             bodySystem: physicsSystem.bodySystem,
             joltInterface: physicsSystem.joltInterface,
+            events: physicsSystem.events,
             paused,
             debug,
             step

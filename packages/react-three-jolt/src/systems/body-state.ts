@@ -13,6 +13,22 @@ import { Raw } from '../raw';
 
 import { anyVec3, joltScratch, quat, vec3 } from '../utils';
 import { type BodySystem, getThreeObjectForBody } from './body-system';
+import { Emitter, type Unsubscribe } from './emitter';
+import { BODY_EVENT_BITS, type BodyEventMap, EventBit } from './events';
+import {
+    addSubShape,
+    asMutableCompoundShape,
+    isMutableCompoundShape,
+    modifySubShape,
+    readCenterOfMass,
+    releaseShape,
+    removeSubShape,
+    type ShapeDescriptor,
+    type SubShapeTransform,
+    scaleShape,
+    type Vec3Tuple,
+    validScaleFor
+} from './shape-system';
 
 // Initital body object copied from r3/rapier's state object
 export class BodyState {
@@ -59,24 +75,40 @@ export class BodyState {
         return this.meshType === 'instancedMesh';
     }
 
-    // contact pairs
+    /**
+     * Open sub-shape manifolds per peer handle, maintained by `BodySystem`'s contact listener.
+     * Derived state - write through the listener, read through {@link isContacting}.
+     */
     contacts: Map<number, number> = new Map();
-    contactTimestamps: Map<number, number> = new Map();
-    contactThreshold = 900;
 
     // Listeners ----------------------------------
-    // TODO: Make Listener callback type for these
-    activationListeners: Function[] = [];
-    contactAddedListeners: Function[] = [];
-    contactRemovedListeners: Function[] = [];
-    contactPersistedListeners: Function[] = [];
+    /**
+     * This body's events. `on(type, fn)` returns the unsubscribe; the named helpers below are
+     * one-line sugar for the same thing, spelled exactly like the `<RigidBody>` props.
+     */
+    readonly events = new Emitter<BodyEventMap>(BODY_EVENT_BITS);
+    /** Bits that are set for library-internal reasons, e.g. an active motion source. */
+    private internalMask = 0;
+    /** True once `dispose()` has run; the body is on its way out of the simulation. */
+    disposed = false;
+
+    /**
+     * What this body is listening for, as a bitfield. Read inside the Jolt contact callback to
+     * decide whether a manifold is worth wrapping at all.
+     */
+    get eventMask(): number {
+        return this.events.mask | this.internalMask;
+    }
 
     // References so we can modify the body directly
     //@ts-ignore
     private joltPhysicsSystem;
     private bodyInterface: Jolt.BodyInterface;
-    private bodySystem;
+    private bodySystem: BodySystem;
     //private collisionGroupChanged = false;
+    // true once `set color` has cloned this (non-instanced) body's material so it stops sharing
+    // it with whatever else was originally assigned it - see `set color` and `destroy()`.
+    private ownsMaterial = false;
 
     constructor(
         object: Object3D | InstancedMesh,
@@ -106,37 +138,117 @@ export class BodyState {
     }
 
     //* Activation & Contact Listeners ===================================
-    // add a function to the activationListener Array
-    addActivationListener(listener: Function) {
-        this.activationListeners.push(listener);
+    /** Subscribe to one of this body's events. Returns the unsubscribe. */
+    on<K extends keyof BodyEventMap>(type: K, fn: BodyEventMap[K]): Unsubscribe {
+        return this.events.on(type, fn);
     }
-    // remove a function from the activationListener Array
-    removeActivationListener(listener: Function) {
-        this.activationListeners = this.activationListeners.filter((l) => l !== listener);
+    /** Fires once when this body starts touching another. */
+    onCollisionEnter(fn: BodyEventMap['collisionEnter']): Unsubscribe {
+        return this.events.on('collisionEnter', fn);
     }
-    // add a function to one of the contact listener arrays with the function and which as input
-    addContactListener(listener: Function, type: 'added' | 'removed' | 'persisted') {
-        if (type === 'added') this.contactAddedListeners.push(listener);
-        if (type === 'removed') this.contactRemovedListeners.push(listener);
-        if (type === 'persisted') this.contactPersistedListeners.push(listener);
+    /** Fires every step the contact is maintained. Free from Jolt; zero cost when unused. */
+    onCollisionPersist(fn: BodyEventMap['collisionPersist']): Unsubscribe {
+        return this.events.on('collisionPersist', fn);
     }
-    // remove a function from one of the contact listener arrays
-    removeContactListener(listener: Function) {
-        const indexAdded = this.contactAddedListeners.indexOf(listener);
-        const indexRemoved = this.contactRemovedListeners.indexOf(listener);
-        const indexPersisted = this.contactPersistedListeners.indexOf(listener);
+    /** Fires once when the last sub-shape manifold between the two bodies closes. */
+    onCollisionExit(fn: BodyEventMap['collisionExit']): Unsubscribe {
+        return this.events.on('collisionExit', fn);
+    }
+    onSensorEnter(fn: BodyEventMap['sensorEnter']): Unsubscribe {
+        return this.events.on('sensorEnter', fn);
+    }
+    onSensorExit(fn: BodyEventMap['sensorExit']): Unsubscribe {
+        return this.events.on('sensorExit', fn);
+    }
+    onSleep(fn: BodyEventMap['sleep']): Unsubscribe {
+        return this.events.on('sleep', fn);
+    }
+    onWake(fn: BodyEventMap['wake']): Unsubscribe {
+        return this.events.on('wake', fn);
+    }
+    /** Synchronous, inside the step. Return false to reject the contact. See docs/events.md. */
+    onContactValidate(fn: BodyEventMap['contactValidate']): Unsubscribe {
+        return this.events.on('contactValidate', fn);
+    }
 
-        if (indexAdded !== -1) {
-            this.contactAddedListeners.splice(indexAdded, 1);
-        } else if (indexRemoved !== -1) {
-            this.contactRemovedListeners.splice(indexRemoved, 1);
-        } else if (indexPersisted !== -1) {
-            this.contactPersistedListeners.splice(indexPersisted, 1);
-        }
+    /** Back compat so the deprecated identity-based removers can still find their handles. */
+    private legacySubs = new Map<Function, Unsubscribe[]>();
+    private trackLegacy(listener: Function, off: Unsubscribe): Unsubscribe {
+        const subs = this.legacySubs.get(listener);
+        if (subs) subs.push(off);
+        else this.legacySubs.set(listener, [off]);
+        return off;
+    }
+    private removeLegacy(listener: Function): void {
+        const subs = this.legacySubs.get(listener);
+        if (!subs) return;
+        this.legacySubs.delete(listener);
+        for (const off of subs) off();
+    }
+
+    /**
+     * @deprecated use {@link onSleep} / {@link onWake}, which tell the two apart. This fires
+     * for both, as it always did.
+     */
+    addActivationListener(listener: Function): Unsubscribe {
+        const handler = () => listener(this);
+        const offSleep = this.events.on('sleep', handler);
+        const offWake = this.events.on('wake', handler);
+        return this.trackLegacy(listener, () => {
+            offSleep();
+            offWake();
+        });
+    }
+    /** @deprecated keep the function {@link addActivationListener} returns. */
+    removeActivationListener(listener: Function) {
+        this.removeLegacy(listener);
+    }
+    /**
+     * @deprecated use {@link on}. The handler now receives a single payload object rather than
+     * `(handle1, handle2, manifold, settings, count, context)` - the old arguments handed out
+     * Jolt pointers that are freed before the handler could run.
+     */
+    addContactListener(listener: Function, type: 'added' | 'removed' | 'persisted'): Unsubscribe {
+        const event =
+            type === 'added'
+                ? 'collisionEnter'
+                : type === 'removed'
+                  ? 'collisionExit'
+                  : 'collisionPersist';
+        return this.trackLegacy(listener, this.events.on(event, listener as never));
+    }
+    /**
+     * @deprecated keep the function {@link addContactListener} returns.
+     *
+     * Removes the listener from *every* channel it was added to. The old implementation used an
+     * `else if` chain, so a function registered for both `"added"` and `"persisted"` - which
+     * `activateMotionSource` did - could only ever be removed from the first.
+     */
+    removeContactListener(listener: Function) {
+        this.removeLegacy(listener);
     }
     // get the value of a contact pair
     isContacting(handle: number) {
         return this.contacts.get(handle) || 0;
+    }
+
+    /**
+     * Leave the simulation cleanly: close every open contact pair (peers get their exit event),
+     * drop every listener, and forget the contact bookkeeping. Called by
+     * `BodySystem.removeBody` before the body is removed from Jolt.
+     *
+     * Without this, a recycled handle inherits the previous body's open pairs and its peers
+     * never learn the contact ended.
+     */
+    dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        if (this.contacts.size)
+            this.bodySystem.closeContactsFor(this.handle, [...this.contacts.keys()]);
+        this.contacts.clear();
+        this.events.clear();
+        this.legacySubs.clear();
+        this.internalMask = 0;
     }
     //* Interpolation pose cache ==============================
     /*
@@ -223,6 +335,79 @@ export class BodyState {
         if (this.debugMesh) this.updateDebugMesh();
     }
 
+    //* Mutable compounds (issue #108) ========================
+    /**
+     * True when this body's shape is a `MutableCompoundShape`, i.e. when `addSubShape`,
+     * `removeSubShape` and `modifySubShape` can be used on it. Build one with a
+     * `{ type: 'mutableCompound' }` descriptor or a `<Shape dynamic>`.
+     */
+    get isMutableCompound() {
+        return isMutableCompoundShape(this.shape);
+    }
+    /** The body's shape as a `MutableCompoundShape`. Throws when it is anything else. */
+    get mutableCompound(): Jolt.MutableCompoundShape {
+        return asMutableCompoundShape(this.shape);
+    }
+
+    /**
+     * Tell Jolt the shape this body holds changed underneath it.
+     *
+     * Editing a `MutableCompoundShape` in place does not touch the body, so its broadphase bounds
+     * and its mass properties would both go stale: the body would collide against the shape it
+     * had when it was created. `NotifyShapeChanged` re-inserts it in the broadphase and (with
+     * `updateMassProperties`) recomputes mass and inertia from the new shape.
+     *
+     * @param previousCenterOfMass the shape's centre of mass *before* the edit - Jolt moves the
+     * body so the shape stays where it was. Read it with `readCenterOfMass(body.shape)` before
+     * editing; it defaults to the current one, which is only right if the edit did not move it.
+     */
+    notifyShapeChanged(
+        previousCenterOfMass: Vec3Tuple = readCenterOfMass(this.shape),
+        updateMassProperties = true
+    ) {
+        // NotifyShapeChanged takes the vector by value, so the shared scratch is safe here
+        this.bodyInterface.NotifyShapeChanged(
+            this.BodyID,
+            joltScratch.vec3(previousCenterOfMass),
+            updateMassProperties,
+            Raw.module.EActivation_Activate
+        );
+        if (this.debugMesh) this.updateDebugMesh();
+    }
+
+    /**
+     * Add a shape to this body's mutable compound and return its index.
+     *
+     * The descriptor's `position`/`rotation` place it inside the compound. The compound owns the
+     * new sub shape; drop it again with `removeSubShape(index)`, never by hand.
+     */
+    addSubShape(descriptor: ShapeDescriptor): number {
+        const compound = this.mutableCompound;
+        const previousCenterOfMass = readCenterOfMass(compound);
+        const index = addSubShape(compound, descriptor);
+        this.notifyShapeChanged(previousCenterOfMass);
+        return index;
+    }
+
+    /**
+     * Remove the sub shape at `index`. Every index above it shifts down by one, so a caller
+     * holding several indices should remove from the back.
+     */
+    removeSubShape(index: number) {
+        const compound = this.mutableCompound;
+        const previousCenterOfMass = readCenterOfMass(compound);
+        removeSubShape(compound, index);
+        this.notifyShapeChanged(previousCenterOfMass);
+    }
+
+    /** Move and/or turn the sub shape at `index`; anything left out keeps its current value. */
+    modifySubShape(index: number, transform: SubShapeTransform) {
+        const compound = this.mutableCompound;
+        const previousCenterOfMass = readCenterOfMass(compound);
+        modifySubShape(compound, index, transform);
+        this.notifyShapeChanged(previousCenterOfMass);
+    }
+
     //* Debugging ===============================================
     updateDebugMesh() {
         const newMesh = getThreeObjectForBody(this.body);
@@ -260,6 +445,13 @@ export class BodyState {
     // destroy the body
     destroy(ignoreThree?: boolean) {
         this.bodySystem.removeBody(this.handle, ignoreThree);
+        // only dispose the material if `set color` cloned it for us - anything else is still
+        // whatever the caller (or another body sharing the same mesh/material) put there.
+        if (this.ownsMaterial && !this.isInstance) {
+            const mesh = this.object as THREE.Mesh;
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            for (const material of materials) material?.dispose();
+        }
     }
     // probably only used for instances
     getMatrix(matrix: Matrix4) {
@@ -339,10 +531,24 @@ export class BodyState {
         return this.activeScale;
     }
 
+    /**
+     * Scale the body's collision shape (issue #40).
+     *
+     * A number means a uniform scale on all three axes. Non-uniform scale is allowed wherever
+     * Jolt allows it (a box, a convex hull, a mesh...); the shapes that cannot take it - spheres,
+     * capsules, tapered capsules - fall back to a uniform scale of the largest component, with a
+     * `devWarn`, rather than silently producing a shape that does not match what is on screen.
+     *
+     * Re-scaling replaces the `ScaledShape` rather than stacking a new one on top of it, so the
+     * scale is always relative to the *unscaled* shape and the superseded wrapper is freed with
+     * the body's reference.
+     */
     set scale(inScale: THREE.Vector3 | number[] | number) {
-        const scale =
-            inScale instanceof Number
-                ? vec3.three(inScale, inScale as number, inScale as number)
+        // `inScale instanceof Number` was always false for a primitive number, so a numeric
+        // scale used to fall through to `vec3.three(2)` -> (2, undefined, undefined).
+        const requested =
+            typeof inScale === 'number'
+                ? new THREE.Vector3(inScale, inScale, inScale)
                 : vec3.three(inScale);
 
         let existingShape = this.body.GetShape() as Jolt.ScaledShape;
@@ -355,28 +561,38 @@ export class BodyState {
             const existingScale = existingShape.GetScale();
             // compare existing scale to new scale
             if (
-                existingScale.GetX() === scale.x &&
-                existingScale.GetY() === scale.y &&
-                existingScale.GetZ() === scale.z
+                existingScale.GetX() === requested.x &&
+                existingScale.GetY() === requested.y &&
+                existingScale.GetZ() === requested.z
             ) {
                 // if they are the same, we don't need to do anything
                 return;
             }
 
             baseShape = existingShape.GetInnerShape();
+        } else if (
+            requested.x === 1 &&
+            requested.y === 1 &&
+            requested.z === 1 &&
+            this.activeScale.x === 1 &&
+            this.activeScale.y === 1 &&
+            this.activeScale.z === 1
+        ) {
+            // an unscaled shape asked to stay unscaled: don't wrap it for nothing
+            return;
         }
-        // create the new scaled shape
-        // `vec3.jolt` always allocates, `ScaledShape` copies the scale into the shape, so this
-        // one is destroyed below.
-        const joltScale = vec3.jolt(scale);
+        // a sphere/capsule cannot be squashed: ask Jolt rather than guessing from the subtype,
+        // because the answer also depends on what is inside a compound
+        const scale = validScaleFor(baseShape, requested);
+        // create the new scaled shape. `scaleShape` wraps the base shape in a `ScaledShape` that
+        // takes its own reference on it, and hands back a shape we own exactly one reference on.
         const newShape = Raw.module.castObject(
-            new Raw.module.ScaledShape(baseShape, joltScale),
+            scaleShape(baseShape, scale),
             Raw.module.ScaledShape
         );
-        // set the new shape
+        // set the new shape - the body takes its own reference, and drops the one it held on the
+        // shape we are replacing (which frees the superseded ScaledShape)
         this.bodyInterface.SetShape(this.BodyID, newShape, true, Raw.module.EActivation_Activate);
-        //cleanup the scale
-        Raw.module.destroy(joltScale);
 
         // if we are a regular shape we can get an accurate actualScale
         let actualScale = scale;
@@ -385,6 +601,8 @@ export class BodyState {
         if (newShape.GetSubType() === Raw.module.EShapeSubType_Scaled) {
             actualScale = vec3.three(newShape.GetScale());
         }
+        // the body owns it now
+        releaseShape(newShape);
         this.activeScale = actualScale;
         // if not an instance update the object
         if (!this.isInstance) {
@@ -411,23 +629,45 @@ export class BodyState {
     get color(): THREE.Color {
         // if we are a mesh, get the material color of the mesh
         if (!this.isInstance) {
-            //@ts-ignore color does exist
-            return (this.object as THREE.Mesh).material.color;
+            const material = this.firstMaterial;
+            return (material as THREE.Material & { color: THREE.Color }).color;
         }
         // if we are an instance, get the color of the instanced mesh
         const _color = new THREE.Color();
         (this.object as InstancedMesh).getColorAt(this.index!, _color);
         return _color;
     }
-    set color(color: THREE.Color | string | number) {
-        color = color instanceof THREE.Color ? color : new THREE.Color(color);
-        // if we are a mesh, set the material color of the mesh
-        if (!this.isInstance) {
-            //@ts-ignore
-            (this.object as THREE.Mesh).material.color = color;
+    set color(color: THREE.ColorRepresentation) {
+        const newColor = color instanceof THREE.Color ? color : new THREE.Color(color);
+        // if we are an instance, set the color on the shared InstancedMesh's color buffer
+        if (this.isInstance) {
+            const object = this.object as InstancedMesh;
+            object.setColorAt(this.index!, newColor);
+            // setColorAt only writes into the CPU-side buffer; without this the GPU buffer (and
+            // therefore what's rendered) never picks up the change.
+            if (object.instanceColor) object.instanceColor.needsUpdate = true;
+            return;
         }
-        // if we are an instance, set the color of the instanced mesh
-        (this.object as InstancedMesh).setColorAt(this.index!, color);
+        // plain mesh: the material may be shared with other meshes (e.g. re-used across several
+        // <RigidBody>s), so mutating it in place would recolor all of them. Clone it exactly
+        // once - on the first color write - and mark it as owned so `destroy()` disposes it;
+        // every subsequent write reuses that same owned clone.
+        const mesh = this.object as THREE.Mesh;
+        if (!this.ownsMaterial) {
+            mesh.material = Array.isArray(mesh.material)
+                ? mesh.material.map((material) => material.clone())
+                : mesh.material.clone();
+            this.ownsMaterial = true;
+        }
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const material of materials) {
+            (material as THREE.Material & { color?: THREE.Color }).color?.copy(newColor);
+        }
+    }
+    // the material this body's mesh renders with (first slot, for multi-material meshes)
+    private get firstMaterial(): THREE.Material {
+        const material = (this.object as THREE.Mesh).material;
+        return Array.isArray(material) ? material[0] : material;
     }
 
     //* Physics Properties ----------------------------------
@@ -478,26 +718,38 @@ export class BodyState {
     }
 
     //* Group Filtering ----------------------------------
+    // Object layers (`Layer` in constants.ts) remain the broad "what kind of thing is this"
+    // filter. Collision groups are the narrow one: two bodies only consult the group filter when
+    // their group ids match, and `bodySystem.disableCollision(subA, subB)` then turns off that one
+    // sub group pair. Give every body in a group its own sub group id.
+    //
+    // Both are live: the getters read the body itself and the setters push a new CollisionGroup
+    // through BodyInterface.SetCollisionGroup, so they work after creation too (issue #95).
     get group() {
         return this.body.GetCollisionGroup().GetGroupID();
     }
     set group(group: number) {
-        // if we aren't using the core collisionGroup we need to change to it
-        /* we can't use this yet becuase the SetCollisionGroup method isnt exposed
-		if (!this.collisionGroupChanged) {
-			this.body.SetCollisionGroup(this.bodySystem.standardCollisionGroup);
-			this.collisionGroupChanged = true;
-		}
-		*/
-
-        // set the group
-        this.body.GetCollisionGroup().SetGroupID(group);
+        this.bodySystem.setBodyCollisionGroup(this.handle, group);
     }
     get subGroup() {
         return this.body.GetCollisionGroup().GetSubGroupID();
     }
     set subGroup(subGroup: number) {
-        this.body.GetCollisionGroup().SetSubGroupID(subGroup);
+        this.bodySystem.setBodyCollisionGroup(this.handle, undefined, subGroup);
+    }
+    /** Alias of {@link group}. */
+    get collisionGroup() {
+        return this.group;
+    }
+    set collisionGroup(group: number) {
+        this.group = group;
+    }
+    /** Alias of {@link subGroup}. */
+    get collisionSubGroup() {
+        return this.subGroup;
+    }
+    set collisionSubGroup(subGroup: number) {
+        this.subGroup = subGroup;
     }
 
     //* DOF Manipulation ------------------------------------
@@ -623,14 +875,24 @@ export class BodyState {
         if (angularVector) this.motionAngularVector = angularVector;
         // if you want to use the normal for a bouncepad call it separately
 
-        // add the listeners
-        this.addContactListener(this.motionAddedListener, 'added');
-        this.addContactListener(this.motionAddedListener, 'persisted');
+        // Tier A: this no longer goes on the user listener lists. `ContactSettings` is only
+        // live inside the Jolt callback, so the surface velocity half has to run there, while
+        // the impulse/teleport half is illegal there and is queued instead. The bit tells the
+        // contact listener to keep calling us even when no user handler is attached.
+        this.internalMask |= EventBit.motionSource;
     }
-    motionAddedListener = (
+
+    /**
+     * Synchronous, inside `Step()`. Writes `ContactSettings` directly (surface velocity) and
+     * queues anything that touches the body interface as a pending action, which
+     * `BodySystem.handlePendingActions` applies at the top of the next substep.
+     *
+     * `addImpulse` used to be called straight from the contact callback, which goes through
+     * `BodyInterface` and is not allowed while Jolt owns the world.
+     */
+    handleMotionContact = (
         body1Handle: number,
         body2Handle: number,
-        _manifold: Jolt.ContactManifold,
         settings: Jolt.ContactSettings
     ) => {
         // get the body states of the two bodies
@@ -682,10 +944,10 @@ export class BodyState {
                 const v = body2LinearSurfaceVelocity.sub(body1LinearSurfaceVelocity);
                 settings.mRelativeLinearSurfaceVelocity.Set(v.x, v.y, v.z);
             } else {
-                // do it as an impulse
-                // THis could be dangerous because it uses the bodyInterface to apply impulse
+                // Queued, not applied: AddImpulse goes through the body interface, which may
+                // not be touched while Jolt is inside Step().
                 if (this.useRotation) linearVector.applyQuaternion(sourceBody.rotation);
-                targetBody.addImpulse(linearVector);
+                this.bodySystem.createPendingAction('addImpulse', targetBody.handle, linearVector);
             }
         }
         // angular

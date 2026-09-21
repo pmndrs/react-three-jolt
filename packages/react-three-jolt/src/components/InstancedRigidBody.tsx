@@ -1,118 +1,173 @@
 // creates a rigid body for each instance in a mesh
 // changing count at all will regenerate everything
-//todo cleanup these general imports
 // ridged body wrapping and mesh components
 
 import { useThree } from '@react-three/fiber';
-import React, {
-    forwardRef,
-    memo,
-    ReactNode,
-    // MutableRefObject,
-    //RefObject,
-    useEffect,
-    useRef
-} from 'react';
+import React, { Children, memo, ReactNode, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { BodyState } from '../';
-import { useForwardedRef, useJolt, useUnmount } from '../hooks';
+import { useEventCallback, useForwardedRef, useJolt, useUnmount } from '../hooks';
+import type { BodyEventMap } from '../systems/events';
 
-interface InstancedRigidBodyMeshProps {
-    children: ReactNode;
-    count: number;
-    ref: any;
-    color: string | THREE.Color;
-    position: any;
-    rotation: any;
+export interface InstancedRigidBodyMeshProps {
+    children?: ReactNode;
+    count?: number;
+    ref?: React.Ref<BodyState[]>;
+    color?: THREE.ColorRepresentation;
+    position?: THREE.Vector3 | [number, number, number];
+    rotation?: THREE.Euler | [number, number, number];
+
+    //* Events -------------------------------------------
+    // Same names and payloads as `<RigidBody>`; the payload's `target.index` says which
+    // instance it was. Subscribed on every instance body, re-subscribed when `count` changes.
+    onCollisionEnter?: BodyEventMap['collisionEnter'];
+    onCollisionPersist?: BodyEventMap['collisionPersist'];
+    onCollisionExit?: BodyEventMap['collisionExit'];
+    onSensorEnter?: BodyEventMap['sensorEnter'];
+    onSensorExit?: BodyEventMap['sensorExit'];
+    onIntersectionEnter?: BodyEventMap['sensorEnter'];
+    onIntersectionExit?: BodyEventMap['sensorExit'];
+    onSleep?: BodyEventMap['sleep'];
+    onWake?: BodyEventMap['wake'];
 }
+
+// Disposes an InstancedMesh that's being discarded: it's a plain object (not part of the
+// three-fiber tree), so nothing else releases its own instanceMatrix/instanceColor GPU buffers.
+const destroyInstancedMesh = (mesh: THREE.InstancedMesh) => {
+    mesh.parent?.remove(mesh);
+    mesh.dispose();
+    // drop the reference to the (now GPU-released) color buffer
+    mesh.instanceColor = null;
+};
+
 export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = memo(
-    forwardRef((props, forwardedRef) => {
-        const { children, count = 150, color = '#D9594C', position, rotation } = props;
-        // I put one in the ref to appease typescript
-        const holderMeshRef = useRef<THREE.Mesh>(new THREE.Mesh());
-        const instancedMeshRef: any = useRef(undefined);
-        const parentRef = useRef<THREE.Object3D>(null);
-        // Jolt body to be replicated for the instances
-        //@ts-ignore
-        const instanceStates = useForwardedRef(forwardedRef);
-        //@ts-ignore
+    ({
+        children,
+        count = 150,
+        color = '#D9594C',
+        position,
+        rotation,
+        ref,
+        onCollisionEnter,
+        onCollisionPersist,
+        onCollisionExit,
+        onSensorEnter,
+        onSensorExit,
+        onIntersectionEnter,
+        onIntersectionExit,
+        onSleep,
+        onWake
+    }) => {
+        // the "template" mesh, used only to read geometry/material off of - it's detached from
+        // the scene graph as soon as it mounts and never actually renders.
+        const holderMeshRef = useRef<THREE.Mesh | null>(null);
+        const instancedMeshRef = useRef<THREE.InstancedMesh | null>(null);
+        const parentRef = useRef<THREE.Object3D | null>(null);
+        // Geometry/material InstancedRigidBodyMesh created itself, because no geometry/material
+        // children were passed. These are the only resources we ever dispose - anything sourced
+        // from `children` is owned by three-fiber's own JSX tree (the <mesh> below) and gets
+        // disposed by it when this component unmounts.
+        const ownedGeometryRef = useRef<THREE.BufferGeometry | null>(null);
+        const ownedMaterialRef = useRef<THREE.Material | null>(null);
+        // Jolt body states, one per instance - exposed to the caller via `ref`.
+        const instanceStates = useForwardedRef<BodyState[]>(ref ?? null, []);
         const { scene } = useThree();
         const { bodySystem } = useJolt();
 
-        //remove and process the mesh only on initial load
+        // Detach the template mesh from the scene graph on mount, remembering its parent so the
+        // real InstancedMesh can be added there instead. Guarded on `parentRef.current` being
+        // unset so a StrictMode remount (which re-runs this effect without an intervening
+        // cleanup) can't clobber it with `null` a second time - see #24.
         useEffect(() => {
-            if (holderMeshRef.current) {
-                const mesh: THREE.Mesh = holderMeshRef.current;
-                //@ts-ignore
-                parentRef.current = mesh.parent;
-                // reomve the mesh from the scene
-                if (parentRef?.current) parentRef.current.remove(mesh);
-            }
-        }, [holderMeshRef]);
+            const mesh = holderMeshRef.current;
+            if (!mesh || parentRef.current) return;
+            const parent = mesh.parent ?? scene;
+            parentRef.current = parent;
+            parent?.remove(mesh);
+        }, [scene]);
 
         //* Generation of InstancedMesh -------------------------------------
-        // When the count changes, we need to rebuid the instancedMesh
+        // When the count changes, we need to rebuild the instancedMesh
         useEffect(() => {
-            //if there is an existing instancedMesh, remove it
-            let current;
-            if (instancedMeshRef.current) {
-                instancedMeshRef.current.parent.remove(instancedMeshRef.current);
-                current = instancedMeshRef.current;
+            const holder = holderMeshRef.current;
+            if (!holder) return;
+            const previous = instancedMeshRef.current;
+
+            // geometry/material either come from the template mesh (set declaratively via
+            // `children`, e.g. <boxGeometry>/<meshStandardMaterial>) or, if none were given, are
+            // ours to create - and therefore ours to dispose, later, in `useUnmount`.
+            const hasChildren = Children.count(children) > 0;
+            let geometry: THREE.BufferGeometry;
+            let material: THREE.Material;
+            if (hasChildren && holder.geometry) {
+                geometry = holder.geometry;
+                material = Array.isArray(holder.material) ? holder.material[0] : holder.material;
+            } else {
+                if (!ownedGeometryRef.current)
+                    ownedGeometryRef.current = new THREE.BoxGeometry(1, 1, 1);
+                if (!ownedMaterialRef.current)
+                    ownedMaterialRef.current = new THREE.MeshBasicMaterial({ color });
+                geometry = ownedGeometryRef.current;
+                material = ownedMaterialRef.current;
             }
-            // todo: do we need to do more to properly dispose of it?
-            const holder: THREE.Mesh = holderMeshRef.current;
-            const geometry = holder!.geometry || new THREE.BoxGeometry(1, 1, 1);
-            const material = holder!.material || new THREE.MeshBasicMaterial({ color: color });
+
             const instancedMesh = new THREE.InstancedMesh(geometry, material, count);
             instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-            // loop over and set the inital colors
+            // loop over and set the initial colors
             const _col = new THREE.Color(color);
             for (let i = 0; i < count; i++) {
                 instancedMesh.setColorAt(i, _col);
             }
-            instancedMesh.instanceColor!.needsUpdate = true;
-            //take the current mesh positions and values and copy it onto the new one
-            const _matrix = new THREE.Matrix4();
-            const _color = new THREE.Color();
-            if (current) {
-                for (let i = 0; i < current.count; i++) {
-                    current.getMatrixAt(i, _matrix);
+            if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
+            // take the previous mesh's positions and colors and copy them onto the new one -
+            // bounded by the smaller of the two counts, since writing past the new buffer's
+            // capacity throws (this used to break shrinking the count, e.g. 20 -> 10).
+            if (previous) {
+                const _matrix = new THREE.Matrix4();
+                const _color = new THREE.Color();
+                const copyCount = Math.min(previous.count, count);
+                for (let i = 0; i < copyCount; i++) {
+                    previous.getMatrixAt(i, _matrix);
                     instancedMesh.setMatrixAt(i, _matrix);
                     if (instancedMesh.instanceColor) {
-                        current.getColorAt(i, _color);
+                        previous.getColorAt(i, _color);
                         instancedMesh.setColorAt(i, _color);
                     }
                 }
                 instancedMesh.instanceMatrix.needsUpdate = true;
                 if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
+                // the old InstancedMesh owns its own instanceMatrix/instanceColor GPU buffers -
+                // release them now that everything relevant has been copied off of it.
+                destroyInstancedMesh(previous);
             }
 
             instancedMeshRef.current = instancedMesh;
             // add back to the scene
-            if (parentRef?.current) parentRef.current!.add(instancedMesh);
+            parentRef.current?.add(instancedMesh);
             manageInstances(count);
+            // intentionally keyed on `count` alone: `color`/`children` only seed a *new*
+            // InstancedMesh's initial state and aren't meant to rebuild it on every change.
         }, [count]);
+
         const createInstanceBody = (index: number) => {
             // create a new body for the instance
             const body = bodySystem.createBody(holderMeshRef.current!, {
                 jitter: new THREE.Vector3(1, 0.1, 1)
             });
             // add the body to the physics system
-            const handle = bodySystem.addExistingBody(instancedMeshRef.current, body, {
+            const handle = bodySystem.addExistingBody(instancedMeshRef.current!, body, {
                 index: index
             });
-            const state = bodySystem.getBody(handle);
-            return state;
+            // we just added this handle ourselves, so it is guaranteed to resolve
+            return bodySystem.getBody(handle)!;
         };
 
         const manageInstances = (count: number) => {
-            // check if instances already exists
-            //@ts-ignore
-            let instances: BodyState[] = instanceStates.current || [];
+            // check if instances already exist
+            let instances: BodyState[] = instanceStates.current;
             // all of the current instances need to get their instanceMesh updated
-
             instances.forEach((instance) => {
-                instance.object = instancedMeshRef.current;
+                instance.object = instancedMeshRef.current!;
             });
 
             // if the count is less than the current instances, remove the extras
@@ -120,29 +175,84 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
                 // split the array and get an array of extras to be deleted
                 const extras = instances.slice(count);
                 instances = instances.slice(0, count);
-                // remove the extras
+                // remove the extras - this unregisters each body from bodySystem's maps
                 extras.forEach((instance) => instance.destroy());
             } else if (count > instances.length) {
                 // if the count is greater than the current instances, add the extras
                 for (let i = instances.length; i < count; i++) {
-                    //@ts-ignore
                     instances.push(createInstanceBody(i));
                 }
             }
             // update the instance states
             instanceStates.current = instances;
         };
-        // cleanup
-        useUnmount(() => {
-            // remove the instancedMesh from the scene
-            if (instancedMeshRef.current) {
-                instancedMeshRef.current.parent.remove(instancedMeshRef.current);
+        //* Events -------------------------------------------
+        // Runs after the effect above, so the instance bodies exist. One subscription per
+        // instance body, all dropped together when `count` changes or the mesh unmounts. The
+        // payload's `target.index` says which instance it was.
+        const enter = useEventCallback(onCollisionEnter);
+        const persist = useEventCallback(onCollisionPersist);
+        const exit = useEventCallback(onCollisionExit);
+        const sensorEnter = useEventCallback(onSensorEnter ?? onIntersectionEnter);
+        const sensorExit = useEventCallback(onSensorExit ?? onIntersectionExit);
+        const sleep = useEventCallback(onSleep);
+        const wake = useEventCallback(onWake);
+        // which handlers are present, as a value - so an inline arrow does not resubscribe
+        const subscribed = [
+            onCollisionEnter,
+            onCollisionPersist,
+            onCollisionExit,
+            onSensorEnter ?? onIntersectionEnter,
+            onSensorExit ?? onIntersectionExit,
+            onSleep,
+            onWake
+        ]
+            .map((handler) => (handler ? 1 : 0))
+            .join('');
+        useEffect(() => {
+            const instances = (instanceStates.current || []) as BodyState[];
+            if (!instances.length) return;
+            const pairs: [keyof BodyEventMap, unknown][] = [
+                ['collisionEnter', onCollisionEnter && enter],
+                ['collisionPersist', onCollisionPersist && persist],
+                ['collisionExit', onCollisionExit && exit],
+                ['sensorEnter', (onSensorEnter ?? onIntersectionEnter) && sensorEnter],
+                ['sensorExit', (onSensorExit ?? onIntersectionExit) && sensorExit],
+                ['sleep', onSleep && sleep],
+                ['wake', onWake && wake]
+            ];
+            const offs: (() => void)[] = [];
+            for (const [type, callback] of pairs) {
+                if (!callback) continue;
+                for (const instance of instances) offs.push(instance.on(type, callback as never));
             }
-            // remove the instances from the physics system
-            const instances: any = instanceStates.current || [];
-            instances.forEach((instance: BodyState) => {
+            return () => {
+                for (const off of offs) off();
+            };
+            // biome-ignore lint/correctness/useExhaustiveDependencies: `subscribed` stands in for which handlers are present, `count` for the instance set
+        }, [count, subscribed]);
+
+        // cleanup: remove every body this component created, and release the InstancedMesh (and
+        // anything it exclusively owns) so nothing outlives the component - see #24.
+        useUnmount(() => {
+            const instances = instanceStates.current;
+            instances.forEach((instance) => {
                 instance.destroy();
             });
+            instanceStates.current = [];
+
+            const mesh = instancedMeshRef.current;
+            if (mesh) destroyInstancedMesh(mesh);
+            instancedMeshRef.current = null;
+
+            if (ownedGeometryRef.current) {
+                ownedGeometryRef.current.dispose();
+                ownedGeometryRef.current = null;
+            }
+            if (ownedMaterialRef.current) {
+                ownedMaterialRef.current.dispose();
+                ownedMaterialRef.current = null;
+            }
         });
 
         return (
@@ -152,7 +262,7 @@ export const InstancedRigidBodyMesh: React.FC<InstancedRigidBodyMeshProps> = mem
                 </mesh>
             </>
         );
-    })
+    }
 );
 /* this is a snippet of something I made in response to a rapier question
 we might want it here too
@@ -171,7 +281,7 @@ const createRapierInstanceArray(instanceMatrix: THREE.instanceMatrix)  {
         tempRotation.setFromQuaternion(tempQuaternion);
         instances.push({key: instance+ i, position: tempPosition, rotation: tempRotation.array, scale: tempScale});
     }
-    
+
     return instances;
 }
 */

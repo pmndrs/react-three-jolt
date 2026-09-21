@@ -2,8 +2,9 @@ import { Environment } from '@react-three/drei';
 import { Physics, RigidBody } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt-addons';
 import { useDemo } from '../App';
+import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 export function JustBoxes() {
-    const { debug, paused, interpolate, physicsKey } = useDemo();
+    const { debug, paused, interpolate, physicsKey, module } = useDemo();
 
     const defaultBodySettings = {
         mRestitution: 0.1
@@ -12,6 +13,7 @@ export function JustBoxes() {
     // draw 5 cubes that land on the floor
     return (
         <Physics
+            module={module}
             paused={paused}
             key={physicsKey}
             interpolate={interpolate}
@@ -19,6 +21,7 @@ export function JustBoxes() {
             gravity={22}
             defaultBodySettings={defaultBodySettings}
         >
+            <JoltMemoryRegistrar />
             <Floor position={[0, 0, 0]} size={100}>
                 <meshStandardMaterial />
             </Floor>

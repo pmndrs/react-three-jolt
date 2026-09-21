@@ -3,6 +3,8 @@
 import { CameraControls } from '@react-three/drei';
 import { Canvas, useThree } from '@react-three/fiber';
 import { vec3 } from '@react-three/jolt';
+import type Jolt from 'jolt-physics';
+import { useControls } from 'leva';
 import { Perf } from 'r3f-perf';
 import type { JSX } from 'react';
 import {
@@ -12,14 +14,18 @@ import {
     Suspense,
     useContext,
     useEffect,
+    useMemo,
     //useRef,
     //useEffect,
     useState
 } from 'react';
-import { NavLink, NavLinkProps, Route, Routes, useLocation } from 'react-router';
+import { NavLink, type NavLinkProps, Route, Routes, useLocation } from 'react-router';
 import { BallBox } from './examples/BallBox';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
+import { Constraints } from './examples/Constraints';
 import { CubeHeap } from './examples/CubeHeap';
+import { FloatingPlatforms } from './examples/FloatingPlatforms';
+import { FooterFunnel } from './examples/FooterFunnel';
 import { FourWheelDemo } from './examples/FourWheelsWithHeightmap';
 import { HeightfieldDemo } from './examples/Heightfield';
 import { Impulses } from './examples/Impulses';
@@ -28,13 +34,29 @@ import { MotionSources } from './examples/motionSources';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
+import { JoltMemoryReadout } from './JoltMemoryReadout';
+import {
+    getJoltFactory,
+    JOLT_VARIANTS,
+    type JoltVariant,
+    readVariantFromLocation,
+    setVariantInLocation
+} from './joltModules';
 
 const demoContext = createContext<{
     debug: boolean;
     paused: boolean;
     interpolate: boolean;
     physicsKey: number;
-}>({ debug: false, paused: false, interpolate: true, physicsKey: 0 });
+    /** The jolt-physics build variant `<Physics module>` should initialise (issue #22 / #54). */
+    module: () => Promise<typeof Jolt>;
+}>({
+    debug: false,
+    paused: false,
+    interpolate: true,
+    physicsKey: 0,
+    module: getJoltFactory('wasm-compat')
+});
 
 export const useDemo = () => useContext(demoContext);
 
@@ -68,7 +90,7 @@ export function ControlWrapper(props: any) {
         const newPosition = vec3.three(position);
         const newTarget = vec3.three(target);
         if (controls)
-            //@ts-ignore can't get the types to work here
+            //@ts-expect-error can't get the types to work here
             controls.setLookAt(
                 newPosition.x,
                 newPosition.y,
@@ -118,6 +140,13 @@ const routes: Routes = {
         background: '#3d405b',
         element: <CubeHeap />
     },
+    FloatingPlatforms: {
+        label: 'Floating Platforms',
+        position: [0, 30, 60],
+        target: [0, 5, 0],
+        background: '#264653',
+        element: <FloatingPlatforms />
+    },
     Vehicle: {
         position: [2, 25, 51],
         target: [0, 1, 10],
@@ -156,6 +185,20 @@ const routes: Routes = {
         transition: false,
         background: '#141622',
         element: <BallBox />
+    },
+    Constraints: {
+        position: [0, 34, 62],
+        target: [0, 8, -8],
+        background: '#3d405b',
+        element: <Constraints />
+    },
+    FooterFunnel: {
+        label: 'Footer Funnel',
+        position: [0, 2, 40],
+        target: [0, 2, 0],
+        transition: false,
+        background: '#141622',
+        element: <FooterFunnel />
     }
 };
 
@@ -166,6 +209,23 @@ export const App = () => {
     const [paused, setPaused] = useState<boolean>(false);
     const [interpolate, setInterpolate] = useState<boolean>(true);
     const [physicsKey, setPhysicsKey] = useState<number>(0);
+
+    // Which jolt-physics build backs every <Physics> world this session (issue #22 / #54). Read
+    // once from `?jolt=` - `initJolt` refuses to swap modules while a world exists, and every
+    // route here mounts/unmounts its own world, so changing this after the fact means reloading
+    // (see `setVariantInLocation`), not updating this piece of state.
+    const [variant] = useState<JoltVariant>(() => readVariantFromLocation());
+    const joltModule = useMemo(() => getJoltFactory(variant), [variant]);
+    useControls('Jolt Module (reloads on change)', {
+        build: {
+            value: variant,
+            options: JOLT_VARIANTS,
+            onChange: (value: JoltVariant, _key, { initial }) => {
+                if (initial || value === variant) return;
+                setVariantInLocation(value);
+            }
+        }
+    });
 
     // visuals
     const [background, setBackground] = useState<string>('#3d405b');
@@ -215,7 +275,9 @@ export const App = () => {
                         target={cameraProps?.target}
                         transition={cameraProps?.transition}
                     />
-                    <demoContext.Provider value={{ debug, paused, interpolate, physicsKey }}>
+                    <demoContext.Provider
+                        value={{ debug, paused, interpolate, physicsKey, module: joltModule }}
+                    >
                         <Routes>
                             {Object.keys(routes).map((key) => (
                                 <Route path={key} key={key} element={routes[key].element} />
@@ -224,6 +286,7 @@ export const App = () => {
                     </demoContext.Provider>
                     {perf && <Perf position="top-left" minimal className="perf" />}
                 </Canvas>
+                <JoltMemoryReadout variant={variant} />
             </Suspense>
 
             <div

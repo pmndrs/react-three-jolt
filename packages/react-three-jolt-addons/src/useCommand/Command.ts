@@ -7,11 +7,18 @@ export type CommandVector = { x: number; y: number };
 /** Every value a command can report. */
 export type CommandValue = string | number | boolean | CommandVector;
 
-/** The payload gamepad.js hands us. It is a plain object, not a DOM event. */
+/**
+ * The payload the gamepad poller hands us. It is a plain object, not a DOM event, and it keeps
+ * the shape `gamepad.js` used to emit (`{ index, axis | button, value, pressed }`) so anything
+ * written against the old events still reads.
+ */
 export type GamepadEventDetail = {
+    /** which gamepad (`Gamepad.index`) */
     index: number;
     axis?: number;
     button?: number;
+    /** standard mapping name of `button`, e.g. `A` or `DPadUp`; see `gamepad.ts` */
+    name?: string;
     value: number;
     pressed?: boolean;
 };
@@ -23,7 +30,7 @@ export type GamepadInputEvent = {
 /** Anything that can trigger a command. */
 export type CommandEvent = KeyboardEvent | MouseEvent | GamepadInputEvent;
 
-/** DOM UI events carry a numeric `detail`, gamepad.js' carry the object above. */
+/** DOM UI events carry a numeric `detail`, gamepad events carry the object above. */
 export function isGamepadInputEvent(event?: CommandEvent): event is GamepadInputEvent {
     return (
         !!event && 'detail' in event && typeof event.detail === 'object' && event.detail !== null

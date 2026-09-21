@@ -1,0 +1,106 @@
+---
+title: Collision groups & layers
+description: Group and sub-group filtering, and the object/broad-phase layers the library presets.
+nav: 6
+---
+
+Jolt filters collisions at three levels: broad-phase layers, object layers, and per-body
+collision groups. The first two are preset by this library; groups and sub-groups are yours.
+
+## Preset layers
+
+Each `<Physics>` world sets up three object layers and maps them onto three broad-phase layers:
+
+| layer | used for | collides with |
+| --- | --- | --- |
+| `Layer.MOVING` | dynamic and kinematic bodies | moving, non-moving |
+| `Layer.NON_MOVING` | static bodies | moving |
+| `Layer.RIG` | character/vehicle rig bodies | nothing — rigs are driven, not collided |
+
+`Layer` and `NUM_OBJECT_LAYERS` are exported if you need the constants, but the tables
+themselves aren't configurable yet. Body layers follow from the `type` you give a
+[`<RigidBody>`](/api/rigid-body).
+
+## Groups and sub-groups
+
+Group filtering is the per-body layer you control. A `group` is a set of bodies with a shared
+filtering relationship; a `subGroup` says what kind of member this body is. The sub-group
+semantics are this library's own extension on top of Jolt's group filter.
+
+> [!IMPORTANT]
+> Filtering is **off by default** — it costs a little per pair, so it is not applied unless
+> asked for. Jolt does not expose `SetCollisionGroup()` to JavaScript, so filtering has to be
+> switched on **when the body is created**: at least one of `group` / `subGroup` must be present
+> at creation. Both can be changed freely afterwards.
+
+```tsx
+<RigidBody group={0} subGroup={1}>
+    <mesh>
+        <boxGeometry args={[5, 0.5, 8]} />
+        <meshStandardMaterial color="#ff4060" />
+    </mesh>
+</RigidBody>
+```
+
+Or, creating bodies by hand:
+
+```ts
+const handle = bodySystem.addBody(mesh, { group: 0, subGroup: 1 });
+const body = bodySystem.getBody(handle);
+if (body) body.subGroup = 2; // fine: it was present at creation
+```
+
+Bodies in **different** groups always collide normally. Everything below is about bodies that
+share a group.
+
+### Sub-group 0 — the default
+
+| | 0 | 1 | 2 | non-members |
+| --- | --- | --- | --- | --- |
+| **Doesn't collide** | ✅ | ✅ | | |
+| **Collides** | | | ✅ | ✅ |
+
+The conventional behaviour: members of the same group pass through each other. They also ignore
+sub-group 1. Note that they don't stack on each other — they merge.
+
+### Sub-group 1 — "normal object"
+
+| | 0 | 1 | 2 | non-members |
+| --- | --- | --- | --- | --- |
+| **Doesn't collide** | ✅ | | | |
+| **Collides** | | ✅ | ✅ | ✅ |
+
+The recommended sub-group for ordinary objects that need to use a filter. They collide with each
+other and with everything else, but still pass through sub-group 0 — so a crate can fall through
+a trapdoor while stacking normally with other crates.
+
+### Sub-group 2 — the filter/gate
+
+| | 0 | 1 | 2 | non-members |
+| --- | --- | --- | --- | --- |
+| **Doesn't collide** | | | | ✅ |
+| **Collides** | ✅ | ✅ | ✅ | |
+
+The inverse: bodies here collide **only** with members of the same group. Everything outside the
+group falls straight through. This is the piece you build one-way barriers, selective platforms
+and filters out of.
+
+## Sensors
+
+A body with `isSensor` reports contacts but blocks nothing — orthogonal to groups, and the basis
+of trigger volumes and [force fields](/api/rigid-body#motion-sources).
+
+```tsx
+<RigidBody isSensor>
+    <mesh>
+        <boxGeometry args={[4, 4, 4]} />
+    </mesh>
+</RigidBody>
+```
+
+## What isn't exposed yet
+
+Broad-phase layer filters, object-layer pair tables and per-cast body/shape filters exist in Jolt
+and are set to permissive defaults here. Queries do expose their filter objects
+(`raycaster.bodyFilter`, `raycaster.objectFilter`, …) if you are willing to work with raw Jolt —
+mind [the ownership rules](/advanced/memory) if you replace one.

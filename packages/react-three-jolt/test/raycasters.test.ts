@@ -11,6 +11,10 @@
 // - unfreed per-cast Jolt allocations (RaycastHit.impactNormal's BodyID/SubShapeID/Vec3 args and
 //   the returned surface normal, plus AdvancedRaycaster's collector and Multicaster never
 //   destroying the Raycaster it owns).
+// - issue #48: hit markers were drawn axis-aligned to world space no matter what surface they hit.
+// - issue #173 (debug-drawing half): drawDebuggingLine/Points/Marker allocated a brand new
+//   THREE.BufferGeometry/Material/Object3D on every single call, so a raycaster that draws its
+//   debug view every cast grew `debugObject.children` and leaked three.js resources without bound.
 
 import * as THREE from 'three';
 import { assert, beforeAll, beforeEach, test } from 'vitest';
@@ -164,6 +168,110 @@ test('allocation count is stable across repeated casts', () => {
         afterFirstBatch,
         `outstanding Jolt allocations grew from ${afterFirstBatch} to ${afterSecondBatch} over 50 more casts - something is leaking every cast`
     );
+});
+
+test('drawMarker orients the marker along the hit surface normal (issue #48)', () => {
+    // A box tilted around X so the face the ray (fired along +Z) hits has a normal with a
+    // nonzero Y component - i.e. NOT the world-space (0, 0, -1)/(0, 1, 0)/etc. axis alignment the
+    // old marker always drew regardless of what it hit.
+    const tiltedMesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2));
+    tiltedMesh.position.set(0, 0, 25);
+    tiltedMesh.rotation.set(Math.PI / 6, 0, 0);
+    const tilted = ps.bodySystem.getBody(
+        ps.bodySystem.addBody(tiltedMesh, { bodyType: 'static' })
+    )!;
+
+    const rc = ps.getRaycaster();
+    rc.origin = new THREE.Vector3(0, 0, 20);
+    rc.direction = new THREE.Vector3(0, 0, 10);
+    const hit = rc.cast() as RaycastHit;
+    assert.isDefined(hit, 'expected the tilted box to be hit');
+
+    const normal = hit.impactNormal.clone().normalize();
+    // sanity check: the tilt must have actually knocked the normal off the world Z axis, or this
+    // test would pass even against the old, always-axis-aligned marker code
+    assert.isAbove(
+        Math.abs(normal.y),
+        0.05,
+        'expected the tilted box to produce a non-axis-aligned surface normal'
+    );
+
+    rc.initDebugging(new THREE.Scene());
+    const marker = rc.drawMarker(hit);
+
+    const expected = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+    assert.approximately(marker.quaternion.x, expected.x, 1e-6, 'marker quaternion x');
+    assert.approximately(marker.quaternion.y, expected.y, 1e-6, 'marker quaternion y');
+    assert.approximately(marker.quaternion.z, expected.z, 1e-6, 'marker quaternion z');
+    assert.approximately(marker.quaternion.w, expected.w, 1e-6, 'marker quaternion w');
+
+    rc.destroy();
+    tilted.destroy();
+});
+
+test('repeated drawMarker calls reuse the pooled marker instead of growing the scene graph or reallocating geometry (issue #173)', () => {
+    const rc = ps.getRaycaster();
+    rc.origin = new THREE.Vector3(0, 0, -10);
+    rc.direction = new THREE.Vector3(0, 0, 30);
+    const hit = rc.cast() as RaycastHit;
+    assert.isDefined(hit, 'setup cast found nothing');
+
+    rc.initDebugging(new THREE.Scene());
+
+    const first = rc.drawMarker(hit);
+    const childCountAfterFirst = rc.debugObject.children.length;
+    const ringGeometry = (first.children[0] as THREE.LineLoop).geometry;
+    const normalGeometry = (first.children[1] as THREE.Line).geometry;
+
+    for (let i = 0; i < 25; i++) {
+        const marker = rc.drawMarker(hit);
+        assert.strictEqual(
+            marker,
+            first,
+            'drawMarker should return the same pooled group every time'
+        );
+        assert.strictEqual(
+            (marker.children[0] as THREE.LineLoop).geometry,
+            ringGeometry,
+            'ring geometry was reallocated on a repeated drawMarker call'
+        );
+        assert.strictEqual(
+            (marker.children[1] as THREE.Line).geometry,
+            normalGeometry,
+            'normal-line geometry was reallocated on a repeated drawMarker call'
+        );
+        assert.strictEqual(
+            rc.debugObject.children.length,
+            childCountAfterFirst,
+            'debugObject.children grew from a repeated drawMarker call'
+        );
+    }
+
+    rc.destroy();
+});
+
+test('cast()-driven debug drawing does not grow the scene graph across repeated casts (issue #173)', () => {
+    const rc = ps.getRaycaster();
+    rc.origin = new THREE.Vector3(0, 0, -10);
+    rc.direction = new THREE.Vector3(0, 0, 30);
+
+    rc.initDebugging(new THREE.Scene());
+    rc.drawPoints = true;
+    rc.drawMarkers = true;
+
+    rc.cast();
+    const childCountAfterFirst = rc.debugObject.children.length;
+    assert.isAbove(childCountAfterFirst, 0, 'expected the debug line/points/marker to be drawn');
+
+    for (let i = 0; i < 25; i++) rc.cast();
+
+    assert.strictEqual(
+        rc.debugObject.children.length,
+        childCountAfterFirst,
+        'debugObject.children grew across repeated cast() calls with debugging enabled'
+    );
+
+    rc.destroy();
 });
 
 // Minimal allocation spy: wraps every embind class constructor hanging off `Raw.module`

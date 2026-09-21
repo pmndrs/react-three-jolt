@@ -1,118 +1,75 @@
-/*
-import type Jolt from 'jolt-physics';
-import { Raw } from '../../raw';
-import { vec3, quat } from '../../utils';
-*/
-import { PhysicsSystem } from '@react-three/jolt';
-import * as THREE from 'three';
-// import { WheelSettings } from './wheels';
-import { VehicleFourWheelManager } from './VehicleManagerFourWheel';
-import { VehicleManagerTwoWheels } from './VehicleManagerTwoWheels';
+import type { PhysicsSystem } from '@react-three/jolt';
+import type * as THREE from 'three';
+import { FourWheelVehicleManager } from './four-wheel-vehicle-manager';
+import { TwoWheelVehicleManager } from './two-wheel-vehicle-manager';
+import type { VehicleManager } from './vehicle-manager';
+import {
+    defaultFourWheelVehicleSettings,
+    defaultTwoWheelVehicleSettings,
+    type ResolvedVehicleSettings,
+    resolveVehicleSettings,
+    type VehicleSettings
+} from './vehicle-settings';
 
+/**
+ * Owns the vehicles of one scene and steps them with the physics loop. One system can hold any
+ * number of vehicles, of either type, addressed by name.
+ */
 export class VehicleSystem {
-    private physicsSystem;
+    private physicsSystem: PhysicsSystem;
 
-    // default car settings
-    defaultVehicleSettings = {
-        type: 'fourWheel',
-        bodyPosition: [0, 4, 0],
-        castType: 'cylinder',
+    /** the defaults a four wheeled vehicle is built from (see `vehicle-settings.ts`) */
+    defaultVehicleSettings = defaultFourWheelVehicleSettings;
+    /** the defaults a two wheeled vehicle is built from */
+    defaultVehicleSettingsTwoWheels = defaultTwoWheelVehicleSettings;
 
-        vehicleLength: 4.0,
-        vehicleWidth: 1.8,
-        vehicleHeight: 0.4,
-        fourWheelDrive: true,
-        frontBackLimitedSlipRatio: 1.4,
-        leftRightLimitedSlipRatio: 1.4,
-        antiRollbar: true,
+    vehicles = new Map<string, VehicleManager>();
 
-        vehicleMass: 1500.0,
-        maxEngineTorque: 500.0,
-        clutchStrength: 10.0,
+    private destroyed = false;
 
-        //ds additional settings
-        splitEngineTorqueFront: 0.5,
-        splitEngineTorqueRear: 0.5,
-        // wheel settings
-        wheels: {
-            width: 0.3,
-            radius: 0.5,
-            wheelOffsetHorizontal: 1.4,
-            wheelOffsetVertical: 0.18,
-            suspensionMinLength: 0.3,
-            suspensionMaxLength: 0.5,
-            maxSteerAngle: THREE.MathUtils.degToRad(30),
-            fl: {
-                maxHandBrakeTorque: 0
-            },
-            fr: {
-                maxHandBrakeTorque: 0
-            },
-            bl: {
-                maxSteerAngle: 0
-            },
-            br: {
-                maxSteerAngle: 0
-            }
-        }
-    };
-
-    defaultVehicleSettingsTwoWheels = {
-        type: 'twoWheel',
-        steerSpeed: 4,
-        casterAngle: THREE.MathUtils.degToRad(30),
-        maxPitchRollAngle: THREE.MathUtils.degToRad(60),
-        vehicleLength: 0.8,
-        vehicleWidth: 0.4,
-        vehicleHeight: 0.6,
-        vehicleMass: 250,
-        wheels: {
-            radius: 0.31,
-            width: 0.05,
-
-            suspensionMinLength: 0.3,
-            suspensionMaxLength: 0.5,
-            front: {
-                suspensionFreq: 1.5,
-                brakeTorque: 500.0,
-                posZ: 0.75,
-                maxSteerAngle: THREE.MathUtils.degToRad(30)
-            },
-            back: {
-                suspensionFreq: 2.0,
-                brakeTorque: 250.0,
-                posZ: -0.75,
-                maxSteerAngle: 0.0
-            }
-        }
-    };
-
-    vehicles = new Map();
+    // The functions handed to the physics system. Subscribing now returns an unsubscribe
+    // (issue #187) rather than matching by identity, but these stay hoisted so `attachToLoop`
+    // does not build a fresh closure on every reattach (issue #140).
+    private readonly handlePreStep = (deltaTime: number) => this.prePhysicsUpdate(deltaTime);
+    private readonly handlePostStep = (deltaTime: number) => this.postPhysicsUpdate(deltaTime);
 
     constructor(physicSystem: PhysicsSystem) {
         this.physicsSystem = physicSystem;
         this.attachToLoop();
     }
 
-    //creates a new settings object by taking the default and input
-    createVehicleSettings(settings: any) {
-        const base = { ...this.defaultVehicleSettings, ...settings };
-        if (base.type === 'twoWheel') {
-            return mergeSettings(base, this.defaultVehicleSettingsTwoWheels);
-        }
-        return base;
+    /**
+     * Detach from the loop and destroy every vehicle this system created (issue #140).
+     * Idempotent.
+     */
+    destroy() {
+        if (this.destroyed) return;
+        this.destroyed = true;
+        this.detachFromLoop();
+        this.vehicles.forEach((vehicle) => vehicle.destroy());
+        this.vehicles.clear();
     }
-    addVehicle(name: string, settings?: any) {
-        settings = this.createVehicleSettings(settings);
-        let vehicle;
-        switch (settings.type) {
-            case 'twoWheel':
-                vehicle = new VehicleManagerTwoWheels(this.physicsSystem, settings);
-                break;
-            default:
-                vehicle = new VehicleFourWheelManager(this.physicsSystem, settings);
-                break;
-        }
+
+    /** Destroy a single vehicle and forget it. Returns true when there was one to remove. */
+    removeVehicle(name: string) {
+        const vehicle = this.vehicles.get(name);
+        if (!vehicle) return false;
+        vehicle.destroy();
+        this.vehicles.delete(name);
+        return true;
+    }
+
+    /** merge the caller's settings over the defaults for the requested vehicle type */
+    createVehicleSettings(settings?: VehicleSettings): ResolvedVehicleSettings {
+        return resolveVehicleSettings(settings);
+    }
+
+    addVehicle(name: string, settings?: VehicleSettings): VehicleManager {
+        const resolved = this.createVehicleSettings(settings);
+        const vehicle =
+            resolved.type === 'twoWheel'
+                ? new TwoWheelVehicleManager(this.physicsSystem, resolved)
+                : new FourWheelVehicleManager(this.physicsSystem, resolved);
         this.vehicles.set(name, vehicle);
         return vehicle;
     }
@@ -129,29 +86,33 @@ export class VehicleSystem {
 
     //* Physics Loop ====================================
 
+    /** Unsubscribes for the two loop callbacks; inline arrows could never be removed before. */
+    private loopUnsubscribes: (() => void)[] = [];
+
     private attachToLoop() {
-        this.physicsSystem.addPreStepListener((deltaTime: number) =>
-            this.prePhysicsUpdate(deltaTime)
-        );
-        this.physicsSystem.addPostStepListener((deltaTime: number) =>
-            this.postPhysicsUpdate(deltaTime)
-        );
+        this.detachFromLoop();
+        this.loopUnsubscribes = [
+            this.physicsSystem.onBeforeStep(this.handlePreStep),
+            this.physicsSystem.onAfterStep(this.handlePostStep)
+        ];
+    }
+
+    /** Stop stepping the vehicles. Call before dropping the system. */
+    detachFromLoop() {
+        for (const off of this.loopUnsubscribes) off();
+        this.loopUnsubscribes = [];
     }
 
     prePhysicsUpdate(deltaTime: number) {
+        if (this.destroyed) return;
         this.vehicles.forEach((vehicle) => {
             vehicle.prePhysicsUpdate(deltaTime);
         });
     }
     postPhysicsUpdate(deltaTime: number) {
+        if (this.destroyed) return;
         this.vehicles.forEach((vehicle) => {
             vehicle.postPhysicsUpdate(deltaTime);
         });
     }
-}
-
-//utils
-// take two settings objects, clone them, and then merge them
-function mergeSettings(defaultSettings: any, settings: any) {
-    return { ...defaultSettings, ...settings };
 }

@@ -1,0 +1,211 @@
+---
+title: Shapes
+description: Automatic shape detection, the Shape component, compound shapes and heightfields.
+nav: 4
+---
+
+A Jolt body needs a collision shape. Most of the time you don't build one: `<RigidBody>` reads
+the geometry of the meshes inside it and picks a shape for you.
+
+## Automatic shapes
+
+Every mesh under a `<RigidBody>` contributes a shape, chosen from its geometry type:
+
+| geometry | shape |
+| --- | --- |
+| `BoxGeometry` | box (from the geometry's own parameters) |
+| `SphereGeometry` | sphere (bounding sphere radius) |
+| `CapsuleGeometry` | capsule |
+| `CylinderGeometry` | cylinder |
+| anything else | **convex hull** of the merged vertices |
+
+Non-parametric geometry — an imported GLTF, a lathe, a custom `BufferGeometry` — becomes a
+convex hull. That is a deliberate default: hulls are fast and always valid, where a triangle mesh
+is neither.
+
+Override per body, or for the whole world:
+
+```tsx
+<RigidBody shape="sphere">{/* ... */}</RigidBody>
+
+<Physics defaultShape="box">{/* every body that doesn't say otherwise */}</Physics>
+```
+
+### `AutoShape`
+
+```ts
+type AutoShape =
+    | 'box'
+    | 'sphere'
+    | 'capsule'
+    | 'taperedCapsule'
+    | 'cylinder'
+    | 'convex'
+    | 'trimesh'
+    | 'compound'
+    | 'heightfield';
+```
+
+### Trimeshes
+
+A triangle mesh is only ever used when you ask for it — `shape="trimesh"` — because it is the
+most restricted shape Jolt has. Per Jolt's own docs, dynamic and kinematic trimeshes cannot
+collide with each other or with heightfields, and trying throws. Use them for static level
+geometry; use `convex` (or a compound of convex parts) for anything that moves.
+
+**Dynamic bodies cannot use a trimesh.** A Jolt mesh shape is a one-sided triangle soup with no
+inside, so mesh vs mesh does not collide at all and a dynamic mesh body sinks through the world
+and ends up with a `NaN` position ([issue #112](https://github.com/pmndrs/react-three-jolt/issues/112),
+[Jolt docs](https://jrouwe.github.io/JoltPhysics/#dynamic-mesh-shapes)). Asking for one warns and
+builds a convex hull of the same points instead. Pick a different behaviour with
+`dynamicMeshStrategy`:
+
+| value | behaviour |
+| --- | --- |
+| `'convex'` (default) | warn and use a convex hull of the mesh's points |
+| `'error'` | throw, so the mistake is loud |
+| `'decompose'` | reserved for a convex decomposition; throws with an explanation for now |
+
+Static (and kinematic) bodies keep a real mesh shape.
+
+## Compound shapes
+
+Put several meshes in one `<RigidBody>` and you get a compound shape — positioned in the body's
+local space, exactly as they render:
+
+```tsx
+<RigidBody position={[-2, 15, 4]}>
+    <mesh>
+        <cylinderGeometry args={[0.5, 0.5, 3, 32]} />
+        <meshStandardMaterial color="yellow" />
+    </mesh>
+    <mesh position={[0, -2, 0]}>
+        <sphereGeometry args={[1, 32, 32]} />
+        <meshStandardMaterial color="yellow" />
+    </mesh>
+    <mesh position={[0, 2, 0]}>
+        <sphereGeometry args={[1, 32, 32]} />
+        <meshStandardMaterial color="yellow" />
+    </mesh>
+</RigidBody>
+```
+
+## `<Shape>`
+
+When the collision shape should not match what is drawn — a simple hull around a detailed model,
+an invisible trigger volume, a hand-tuned capsule for a character — declare it with `<Shape>`.
+It renders nothing; it only describes geometry to Jolt.
+
+```tsx
+import { RigidBody, Shape } from '@react-three/jolt';
+
+<RigidBody position={[0, 5, 0]}>
+    <Shape type="capsule" radius={0.5} height={2}>
+        <Shape type="sphere" radius={1} position={[0, 2, 0]} />
+        <Shape type="sphere" radius={1} position={[0, -2, 0]} />
+    </Shape>
+    <mesh>
+        <capsuleGeometry args={[0.5, 2]} />
+        <meshStandardMaterial color="yellow" />
+    </mesh>
+</RigidBody>;
+```
+
+A `<RigidBody>` containing a `<Shape>` waits for it before creating the body, and the top-level
+`<Shape>` becomes the body's shape. Nesting `<Shape>` inside `<Shape>` builds a compound.
+
+| prop | type | |
+| --- | --- | --- |
+| `type` | `AutoShape` | default `'box'` |
+| `position` | `number[]` | offset within the parent compound |
+| `rotation` | `[number, number, number]` | |
+| `scale` | `number[]` | |
+| `radius` | `number` | sphere, capsule, cylinder, tapered capsule |
+| `height` | `number` | capsule, cylinder, tapered capsule |
+| `topRadius` | `number` | tapered capsule |
+| `size` | `number[]` | box half-extents |
+| `geometry` | `THREE.BufferGeometry` | derive a `convex` or `trimesh` shape from geometry |
+| `verts` / `indexes` | `number[]` | raw mesh data |
+| `dynamic` | `boolean` | build a mutable compound instead of a static one |
+
+> [!WARNING]
+> `dynamic` cannot change after the first render — the component throws if it does. Mutable
+> compound support (`addShape`/`modifyShape` at runtime) is partially implemented; treat compound
+> shapes as static for now.
+
+## Heightfields
+
+`<Heightfield>` builds a plane, displaces it from a heightmap image, and creates a matching Jolt
+heightfield body.
+
+```tsx
+import { Heightfield } from '@react-three/jolt';
+
+<Heightfield url="/heightmap.png" size={128} width={256} height={256} />;
+```
+
+| prop | type | default | |
+| --- | --- | --- | --- |
+| `url` | `string` | — | heightmap image; also used as the display texture |
+| `texture` | `string` | — | use a different texture for display |
+| `width` / `height` | `number` | `128` | world size of the plane |
+| `size` | `number` | `256` | **samples per edge** — see below |
+| `displacementScale` | `number` | `25.6` | maximum height |
+| `position` | `Vector3Tuple` | — | |
+
+### The sample-size rule
+
+`size` is the number of height samples along each edge, and Jolt is strict about it. The grid
+must be:
+
+- **square** — `size × size` samples;
+- a **multiple of the block size** (`2` by default);
+- **at least two blocks** wide, i.e. `size >= 4`.
+
+A power of two is the most efficient but is not required. Break the rule and you get a thrown
+error naming the offending count rather than a silent failure — the plane is built with
+`size - 1` segments per edge so that it produces exactly `size` samples.
+
+> [!CAUTION]
+> Heightfields are heavy. Keep them few and modest, and combine them with ordinary static bodies
+> rather than making one enormous field. Contact events on heightfields are unreliable: they fire
+> per triangle, which confuses the contact bookkeeping, so "stopped touching" may never arrive.
+
+Changing `url` cancels the in-flight load and replaces the body; at most one heightfield body
+exists per component at a time.
+
+## Helper floors
+
+```tsx
+import { MeshFloor } from '@react-three/jolt';
+import { Floor } from '@react-three/jolt-addons';
+
+<Floor size={40} position={[0, -1, 0]} />;   // a static box RigidBody
+<MeshFloor size={20} />;                     // a bumpy Jolt mesh floor
+```
+
+`<Floor>` (addons) is a plain static `<RigidBody>` with a box — what you want most of the time.
+`<MeshFloor>` builds a Jolt mesh floor body directly and derives the three.js geometry from the
+resulting shape; it is also a readable example of talking to Jolt by hand.
+
+## Building shapes yourself
+
+If you need a `Jolt.Shape` outside the component tree:
+
+```ts
+import { createShapeFromSettings, generateShapeSettings, releaseShape } from '@react-three/jolt';
+
+const settings = generateShapeSettings('sphere', { radius: 0.5 });
+const shape = createShapeFromSettings(settings); // frees `settings`, takes a reference for you
+
+// ... later
+releaseShape(shape);
+```
+
+`createShapeFromSettings` realises the shape, takes a reference on it, destroys the settings, and
+throws with Jolt's own error message if creation failed — the manual `settings.Create().Get()`
+dance leaks, and silently hands back an invalid shape on error. Bodies created through
+`bodySystem` own their shape and release it when the body is removed; a shape you make yourself
+is yours to `releaseShape`.
+
+See [Memory & lifecycle](/advanced/memory) for the rules behind that.
