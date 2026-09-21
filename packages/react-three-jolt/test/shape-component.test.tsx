@@ -15,7 +15,7 @@ import { preload } from 'suspend-react';
 import * as THREE from 'three';
 import { assert, beforeAll, describe, expect, test, vi } from 'vitest';
 import { Physics } from '../src/components/Physics';
-import { RigidBody, RigidBodyContext } from '../src/components/RigidBody';
+import { RigidBody, rigidBodyContext } from '../src/components/RigidBody';
 import { Shape, type ShapeProps } from '../src/components/shape/Shape';
 import { useJolt } from '../src/hooks';
 import { initJolt, Raw } from '../src/raw';
@@ -59,7 +59,7 @@ const Harness = ({
     onNotify,
     ...props
 }: ShapeProps & { log: ShapeLog; onNotify?: () => void }) => (
-    <RigidBodyContext.Provider
+    <rigidBodyContext.Provider
         value={
             {
                 body: undefined,
@@ -74,7 +74,7 @@ const Harness = ({
         }
     >
         <Shape {...props} />
-    </RigidBodyContext.Provider>
+    </rigidBodyContext.Provider>
 );
 
 const boundsSize = (shape: Jolt.Shape) => {

@@ -2,14 +2,23 @@
 // #156). The React trees drive the real WASM module through @react-three/test-renderer, and the
 // physics system is stepped by hand so the assertions are deterministic.
 
-import { create } from '@react-three/test-renderer';
+import { create, waitFor } from '@react-three/test-renderer';
 import React from 'react';
 import { assert, beforeAll, test } from 'vitest';
 import { Physics, RigidBody } from '../src';
 import { useJolt } from '../src/hooks';
 import { initJolt } from '../src/raw';
+import type { BodySystem } from '../src/systems/body-system';
 import type { CollisionEnterPayload, CollisionPayload } from '../src/systems/events';
 import type { PhysicsSystem } from '../src/systems/physics-system';
+
+function totalBodyCount(bodySystem: BodySystem) {
+    return (
+        bodySystem.dynamicBodies.size +
+        bodySystem.staticBodies.size +
+        bodySystem.kinematicBodies.size
+    );
+}
 
 const STEP = 1 / 60;
 
@@ -297,6 +306,55 @@ test('<Physics onSettled / onActivityChange>', async () => {
     assert.equal(settled, 1, 'the world never reported itself settled');
     // one dynamic body; the floor is static and never awake
     assert.deepEqual(activity.at(-1), [0, 1]);
+
+    await renderer.unmount();
+});
+
+test('a StrictMode mount leaves exactly one body, and unmount removes it (#57)', async () => {
+    // <RigidBody>'s teardown effect was `useUnmount`; converting it to a plain `useEffect`
+    // returning a cleanup (#57) has to keep StrictMode's mount -> unmount -> mount from leaving a
+    // duplicate (or, the other way, from removing the body the surviving mount still needs).
+    let bodySystem: BodySystem | undefined;
+
+    const renderer = await create(
+        <Physics>
+            <Capture
+                onSystem={(s) => {
+                    bodySystem = s.bodySystem;
+                }}
+            />
+            <React.StrictMode>
+                <RigidBody position={[0, 1, 0]}>
+                    <mesh>
+                        <boxGeometry args={[1, 1, 1]} />
+                    </mesh>
+                </RigidBody>
+            </React.StrictMode>
+        </Physics>
+    );
+    await waitFor(() => !!bodySystem);
+    await waitFor(() => totalBodyCount(bodySystem!) === 1);
+    // give any (incorrect) duplicate creation a chance to show up before asserting
+    await Promise.resolve();
+    assert.equal(
+        totalBodyCount(bodySystem!),
+        1,
+        'StrictMode mount left a stale or duplicate body behind'
+    );
+
+    // assert teardown via update() (dropping the StrictMode subtree), same as the
+    // InstancedRigidBody/Shape StrictMode tests - a bare renderer.unmount() would not
+    // distinguish "removed on unmount" from "removed because the whole tree went away".
+    await renderer.update(
+        <Physics>
+            <Capture
+                onSystem={(s) => {
+                    bodySystem = s.bodySystem;
+                }}
+            />
+        </Physics>
+    );
+    assert.equal(totalBodyCount(bodySystem!), 0, 'the body was not removed on unmount');
 
     await renderer.unmount();
 });

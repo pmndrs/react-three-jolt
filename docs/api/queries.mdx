@@ -193,7 +193,7 @@ thick ground probe, a camera collision test. There is no hook yet; take one from
 system and destroy it yourself.
 
 ```tsx
-import { Shapecaster, ShapecastHit, useJolt, useUnmount } from '@react-three/jolt';
+import { Shapecaster, ShapecastHit, useJolt } from '@react-three/jolt';
 import { useEffect } from 'react';
 import * as THREE from 'three';
 
@@ -201,7 +201,7 @@ export function GroundProbe() {
     const { physicsSystem } = useJolt();
     const shapecaster: Shapecaster = physicsSystem.getShapecaster();
 
-    useUnmount(() => shapecaster.destroy());
+    useEffect(() => () => shapecaster.destroy(), [shapecaster]);
 
     useEffect(() => {
         shapecaster.origin = new THREE.Vector3(0, 5, 0);
@@ -231,7 +231,7 @@ overlapping right now, and by how much". This is what you want for triggers, spa
 push-out resolution.
 
 ```tsx
-import { ShapeCollider, useJolt, useUnmount } from '@react-three/jolt';
+import { ShapeCollider, useJolt } from '@react-three/jolt';
 import { useEffect } from 'react';
 import * as THREE from 'three';
 
@@ -239,7 +239,7 @@ export function Overlap() {
     const { physicsSystem } = useJolt();
     const collider: ShapeCollider = physicsSystem.getShapeCollider();
 
-    useUnmount(() => collider.destroy());
+    useEffect(() => () => collider.destroy(), [collider]);
 
     useEffect(() => {
         collider.position = new THREE.Vector3(0, 1, 0);
@@ -367,7 +367,7 @@ freed only by `destroy()`.
 `Vector3` re-creates the caster on every render. Hoist them, or use `raycaster.set(...)`.
 
 - Anything from `physicsSystem.getShapecaster()` / `getShapeCollider()` / `getRaycaster()` is
-  yours: pair it with `useUnmount(() => caster.destroy())`.
+  yours: pair it with `useEffect(() => () => caster.destroy(), [caster])`.
 - `destroy()` is idempotent on every query type — see [Shared base](#shared-base). `ShapeCollider`
   goes one step further and also nulls out every field it freed, so a stray call afterwards fails
   loudly instead of touching freed memory; the others just no-op on a second call.

@@ -1,5 +1,9 @@
 export type Vector3Tuple = [number, number, number];
-export type Vector4Tuple = [number, number, number, number] | number[];
+/**
+ * A strict 4-tuple, e.g. a quaternion `[x, y, z, w]`. Used to be `| number[]`, which defeated
+ * the tuple entirely - any `number[]` (including one of the wrong length) satisfied it (#148).
+ */
+export type Vector4Tuple = [number, number, number, number];
 
 export type PhysicsConfig = {
     timeStep: number | 'vary';

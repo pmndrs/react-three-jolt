@@ -20,7 +20,7 @@
 // `name` and the per-sub-shape event props are issue #13's and behave exactly as on `<Shape>`.
 // `sensor`, `friction` and `restitution` are **body level** in Jolt and are documented as such on
 // `ShapeProps`; mass and density belong on `<RigidBody>`.
-import React, { forwardRef, memo } from 'react';
+import React, { memo } from 'react';
 
 import type { NumberArray, ShapeOptions, Vec3Tuple } from '../../systems';
 import { Shape, type ShapeHandle, type ShapeProps } from './Shape';
@@ -53,6 +53,9 @@ export type ColliderProps = Omit<
  * Build a collider component: `args` -> `<Shape>` options. One factory so every collider agrees
  * on prop forwarding, ref forwarding, memoisation and the `isJoltShape` marker `<RigidBody>`
  * looks for when it decides whether to wait for child shapes.
+ *
+ * React 19 native convention (#49): `ref` is a plain prop (`<Shape>`'s own `ref?:
+ * React.Ref<ShapeHandle>`), forwarded straight through - no `forwardRef` wrapper needed.
  */
 const makeCollider = <Args extends readonly unknown[]>(
     displayName: string,
@@ -60,21 +63,14 @@ const makeCollider = <Args extends readonly unknown[]>(
     toOptions: (args: Args) => Omit<ShapeOptions, 'children'>,
     defaultArgs: Args
 ) => {
-    const Collider = memo(
-        forwardRef<ShapeHandle, ColliderProps & { args?: Args }>(
-            ({ args, ...props }, forwardedRef) => (
-                <Shape
-                    ref={forwardedRef}
-                    type={type}
-                    {...toOptions(args ?? defaultArgs)}
-                    {...props}
-                />
-            )
-        )
-    ) as React.MemoExoticComponent<
-        React.ForwardRefExoticComponent<
-            ColliderProps & { args?: Args } & React.RefAttributes<ShapeHandle>
-        >
+    const Collider = memo(function Collider({
+        args,
+        ref,
+        ...props
+    }: ColliderProps & { args?: Args; ref?: React.Ref<ShapeHandle> }) {
+        return <Shape ref={ref} type={type} {...toOptions(args ?? defaultArgs)} {...props} />;
+    }) as React.MemoExoticComponent<
+        (props: ColliderProps & { args?: Args; ref?: React.Ref<ShapeHandle> }) => React.ReactNode
     > & { isJoltShape?: boolean };
     Collider.displayName = displayName;
     // `<RigidBody>` scans its children for shapes; the marker beats a displayName string match.

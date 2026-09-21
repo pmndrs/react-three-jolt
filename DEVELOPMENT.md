@@ -102,6 +102,36 @@ future package or tool needs the classic API directly and TS 7 causes problems, 
 package's `typescript` devDependency back to `^5.9.3` - nothing else in the pipeline depends on
 which major version is used for typecheck/declarations.
 
+## Component convention
+
+React 19 (shipped in the `@react-three/fiber` 10 upgrade) makes `ref` an ordinary prop, so
+`forwardRef` is no longer needed to accept one - issue #49. Before that, this codebase had four
+different shapes for a component: `React.FC<Props> = memo(forwardRef(...))` (`RigidBody`,
+`Shape`), a bare `FC` with no ref (`Physics`, `Debug`, `Attractor`), a plain `function` (`Vehicle`,
+`Floor`), and `memo()` with no `forwardRef` even though it took a ref via a plain prop
+(`InstancedRigidBodyMesh`). The convention now, for every exported component:
+
+- **Plain function component.** No `forwardRef`, no `React.FC`/`FC<Props>` type annotation on the
+  export - `export function Foo(props: FooProps) { ... }` or
+  `export const Foo = memo(function Foo(props: FooProps) { ... })`. A named function expression
+  (rather than an anonymous arrow) gives devtools a component name for free, without a separate
+  `Foo.displayName = 'Foo'` assignment.
+- **`ref` is a normal, documented prop** on the component's own props interface, typed as
+  `React.Ref<T>` (or `React.Ref<T | undefined>` when the ref is filled in asynchronously, e.g.
+  `RigidBody`'s body doesn't exist until the underlying Jolt body is created), destructured like
+  any other prop and forwarded with `useForwardedRef` (or `useImperativeHandle`, for a ref that
+  exposes something other than a DOM/scene node) exactly as it was under `forwardRef`.
+- **`memo` only where the component actually benefits** - one that renders under a `<Physics>`
+  tree that re-renders often (`RigidBody`, `Shape`, `InstancedRigidBodyMesh`, the collider
+  components, `CharacterController`) keeps it; a component that is cheap to re-render regardless
+  (`Physics`, `Debug`, `Attractor`, `Vehicle`) does not need it added just for consistency.
+- **No `defaultProps`.** Default values are destructuring defaults on the props parameter
+  (`{ size = 20 }: MeshFloorProps`), which is what every component here already did.
+- **Props interfaces are exported** (`RigidBodyProps`, `ShapeProps`, `PhysicsProps`, ...) so a
+  consumer can reference them, and extend the relevant `ThreeElements['...']` type (minus
+  whichever of its keys the component gives its own, incompatible meaning to) when the component
+  spreads leftover props onto a three.js element - see `RigidBodyProps` for the pattern.
+
 ## Documentation
 
 The user-facing documentation lives in [`docs/`](./docs) as MDX and is built by

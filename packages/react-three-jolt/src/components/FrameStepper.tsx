@@ -49,6 +49,11 @@ const RafStepper = ({ onStep }: FrameStepperProps) => {
     return null;
 };
 
+/**
+ * @internal Drives `<Physics>`'s step from either `useFrame` or its own `requestAnimationFrame`
+ * loop. Exported only because `<Physics>` renders it as an ordinary child component; it has no
+ * documented, supported use on its own (issue #148's export-surface audit).
+ */
 export const FrameStepper = memo(({ onStep, type, updatePriority }: FrameStepperProps) => {
     return type === 'independent' ? (
         <RafStepper onStep={onStep} />
