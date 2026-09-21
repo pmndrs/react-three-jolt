@@ -329,9 +329,11 @@ export class CameraRigManager {
 
     //* Camera Boom ========================================
     moveBoom(lookVector: THREE.Vector2Like) {
+        if (this.destroyed) return;
         this.controls.move(lookVector);
     }
     zoom(zoom: number) {
+        if (this.destroyed) return;
         this.controls.zoom(zoom);
     }
 
@@ -532,6 +534,9 @@ export class CameraRigManager {
     //TODO move this to the body system
     //create rig points
     createRigPoint(name: string, options?: RigPointOptions): BodyState {
+        // issue #227: a destroyed rig has already been dropped from the world's disposables, so
+        // creating a body here would be a real Jolt body that nothing ever tears down again.
+        if (this.destroyed) return undefined as unknown as BodyState;
         const {
             color = '#767B91'
             // type = 'sphere',

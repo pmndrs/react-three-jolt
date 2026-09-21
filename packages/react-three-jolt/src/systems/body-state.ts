@@ -12,7 +12,7 @@ import {
 import type { SurfaceMaterialTable } from '../heightField/materials';
 import { Raw } from '../raw';
 
-import { anyQuat, anyVec3, devWarn, joltScratch, quat, vec3 } from '../utils';
+import { anyQuat, anyVec3, devWarn, disposedGuard, joltScratch, quat, vec3 } from '../utils';
 import { type BodySystem, getThreeObjectForBody } from './body-system';
 import { Emitter, type Unsubscribe } from './emitter';
 import { BODY_EVENT_BITS, type BodyEventMap, EventBit } from './events';
@@ -133,6 +133,7 @@ export class BodyState {
     surfaceMaterials?: SurfaceMaterialTable;
 
     get isSleeping() {
+        if (this.checkDisposed()) return false;
         return !this.body.IsActive();
     }
     // TODO: change to this one that doesn't require setting meshType
@@ -150,6 +151,7 @@ export class BodyState {
      * the render sync loop.
      */
     get isStatic() {
+        if (this.checkDisposed()) return false;
         return this.body.IsStatic();
     }
 
@@ -176,6 +178,24 @@ export class BodyState {
     private internalMask = 0;
     /** True once `dispose()` has run; the body is on its way out of the simulation. */
     disposed = false;
+
+    /**
+     * Guard for every public method/getter/setter below (issue #227): a `BodyState` kept alive
+     * past its `<Physics>` world's teardown (an uncancelled `setTimeout`, an event handler, a
+     * closure captured before unmount) must never reach `this.body`/`this.bodyInterface` again -
+     * jolt-physics' module is a page-wide singleton with immediate pointer reuse, so a stale call
+     * would land on *some other* live world's memory instead of failing cleanly.
+     *
+     * Returns `true` (caller returns immediately, with whatever fallback value fits) once
+     * {@link dispose} has run. In debug mode (`setDebug(true)`) it throws first, so the mistake
+     * is loud during development; otherwise it is a silent no-op, matching how a shipped build
+     * behaves.
+     */
+    private checkDisposed(): boolean {
+        if (!this.disposed) return false;
+        disposedGuard(`BodyState '${this.object?.name || `handle ${this.handle}`}'`);
+        return true;
+    }
 
     /**
      * What this body is listening for, as a bitfield. Read inside the Jolt contact callback to
@@ -222,37 +242,40 @@ export class BodyState {
     }
 
     //* Activation & Contact Listeners ===================================
+    /** No-op unsubscribe handed back by every `on*` below once the body is disposed. */
+    private static readonly NOOP_UNSUBSCRIBE: Unsubscribe = () => {};
     /** Subscribe to one of this body's events. Returns the unsubscribe. */
     on<K extends keyof BodyEventMap>(type: K, fn: BodyEventMap[K]): Unsubscribe {
+        if (this.checkDisposed()) return BodyState.NOOP_UNSUBSCRIBE;
         return this.events.on(type, fn);
     }
     /** Fires once when this body starts touching another. */
     onCollisionEnter(fn: BodyEventMap['collisionEnter']): Unsubscribe {
-        return this.events.on('collisionEnter', fn);
+        return this.on('collisionEnter', fn);
     }
     /** Fires every step the contact is maintained. Free from Jolt; zero cost when unused. */
     onCollisionPersist(fn: BodyEventMap['collisionPersist']): Unsubscribe {
-        return this.events.on('collisionPersist', fn);
+        return this.on('collisionPersist', fn);
     }
     /** Fires once when the last sub-shape manifold between the two bodies closes. */
     onCollisionExit(fn: BodyEventMap['collisionExit']): Unsubscribe {
-        return this.events.on('collisionExit', fn);
+        return this.on('collisionExit', fn);
     }
     onSensorEnter(fn: BodyEventMap['sensorEnter']): Unsubscribe {
-        return this.events.on('sensorEnter', fn);
+        return this.on('sensorEnter', fn);
     }
     onSensorExit(fn: BodyEventMap['sensorExit']): Unsubscribe {
-        return this.events.on('sensorExit', fn);
+        return this.on('sensorExit', fn);
     }
     onSleep(fn: BodyEventMap['sleep']): Unsubscribe {
-        return this.events.on('sleep', fn);
+        return this.on('sleep', fn);
     }
     onWake(fn: BodyEventMap['wake']): Unsubscribe {
-        return this.events.on('wake', fn);
+        return this.on('wake', fn);
     }
     /** Synchronous, inside the step. Return false to reject the contact. See docs/events.md. */
     onContactValidate(fn: BodyEventMap['contactValidate']): Unsubscribe {
-        return this.events.on('contactValidate', fn);
+        return this.on('contactValidate', fn);
     }
 
     /** Back compat so the deprecated identity-based removers can still find their handles. */
@@ -275,6 +298,7 @@ export class BodyState {
      * for both, as it always did.
      */
     addActivationListener(listener: (body: BodyState) => void): Unsubscribe {
+        if (this.checkDisposed()) return BodyState.NOOP_UNSUBSCRIBE;
         const handler = () => listener(this);
         const offSleep = this.events.on('sleep', handler);
         const offWake = this.events.on('wake', handler);
@@ -285,6 +309,7 @@ export class BodyState {
     }
     /** @deprecated keep the function {@link addActivationListener} returns. */
     removeActivationListener(listener: ListenerKey) {
+        if (this.checkDisposed()) return;
         this.removeLegacy(listener);
     }
     /**
@@ -296,6 +321,7 @@ export class BodyState {
         listener: LegacyContactListener,
         type: 'added' | 'removed' | 'persisted'
     ): Unsubscribe {
+        if (this.checkDisposed()) return BodyState.NOOP_UNSUBSCRIBE;
         const event =
             type === 'added'
                 ? 'collisionEnter'
@@ -312,10 +338,12 @@ export class BodyState {
      * `activateMotionSource` did - could only ever be removed from the first.
      */
     removeContactListener(listener: ListenerKey) {
+        if (this.checkDisposed()) return;
         this.removeLegacy(listener);
     }
     // get the value of a contact pair
     isContacting(handle: number) {
+        if (this.checkDisposed()) return 0;
         return this.contacts.get(handle) || 0;
     }
 
@@ -341,6 +369,19 @@ export class BodyState {
         // recycled by jolt anyway)
         this.surfaceMaterials?.dispose();
         this.surfaceMaterials = undefined;
+        // stop the step loop from re-aiming a kinematic target at a body that is on its way out
+        this.kinematicTarget = null;
+        this.bodySystem.untrackKinematicTarget(this);
+        // Defense in depth for issue #227: every accessor above checks `disposed` and returns
+        // before reaching these, but nulling them out too means a path that somehow misses the
+        // check throws a plain `TypeError` (caught in dev, silent in prod like everything else
+        // here) instead of touching a freed-and-reused Jolt pointer. Cast through `unknown`
+        // rather than widening the field types - the same idiom `CharacterControllerSystem.destroy()`
+        // uses - so nothing else in this class has to thread an `| undefined` through 100+ call
+        // sites that are provably unreachable once `disposed` is true.
+        this.body = undefined as unknown as Jolt.Body;
+        this.BodyID = undefined as unknown as Jolt.BodyID;
+        this.bodyInterface = undefined as unknown as Jolt.BodyInterface;
     }
     //* Interpolation pose cache ==============================
     /*
@@ -365,6 +406,7 @@ export class BodyState {
      * so `previous*` / `current*` always bracket the last step. Allocation free.
      */
     capturePose() {
+        if (this.checkDisposed()) return;
         if (this.poseCacheValid) {
             this.previousPosition.copy(this.currentPosition);
             this.previousRotation.copy(this.currentRotation);
@@ -381,6 +423,7 @@ export class BodyState {
     }
     /** Drop the pose history, e.g. after a teleport, so the next frame does not lerp across it. */
     resetPoseCache() {
+        if (this.checkDisposed()) return;
         this.poseCacheValid = false;
     }
     /**
@@ -388,6 +431,7 @@ export class BodyState {
      * supplied objects. Allocation free; the caller owns the output.
      */
     getInterpolatedPose(alpha: number, outPosition: Vector3, outRotation: Quaternion) {
+        if (this.checkDisposed()) return;
         outPosition.lerpVectors(this.previousPosition, this.currentPosition, alpha);
         outRotation.copy(this.previousRotation).slerp(this.currentRotation, alpha);
     }
@@ -396,6 +440,7 @@ export class BodyState {
      * hot loop equivalent of the `position` / `rotation` getters, which allocate.
      */
     readPose(outPosition: Vector3, outRotation: Quaternion) {
+        if (this.checkDisposed()) return;
         vec3.joltToThree(this.body.GetPosition(), outPosition);
         quat.joltToThree(this.body.GetRotation(), outRotation);
     }
@@ -403,6 +448,7 @@ export class BodyState {
     //* Updates ===============================================
     //this will be called in loop functions
     update(position: anyVec3, rotation: Jolt.Quat | THREE.Quaternion) {
+        if (this.checkDisposed()) return;
         // if this is a mesh, use basic updates
         if (!this.isInstance) {
             this.object.position.copy(vec3.three(position));
@@ -417,11 +463,17 @@ export class BodyState {
     }
     //* Shapes ===============================================
     // get the shape of the body
-    get shape() {
+    get shape(): Jolt.Shape {
+        // disposed: nothing sensible to hand back, but keeping the return type non-optional
+        // (rather than threading `| undefined` through every caller, most of which are on this
+        // same guarded class) matches how `dispose()` itself nulls `body`/`BodyID` - unreachable
+        // once every caller checks `disposed` first, which every one of them here does.
+        if (this.checkDisposed()) return undefined as unknown as Jolt.Shape;
         return this.body.GetShape();
     }
     // set the shape of the body
     set shape(shape: Jolt.Shape) {
+        if (this.checkDisposed()) return;
         this.bodyInterface.SetShape(this.BodyID, shape, false, Raw.module.EActivation_Activate);
         // update the debug object if it exists
         if (this.debugMesh) this.updateDebugMesh();
@@ -435,10 +487,12 @@ export class BodyState {
      * `{ type: 'mutableCompound' }` descriptor or a `<Shape dynamic>`.
      */
     get isMutableCompound() {
+        if (this.checkDisposed()) return false;
         return isMutableCompoundShape(this.shape);
     }
     /** The body's shape as a `MutableCompoundShape`. Throws when it is anything else. */
     get mutableCompound(): Jolt.MutableCompoundShape {
+        if (this.checkDisposed()) return undefined as unknown as Jolt.MutableCompoundShape;
         return asMutableCompoundShape(this.shape);
     }
 
@@ -454,14 +508,17 @@ export class BodyState {
      * body so the shape stays where it was. Read it with `readCenterOfMass(body.shape)` before
      * editing; it defaults to the current one, which is only right if the edit did not move it.
      */
-    notifyShapeChanged(
-        previousCenterOfMass: Vec3Tuple = readCenterOfMass(this.shape),
-        updateMassProperties = true
-    ) {
+    notifyShapeChanged(previousCenterOfMass?: Vec3Tuple, updateMassProperties = true) {
+        // `previousCenterOfMass` used to default to `readCenterOfMass(this.shape)` - a default
+        // parameter expression, which JS evaluates before the disposed check below ever runs, so
+        // a disposed call reached `this.shape` (and therefore `this.body`) regardless. Computing
+        // it here instead means the guard genuinely runs first.
+        if (this.checkDisposed()) return;
+        const centerOfMass = previousCenterOfMass ?? readCenterOfMass(this.shape);
         // NotifyShapeChanged takes the vector by value, so the shared scratch is safe here
         this.bodyInterface.NotifyShapeChanged(
             this.BodyID,
-            joltScratch.vec3(previousCenterOfMass),
+            joltScratch.vec3(centerOfMass),
             updateMassProperties,
             Raw.module.EActivation_Activate
         );
@@ -478,6 +535,7 @@ export class BodyState {
      * new sub shape; drop it again with `removeSubShape(index)`, never by hand.
      */
     addSubShape(descriptor: ShapeDescriptor): number {
+        if (this.checkDisposed()) return -1;
         const compound = this.mutableCompound;
         const previousCenterOfMass = readCenterOfMass(compound);
         const index = addSubShape(compound, descriptor);
@@ -490,6 +548,7 @@ export class BodyState {
      * holding several indices should remove from the back.
      */
     removeSubShape(index: number) {
+        if (this.checkDisposed()) return;
         const compound = this.mutableCompound;
         const previousCenterOfMass = readCenterOfMass(compound);
         removeSubShape(compound, index);
@@ -498,6 +557,7 @@ export class BodyState {
 
     /** Move and/or turn the sub shape at `index`; anything left out keeps its current value. */
     modifySubShape(index: number, transform: SubShapeTransform) {
+        if (this.checkDisposed()) return;
         const compound = this.mutableCompound;
         const previousCenterOfMass = readCenterOfMass(compound);
         modifySubShape(compound, index, transform);
@@ -506,6 +566,7 @@ export class BodyState {
 
     //* Debugging ===============================================
     updateDebugMesh() {
+        if (this.checkDisposed()) return;
         const newMesh = getThreeObjectForBody(this.body);
         // reset any weird position data
         newMesh.position.set(0, 0, 0);
@@ -524,6 +585,7 @@ export class BodyState {
         return this.isDebugging;
     }
     set debug(newDebug: boolean) {
+        if (this.checkDisposed()) return;
         //if we are already debugging stop by removing from the object
         if (!newDebug) {
             this.object.remove(this.debugMesh!);
@@ -540,6 +602,7 @@ export class BodyState {
     //* Direct Manipulation ===================================
     // destroy the body
     destroy(ignoreThree?: boolean) {
+        if (this.checkDisposed()) return;
         this.bodySystem.removeBody(this.handle, ignoreThree);
         // only dispose the material if `set color` cloned it for us - anything else is still
         // whatever the caller (or another body sharing the same mesh/material) put there.
@@ -628,6 +691,7 @@ export class BodyState {
     // `SetPosition` takes an RVec3Arg and copies it, so the shared scratch vector is safe here
     // and keeps this setter allocation free - it is driven from useFrame by user code.
     setPosition(position: anyVec3, options?: { activate?: boolean }) {
+        if (this.checkDisposed()) return;
         this.bodyInterface.SetPosition(
             this.BodyID,
             joltScratch.rvec3(position),
@@ -645,6 +709,7 @@ export class BodyState {
     }
     // get the position of the body and wrap it in a three vector
     getPosition(asJolt?: boolean): THREE.Vector3 | Jolt.RVec3 {
+        if (this.checkDisposed()) return new THREE.Vector3();
         if (asJolt) return this.bodyInterface.GetPosition(this.BodyID);
         return vec3.joltToThree(this.bodyInterface.GetPosition(this.BodyID));
     }
@@ -657,6 +722,7 @@ export class BodyState {
      */
     // `SetRotation` takes a QuatArg and copies it; shared scratch, no allocation per call.
     setRotation(rotation: anyQuat, options?: { activate?: boolean }) {
+        if (this.checkDisposed()) return;
         this.bodyInterface.SetRotation(
             this.BodyID,
             joltScratch.quat(rotation),
@@ -672,6 +738,7 @@ export class BodyState {
     }
     // get the rotation of the body and wrap it in a three quaternion
     get rotation(): THREE.Quaternion {
+        if (this.checkDisposed()) return new THREE.Quaternion();
         return quat.joltToThree(this.body.GetRotation());
     }
     /**
@@ -714,6 +781,7 @@ export class BodyState {
      * @param options.activate override {@link activateOnChange} for this call (issue #167).
      */
     setScale(inScale: THREE.Vector3 | number[] | number, options?: { activate?: boolean }) {
+        if (this.checkDisposed()) return;
         // `inScale instanceof Number` was always false for a primitive number, so a numeric
         // scale used to fall through to `vec3.three(2)` -> (2, undefined, undefined).
         const requested =
@@ -790,6 +858,7 @@ export class BodyState {
     }
     // get the velocity of the body
     get velocity() {
+        if (this.checkDisposed()) return new THREE.Vector3();
         return vec3.three(this.body.GetLinearVelocity());
     }
     /**
@@ -804,6 +873,7 @@ export class BodyState {
      */
     // Both calls take a Vec3Arg and copy it; shared scratch, no allocation per call.
     setVelocity(velocity: Vector3, options?: { activate?: boolean }) {
+        if (this.checkDisposed()) return;
         if (this.shouldActivate(options?.activate)) {
             this.bodyInterface.SetLinearVelocity(this.BodyID, joltScratch.vec3(velocity));
         } else {
@@ -816,10 +886,12 @@ export class BodyState {
     }
     // get the angular velocity of the body
     get angularVelocity() {
+        if (this.checkDisposed()) return new THREE.Vector3();
         return vec3.three(this.body.GetAngularVelocity());
     }
     /** {@link setVelocity}'s angular counterpart. */
     setAngularVelocity(angularVelocity: Vector3, options?: { activate?: boolean }) {
+        if (this.checkDisposed()) return;
         if (this.shouldActivate(options?.activate)) {
             this.bodyInterface.SetAngularVelocity(this.BodyID, joltScratch.vec3(angularVelocity));
         } else {
@@ -877,23 +949,29 @@ export class BodyState {
     //* Physics Properties ----------------------------------
     // sensors
     get isSensor() {
+        if (this.checkDisposed()) return false;
         return this.body.IsSensor();
     }
     set isSensor(isSensor: boolean) {
+        if (this.checkDisposed()) return;
         this.body.SetIsSensor(isSensor);
     }
     //friction
     get friction() {
+        if (this.checkDisposed()) return 0;
         return this.body.GetFriction();
     }
     set friction(friction: number) {
+        if (this.checkDisposed()) return;
         this.body.SetFriction(friction);
     }
     //restitution
     set restitution(restitution: number) {
+        if (this.checkDisposed()) return;
         this.body.SetRestitution(restitution);
     }
     get restitution() {
+        if (this.checkDisposed()) return 0;
         return this.body.GetRestitution();
     }
     /**
@@ -902,25 +980,31 @@ export class BodyState {
      * null pointer in a release one, so every caller goes through here.
      */
     private get motionProperties(): Jolt.MotionProperties | undefined {
-        if (this.body.IsStatic()) return undefined;
+        if (this.disposed || this.body.IsStatic()) return undefined;
         return this.body.GetMotionProperties();
     }
     get angularDamping() {
+        if (this.checkDisposed()) return 0;
         return this.motionProperties?.GetAngularDamping() ?? 0;
     }
     set angularDamping(damping: number) {
+        if (this.checkDisposed()) return;
         this.motionProperties?.SetAngularDamping(damping);
     }
     get linearDamping() {
+        if (this.checkDisposed()) return 0;
         return this.motionProperties?.GetLinearDamping() ?? 0;
     }
     set linearDamping(damping: number) {
+        if (this.checkDisposed()) return;
         this.motionProperties?.SetLinearDamping(damping);
     }
     get gravityFactor() {
+        if (this.checkDisposed()) return 0;
         return this.motionProperties?.GetGravityFactor() ?? 0;
     }
     set gravityFactor(factor: number) {
+        if (this.checkDisposed()) return;
         this.motionProperties?.SetGravityFactor(factor);
     }
     /**
@@ -934,12 +1018,14 @@ export class BodyState {
      * have no inverse mass to invert. Setting it on one is a no-op.
      */
     get mass(): number {
+        if (this.checkDisposed()) return 0;
         // only a dynamic body has a meaningful inverse mass; Jolt asserts on the others
         if (!this.body.IsDynamic()) return 0;
         const inverseMass = this.body.GetMotionProperties().GetInverseMass();
         return inverseMass > 0 ? 1 / inverseMass : 0;
     }
     set mass(mass: number) {
+        if (this.checkDisposed()) return;
         const motionProperties = this.motionProperties;
         if (!motionProperties || !this.body.IsDynamic()) {
             devWarn(
@@ -967,6 +1053,7 @@ export class BodyState {
     // Both are live: the getters read the body itself and the setters push a new CollisionGroup
     // through BodyInterface.SetCollisionGroup, so they work after creation too (issue #95).
     get group() {
+        if (this.checkDisposed()) return 0;
         return this.body.GetCollisionGroup().GetGroupID();
     }
     /**
@@ -975,6 +1062,7 @@ export class BodyState {
      * `BodySystem`'s own explicit `ActivateBody` call, gated here on {@link activateOnChange}.
      */
     setGroup(group: number, options?: { activate?: boolean }) {
+        if (this.checkDisposed()) return;
         this.bodySystem.setBodyCollisionGroup(
             this.handle,
             group,
@@ -987,10 +1075,12 @@ export class BodyState {
         this.setGroup(group);
     }
     get subGroup() {
+        if (this.checkDisposed()) return 0;
         return this.body.GetCollisionGroup().GetSubGroupID();
     }
     /** {@link setGroup}'s sub group counterpart. */
     setSubGroup(subGroup: number, options?: { activate?: boolean }) {
+        if (this.checkDisposed()) return;
         this.bodySystem.setBodyCollisionGroup(
             this.handle,
             undefined,
@@ -1020,16 +1110,20 @@ export class BodyState {
     //* DOF Manipulation ------------------------------------
     // get the raw DOF
     get rawDOF() {
+        if (this.checkDisposed()) return 0;
         return this.body.GetMotionProperties().GetAllowedDOFs();
     }
     // set the raw DOF
     set rawDOF(dof: number) {
+        if (this.checkDisposed()) return;
         // massProperties comes from the shape.
         const massProperties = this.body.GetShape().GetMassProperties();
         this.body.GetMotionProperties().SetMassProperties(dof, massProperties);
     }
 
     get dof() {
+        if (this.checkDisposed())
+            return { x: false, y: false, z: false, rotX: false, rotY: false, rotZ: false };
         const rawDOF = this.rawDOF;
         return {
             x: (rawDOF & Raw.module.EAllowedDOFs_TranslationX) !== 0,
@@ -1048,6 +1142,7 @@ export class BodyState {
         rotY?: boolean;
         rotZ?: boolean;
     }) {
+        if (this.checkDisposed()) return;
         let newDOF = this.rawDOF;
         // `key` typed off `dof` itself so the lookups below index it without a suppression
         const allowedDOFs: { key: keyof typeof dof; flag: number }[] = [
@@ -1107,14 +1202,17 @@ export class BodyState {
     // shared scratch objects are safe and these stay allocation free in the frame loop.
     // apply a force to the body
     applyForce(force: Vector3) {
+        if (this.checkDisposed()) return;
         this.body.AddForce(joltScratch.vec3(force));
     }
     // apply a torque to the body
     applyTorque(torque: Vector3) {
+        if (this.checkDisposed()) return;
         this.body.AddTorque(joltScratch.vec3(torque));
     }
     // add impulse to the body
     addImpulse(impulse: Vector3) {
+        if (this.checkDisposed()) return;
         this.body.AddImpulse(joltScratch.vec3(impulse));
     }
     //* Kinematic motion ----------------------------------
@@ -1141,6 +1239,7 @@ export class BodyState {
         rotation?: THREE.Quaternion | Jolt.Quat | null,
         deltaTime: number = this.stepDelta
     ) {
+        if (this.checkDisposed()) return;
         this.bodyInterface.MoveKinematic(
             this.BodyID,
             joltScratch.rvec3(position),
@@ -1159,6 +1258,7 @@ export class BodyState {
      * the JS side bookkeeping.
      */
     setSurfaceMaterials(table: SurfaceMaterialTable | undefined) {
+        if (this.checkDisposed()) return;
         this.surfaceMaterials?.dispose();
         this.surfaceMaterials = table;
         if (table) this.internalMask |= EventBit.surfaceMaterial;
@@ -1186,6 +1286,7 @@ export class BodyState {
      * @param rotation omitted keeps the body's current rotation.
      */
     setKinematicTarget(position: anyVec3, rotation?: THREE.Quaternion | Jolt.Quat | null) {
+        if (this.checkDisposed()) return;
         if (!this.kinematicTarget)
             this.kinematicTarget = { position: new Vector3(), rotation: new Quaternion() };
         const target = this.kinematicTarget;
@@ -1197,6 +1298,7 @@ export class BodyState {
 
     /** Stop driving this body; it keeps whatever velocity the last substep gave it. */
     clearKinematicTarget() {
+        // safe (and idempotent) to call after dispose() too - it already did this itself
         this.kinematicTarget = null;
         this.bodySystem.untrackKinematicTarget(this);
     }
@@ -1232,6 +1334,7 @@ export class BodyState {
     //* Motion Source ----------------------------------
     // activate the impulse source
     activateMotionSource(linearVector = new THREE.Vector3(), angularVector?: THREE.Vector3) {
+        if (this.checkDisposed()) return;
         this.motionActive = true;
         this.isMotionSource = true;
         this.motionType = angularVector ? 'angular' : 'linear';

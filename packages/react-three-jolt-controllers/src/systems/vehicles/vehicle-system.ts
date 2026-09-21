@@ -73,6 +73,9 @@ export class VehicleSystem {
     }
 
     addVehicle(name: string, settings?: VehicleSettings): VehicleManager {
+        // issue #227: a destroyed system is off the world's disposables, so a vehicle created
+        // here - a real chassis body plus a constraint - would never be torn down again.
+        if (this.destroyed) return undefined as unknown as VehicleManager;
         const resolved = this.createVehicleSettings(settings);
         const vehicle =
             resolved.type === 'twoWheel'

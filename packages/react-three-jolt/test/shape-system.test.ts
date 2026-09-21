@@ -40,6 +40,7 @@ import {
     releaseShape,
     removeSubShape,
     type ShapeDescriptor,
+    type ShapeOptions,
     scaleShape,
     subShapeCount,
     validScaleFor
@@ -1551,6 +1552,22 @@ describe('the compatibility wrappers still behave', () => {
         const shape = generateShape(descriptor);
         assert.equal(shape.GetSubType(), Raw.module.EShapeSubType_StaticCompound);
         releaseShape(shape);
+    });
+
+    // issue #211: AutoShape and ShapeType used to be two separate unions - `type="compound"` and
+    // `type="staticCompound"` went through the same normalisation either way, but nothing
+    // asserted the two produce byte-for-byte identical descriptors, not just the same `.type`.
+    test('`compound` and `staticCompound` produce identical descriptors', () => {
+        const options: ShapeOptions = {
+            children: [
+                { type: 'box', size: [1, 1, 1] },
+                { type: 'sphere', radius: 0.5, position: [0, 2, 0] }
+            ]
+        };
+        const viaAlias = describeShapeFromOptions('compound', options);
+        const viaCanonical = describeShapeFromOptions('staticCompound', options);
+        assert.deepEqual(viaAlias, viaCanonical);
+        assert.equal(viaAlias.type, 'staticCompound');
     });
 
     test('generateHeightfieldShapeFromThree matches the descriptor path', () => {

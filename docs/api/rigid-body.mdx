@@ -30,8 +30,9 @@ and `<RigidBody colliders>`. See [Colliders](/api/colliders).
 | prop | type | notes |
 | --- | --- | --- |
 | `type` | `'dynamic' \| 'static' \| 'kinematic' \| 'rig'` | motion type. Defaults to dynamic |
-| `shape` | [`AutoShape`](/api/shapes#autoshape) | overrides shape autodetection for this body |
+| `shape` | [`ShapeType`](/api/shapes#shapetype) | overrides shape autodetection for this body |
 | `colliders` | `false \| 'cuboid' \| 'ball' \| 'hull' \| 'trimesh'` | what to do about the meshes inside the body — see [Colliders](/api/colliders#<rigidbody-colliders>) |
+| `dynamicMeshStrategy` | `'convex' \| 'decompose' \| 'error'` | what a **dynamic** body does with a trimesh shape — see [Trimeshes](/api/shapes#trimeshes). Falls back to `<Physics defaultDynamicMeshStrategy>`, then `'convex'` |
 | `position` | `number[]` | setting it after creation **teleports** the body |
 | `rotation` | `number[]` | Euler angles, radians. Also a teleport |
 | `scale` | `number[]` | scales the collision shape as well as the object. Applied **while the body is created**, not a frame later |

@@ -23,7 +23,7 @@ import type { DefaultBodySettings } from '../systems/body-system';
 import type { WorldEventMap } from '../systems/events';
 // physics system import
 import { deferWorldDestroy, PhysicsSystem } from '../systems/physics-system';
-import type { AutoShape } from '../systems/shape-system';
+import type { AutoShape, DynamicMeshStrategy } from '../systems/shape-system';
 // library imports
 import { Debug } from './Debug';
 import { FrameStepper } from './FrameStepper';
@@ -132,6 +132,14 @@ export type PhysicsProps = {
      */
     defaultShape?: AutoShape;
 
+    /**
+     * World wide fallback for `<RigidBody dynamicMeshStrategy>` (issue #211): what a dynamic
+     * body does with a trimesh shape when it doesn't say for itself. Left out, an unconverted
+     * trimesh warns and becomes a convex hull (`'convex'`); `'error'` throws instead, so the
+     * mistake is loud; `'decompose'` is reserved and currently throws with an explanation.
+     */
+    defaultDynamicMeshStrategy?: DynamicMeshStrategy;
+
     /** A jolt-physics module factory to initialise instead of the bundled default. */
     module?: () => Promise<typeof Jolt>;
 
@@ -180,6 +188,7 @@ export const Physics: FC<PhysicsProps> = (props) => {
         updateLoop = 'follow',
         defaultBodySettings,
         defaultShape,
+        defaultDynamicMeshStrategy,
 
         onCollisionEnter,
         onCollisionExit,
@@ -221,6 +230,8 @@ export const Physics: FC<PhysicsProps> = (props) => {
         // these have to be set here to catch bodies created on the very first render
         if (defaultBodySettings) ps.bodySystem.defaultBodySettings = defaultBodySettings;
         if (defaultShape) ps.bodySystem.defaultShape = defaultShape;
+        if (defaultDynamicMeshStrategy)
+            ps.bodySystem.defaultDynamicMeshStrategy = defaultDynamicMeshStrategy;
         ps.debug = debug;
         ps.paused = paused;
         ps.interpolate = interpolate;
@@ -305,6 +316,10 @@ export const Physics: FC<PhysicsProps> = (props) => {
         if (physicsSystem && defaultBodySettings)
             physicsSystem.bodySystem.defaultBodySettings = defaultBodySettings;
     }, [defaultBodySettings, physicsSystem]);
+    useEffect(() => {
+        if (physicsSystem)
+            physicsSystem.bodySystem.defaultDynamicMeshStrategy = defaultDynamicMeshStrategy;
+    }, [defaultDynamicMeshStrategy, physicsSystem]);
 
     //* World events ------------------------------------
     // Each of these is an effect whose cleanup is the unsubscribe; handler identity is not a

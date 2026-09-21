@@ -28,7 +28,6 @@ import * as THREE from 'three';
 
 import { useEventCallback, useForwardedRef, useJolt } from '../../hooks';
 import {
-    type AutoShape,
     addSubShape,
     type BodyState,
     describeShapeFromOptions,
@@ -70,7 +69,13 @@ export interface ShapeProps extends Omit<ShapeOptions, 'children'> {
      * changed after the component has mounted.
      */
     dynamic?: boolean;
-    type?: AutoShape | ShapeType;
+    /**
+     * Which shape to build. `AutoShape` and `ShapeType` were unified into one union in issue
+     * #211 - `'compound'` is a documented alias of `'staticCompound'`, and every other tag
+     * (`'mutableCompound'`, `'scaled'`, `'offsetCenterOfMass'`, ...) has always worked here too.
+     * @default 'box'
+     */
+    type?: ShapeType;
 
     //* Sub shape identity (issue #13) --------------------
     /**

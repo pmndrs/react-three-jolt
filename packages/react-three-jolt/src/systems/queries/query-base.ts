@@ -20,7 +20,7 @@ import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { Layer } from '../../constants';
 import { Raw } from '../../raw';
-import { type anyVec3, vec3 } from '../../utils';
+import { type anyVec3, disposedGuard, vec3 } from '../../utils';
 
 // `drawMarker()` orients its marker's local +Y axis (this vector) onto the hit's surface normal
 // via `Quaternion.setFromUnitVectors`. Shared/never mutated - `setFromUnitVectors` only reads it.
@@ -115,6 +115,19 @@ export abstract class QueryBase {
     // destroy() below is guarded by this instead of being safe to call twice by accident.
     protected destroyed = false;
 
+    /**
+     * Guard for a public method called after {@link destroy} (issue #227/#215): every filter and
+     * collector this query owns has already been freed by `releaseResources()`, so anything past
+     * this point would reach a jolt pointer that is not just stale but immediately reused by
+     * whatever live world allocates next. Same contract as `BodyState`'s guard - see
+     * `disposedGuard`: throws in debug (`setDebug(true)`), otherwise a silent no-op.
+     */
+    protected checkDestroyed(): boolean {
+        if (!this.destroyed) return false;
+        disposedGuard(this.constructor.name);
+        return true;
+    }
+
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
         this.joltPhysicsSystem = joltPhysicsSystem;
         this.joltInterface = joltInterface;
@@ -148,7 +161,23 @@ export abstract class QueryBase {
         if (this.destroyed) return;
         this.destroyed = true;
         this.releaseResources();
+        // issue #215: drop this query from the world's disposables (if `PhysicsSystem.get*`
+        // registered it) so a query the caller destroys itself isn't held onto - and re-destroyed
+        // as a no-op - by the world's own teardown later.
+        this.unregisterFromWorld?.();
+        this.unregisterFromWorld = undefined;
     }
+
+    /**
+     * Set by `PhysicsSystem`'s `get*` factories right after `registerDisposable()`, so `destroy()`
+     * above can remove this query from the world's disposables again. Not meant to be called by
+     * anything else.
+     * @internal
+     */
+    setWorldUnregister(unregister: () => void): void {
+        this.unregisterFromWorld = unregister;
+    }
+    private unregisterFromWorld?: () => void;
 
     /** Subclass hook for destroy(): free whatever this query type allocated. */
     protected abstract releaseResources(): void;
@@ -271,6 +300,7 @@ export abstract class CastQueryBase<
 
     // set the collector
     setCollector(type = 'closest'): void {
+        if (this.checkDestroyed()) return;
         // destroy exising collector
         if (this.collector) Raw.module.destroy(this.collector);
         this.type = type;
@@ -278,6 +308,7 @@ export abstract class CastQueryBase<
     }
     // ease of life handler to match how threeJS does setting the raycaster
     set(origin: THREE.Vector3, direction: THREE.Vector3): void {
+        if (this.checkDestroyed()) return;
         this.origin = origin;
         this.direction = direction;
     }
@@ -287,6 +318,11 @@ export abstract class CastQueryBase<
         successHandler?: CastSuccessHandler<THit>,
         failHandler?: CastFailHandler
     ): THit | THit[] | undefined {
+        // issue #227/#215: every filter/collector/ray this query owns is freed once destroy()
+        // has run, so bail before `this.collector.Reset()` below reaches it - a destroyed
+        // query's `active` flag alone (see `Raycaster.rawCast`) is not enough, since Reset() runs
+        // before rawCast() is ever called.
+        if (this.checkDestroyed()) return undefined;
         // clear the collector. Every collector type must be reset before reuse, including
         // "closest": CastRayClosestHitCollisionCollector keeps HadHit()/mHit and its early-out
         // fraction from the previous cast, so skipping the reset here made a closest-hit
@@ -337,6 +373,9 @@ export abstract class CastQueryBase<
         successHandler?: CastSuccessHandler<THit>,
         failHandler?: CastFailHandler
     ): THit | THit[] | undefined {
+        // guard before the abstract `origin` setter, which writes straight into a jolt object
+        // this query no longer owns once destroyed
+        if (this.checkDestroyed()) return undefined;
         this.origin = origin;
         return this.cast(successHandler, failHandler);
     }
@@ -346,6 +385,7 @@ export abstract class CastQueryBase<
         successHandler?: CastSuccessHandler<THit>,
         failHandler?: CastFailHandler
     ): THit | THit[] | undefined {
+        if (this.checkDestroyed()) return undefined;
         this.direction = vec3.three(destination).clone().sub(this.origin);
         return this.cast(successHandler, failHandler);
     }
@@ -356,6 +396,7 @@ export abstract class CastQueryBase<
         successHandler?: CastSuccessHandler<THit>,
         failHandler?: CastFailHandler
     ): THit | THit[] | undefined {
+        if (this.checkDestroyed()) return undefined;
         this.origin = origin;
         this.direction = vec3.three(destination).sub(this.origin);
         return this.cast(successHandler, failHandler);
@@ -365,6 +406,7 @@ export abstract class CastQueryBase<
     // Not sure I want this on all raycasts, maybe a subclass or hook?
     //set the scene and init the debugger values
     initDebugging(scene: THREE.Scene, color?: string): void {
+        if (this.checkDestroyed()) return;
         this.debugObject = new THREE.Object3D();
         scene.add(this.debugObject);
         if (color) this.lineColor = color;

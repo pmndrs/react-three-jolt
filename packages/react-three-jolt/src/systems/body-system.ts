@@ -247,6 +247,13 @@ export class BodySystem {
     // Shape used when a body doesn't ask for one. Undefined keeps the per-geometry autodetect
     // in getShapeTypeFromGeometry. Settable from `<Physics defaultShape="box">`.
     defaultShape?: AutoShape;
+    /**
+     * World-wide fallback for {@link GenerateBodyOptions.dynamicMeshStrategy} (issue #211, #112):
+     * what a dynamic body does with a trimesh shape when it doesn't say for itself. Settable from
+     * `<Physics defaultDynamicMeshStrategy="error">`. Undefined keeps `generateBodySettings`'s own
+     * default (`'convex'`).
+     */
+    defaultDynamicMeshStrategy?: DynamicMeshStrategy;
 
     //* Collision groups ==============================
     // Object layers (`Layer` in constants.ts) stay the *broad* filter: "is this a moving thing,
@@ -408,6 +415,14 @@ export class BodySystem {
         // fall back to the system wide default shape when the caller didn't pick one
         if (options.shapeType === undefined && this.defaultShape !== undefined)
             options = { ...options, shapeType: this.defaultShape };
+        // same fallback for the dynamic-mesh policy (issue #211): `<Physics
+        // defaultDynamicMeshStrategy>` sets a world wide answer, a per-body `dynamicMeshStrategy`
+        // (on `<RigidBody>` or here) still wins when both are given.
+        if (
+            options.dynamicMeshStrategy === undefined &&
+            this.defaultDynamicMeshStrategy !== undefined
+        )
+            options = { ...options, dynamicMeshStrategy: this.defaultDynamicMeshStrategy };
         // #13: `generateBodySettings` is the only place that knows the descriptor an Object3D was
         // described as. It reports it here so `addExistingBody` can keep it on the BodyState.
         this.describedShape.descriptor = undefined;
@@ -513,12 +528,15 @@ export class BodySystem {
         // first check the simulation is still here (might be removed after physics is removed)
         if (!this.joltPhysicsSystem) return;
         if (!this.bodyInterface) return;
+        // Capture the id before dispose(): issue #227 has `dispose()` null out `bodyState.body`/
+        // `BodyID` (so a stray post-dispose caller fails loudly instead of touching freed Jolt
+        // memory), and this function still needs the id afterward to actually remove the body.
+        const bodyID = bodyState.body.GetID();
         // Close open contacts and drop this body's listeners BEFORE it leaves the simulation:
         // handles are recycled, so leftover pair state would be attributed to a different body,
         // and `RemoveBody` deactivates the body synchronously - which would otherwise deliver a
         // phantom `sleep` to a handler that is on its way out.
         bodyState.dispose();
-        const bodyID = bodyState.body.GetID();
         const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
         if (!body) {
             devWarn('body getter failed during delete', bodyHandle);

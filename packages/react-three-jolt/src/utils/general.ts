@@ -26,6 +26,37 @@ export function devWarn(...args: unknown[]): void {
     if (debug) console.warn(...args);
 }
 
+// ---------------------------------------------------------------------------
+// Disposed-object guards (issue #227)
+// ---------------------------------------------------------------------------
+/**
+ * Call from a disposable's public method/getter/setter after its owning `<Physics>` world was
+ * torn down (`BodyState.dispose()`, `QueryBase`/`CharacterControllerSystem`/`CameraRigManager`/
+ * `VehicleManager`'s `destroy()`), instead of falling through to the Jolt call underneath.
+ *
+ * jolt-physics' WebIDL module is a page-wide singleton with immediate pointer reuse, so touching
+ * a Jolt handle after its owner disposed does not fail cleanly - it reaches *some* live world's
+ * memory, at best `RuntimeError: memory access out of bounds`, at worst silent corruption of an
+ * unrelated demo (issue #227). Guarding every public entry point with:
+ *
+ * ```ts
+ * if (this.disposed) {
+ *     disposedGuard(`BodyState '${this.name}'`);
+ *     return; // or a harmless fallback value for a getter
+ * }
+ * ```
+ *
+ * makes that unreachable instead: in debug mode (`setDebug(true)`) this throws a descriptive
+ * `Error` so the mistake surfaces immediately during development, and otherwise (the default,
+ * matching how a shipped build behaves) it does nothing at all - the call silently no-ops rather
+ * than reaching freed WASM memory.
+ */
+export function disposedGuard(descriptor: string): void {
+    if (debug) {
+        throw new Error(`${descriptor} was disposed; its <Physics> world was destroyed`);
+    }
+}
+
 // Get the distance between two jolt vector3s
 // jolt-physics >=1.0 declares RVec3 (the "real"/world space vector every position argument takes)
 // as its own class. In the single precision builds we use it is the same layout as Vec3 and the
