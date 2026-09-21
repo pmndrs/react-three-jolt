@@ -22,7 +22,46 @@
 // time, the previous result is overwritten, and destroying it frees memory the binder owns.
 // Those never appear in `live()`, and destroying one shows up in `foreignDestroys()`.
 
+import { assert } from 'vitest';
+
 export type RawHolder = { module: any };
+
+/**
+ * Assert that a teardown gave the WASM heap back.
+ *
+ * `JoltInterface.prototype.sGetFreeMemory()` reads Jolt's own fixed-size allocator, and free
+ * bytes are *not* a stable fingerprint of "the same objects are alive". The allocator coalesces
+ * adjacent free blocks and rounds allocations up to an alignment boundary, so the same sequence
+ * of allocations and frees can end with a few bytes MORE free than it started with - the byte
+ * or two of padding that sat between two neighbouring live blocks becomes part of one larger
+ * free block once both neighbours go away. Which way it lands depends on the order the host
+ * happened to allocate in, so it differs between machines: CI reproducibly ended 8 bytes above
+ * the baseline on a test that was exactly equal locally.
+ *
+ * Only a heap that SHRANK is evidence of a leak, so that is what this asserts. Growth past the
+ * baseline is the artifact above and is allowed. The exact leak detectors are the ones that do
+ * not have this problem and stay exact at the call sites: `installAllocTracker`'s live count
+ * (per-object, by pointer) and `foreignDestroys() === 0`.
+ *
+ * @param before free bytes measured before the code under test
+ * @param after free bytes measured after it
+ * @param tolerance how many bytes the heap may shrink by without failing; 64 is comfortably
+ *   above the handful of bytes coalescing moves and far below anything the library allocates
+ *   (a `Vec3` alone is 16 bytes, a body several hundred).
+ */
+export function expectHeapRestored(
+    before: number,
+    after: number,
+    tolerance = 64,
+    message = 'WASM heap was not returned'
+): void {
+    assert.isAtLeast(
+        after,
+        before - tolerance,
+        `${message}: leaked ${before - after} bytes of WASM heap ` +
+            `(${before} free before, ${after} after, tolerance ${tolerance})`
+    );
+}
 
 export type AllocTracker = {
     /** Number of tracked objects currently alive. */
@@ -45,6 +84,37 @@ export type AllocTracker = {
 // name here is handed to callers as a Proxy instead of the real constructor, and embind helpers
 // such as `castObject` want the genuine article.
 export const DEFAULT_TRACKED_TYPES = ['Vec3', 'RVec3', 'Quat', 'Mat44', 'RMat44'];
+
+/**
+ * Every binder class on the module that can be `destroy()`ed - anything with a `__destroy__` on
+ * its prototype.
+ *
+ * Pass this as `types` when the question is `foreignDestroys() === 0`. With a narrow type list
+ * every `destroy()` of a class the tracker does not know about is counted as foreign, so the
+ * number only means "something freed an object nobody allocated" - which is the signature of
+ * freeing one of Jolt's static value-return temporaries - when the tracker covers everything.
+ *
+ * Note that `live()` cannot balance over this list: several classes are allocated from JS but
+ * freed by C++ ownership (the filter tables a `JoltInterface` takes over, a shape held by a
+ * `RefConst`), so the tracker never sees them go. Use `JoltInterface.prototype.sGetFreeMemory()`
+ * for the whole-heap question and {@link DEFAULT_TRACKED_TYPES} for the balance one.
+ */
+export function allDestroyableTypes(raw: RawHolder): string[] {
+    const module = raw.module as Record<string, unknown>;
+    const names: string[] = [];
+    for (const name of Object.keys(module)) {
+        let value: unknown;
+        try {
+            value = module[name];
+        } catch {
+            continue;
+        }
+        if (typeof value !== 'function') continue;
+        const proto = (value as { prototype?: Record<string, unknown> }).prototype;
+        if (proto && typeof proto.__destroy__ === 'function') names.push(name);
+    }
+    return names;
+}
 
 export type AllocTrackerOptions = {
     /** Constructor names to intercept. Defaults to {@link DEFAULT_TRACKED_TYPES}. */

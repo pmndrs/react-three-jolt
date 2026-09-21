@@ -83,8 +83,8 @@ export function App() {
 
 `jolt-physics` ships several builds (embedded `wasm-compat`, separate-file `/wasm`, debug and
 multi-threaded variants). Pass an initializer to `<Physics module>` to pick one — see
-[Choosing a Jolt build](../../docs/getting-started/installation.mdx#choosing-a-jolt-build) for
-the table and the Vite / Next.js recipes.
+[Choosing a Jolt build](https://pmndrs.github.io/react-three-jolt/getting-started/installation#choosing-a-jolt-build)
+for the table and the Vite / Next.js recipes.
 
 ---
 

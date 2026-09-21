@@ -1,5 +1,5 @@
-import { BodyState, RigidBody } from '@react-three/jolt';
-import { memo, useRef, useState } from 'react';
+import { BodyState, RigidBody, useJolt } from '@react-three/jolt';
+import { memo, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 
 type ScalerProps = {
@@ -10,6 +10,19 @@ const Scaler: React.FC<ScalerProps> = memo((props) => {
     const [activeColor, setActiveColor] = useState('#B4A6AB');
     const bodyRef = useRef<BodyState | undefined>(undefined);
     const currentScale = useRef(0);
+    const { physicsSystem } = useJolt();
+    // Same hazard as OneWayPlatform's Launcher, with a much wider window: this timer is 5s, so
+    // navigating away almost always leaves it pending, and it then writes a body position into a
+    // world that has been destroyed - which traps the wasm module.
+    const returnTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+    useEffect(
+        () => () => {
+            if (returnTimer.current !== undefined) clearTimeout(returnTimer.current);
+            returnTimer.current = undefined;
+        },
+        []
+    );
     const colors = ['#B4A6AB', '#CDD5D1', '#DDF8E8'];
     const scales = [
         [1, 1, 1],
@@ -37,8 +50,11 @@ const Scaler: React.FC<ScalerProps> = memo((props) => {
         setActiveColor(colors[0]);
         currentScale.current = 0;
         // wait 5 seconds then teleport it back to center with a little height
-        setTimeout(() => {
-            bodyRef.current!.position = new THREE.Vector3(0, 8, 0);
+        if (returnTimer.current !== undefined) clearTimeout(returnTimer.current);
+        returnTimer.current = setTimeout(() => {
+            returnTimer.current = undefined;
+            if (!bodyRef.current || physicsSystem.destroyed) return;
+            bodyRef.current.position = new THREE.Vector3(0, 8, 0);
         }, 5000);
     };
     return (

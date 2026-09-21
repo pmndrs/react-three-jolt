@@ -17,8 +17,10 @@ import { assert, beforeAll, describe, expect, test, vi } from 'vitest';
 import { Physics } from '../src/components/Physics';
 import { RigidBody, RigidBodyContext } from '../src/components/RigidBody';
 import { Shape, type ShapeProps } from '../src/components/shape/Shape';
+import { useJolt } from '../src/hooks';
 import { initJolt, Raw } from '../src/raw';
 import type { BodyState } from '../src/systems/body-state';
+import type { PhysicsSystem } from '../src/systems/physics-system';
 
 // <Physics> suspends on `suspend(() => initJolt(), ['jolt'])`; pre-resolving the load and
 // seeding suspend-react's cache makes it mount synchronously inside act(). See heightfield.test.
@@ -538,6 +540,104 @@ describe('<RigidBody scale>', () => {
         assert.include(subTypes, Raw.module.EShapeSubType_Scaled, 'the scaled mesh');
         // the scaled box reaches y = 2 and the plain one y = -1.5: 3.5 tall, not 2.5
         assert.closeTo(boundsSize(shape)[1], 3.5, 0.1);
+
+        await renderer.unmount();
+    });
+});
+
+/** Captures the world so a test can step it by hand. */
+function Capture({ onSystem }: { onSystem: (system: PhysicsSystem) => void }) {
+    const { physicsSystem } = useJolt();
+    React.useEffect(() => {
+        onSystem(physicsSystem);
+    }, [physicsSystem, onSystem]);
+    return null;
+}
+
+describe('<Shape> scoped events (issue #13)', () => {
+    const STEP = 1 / 60;
+
+    test('a child <Shape> only hears about contacts on its own sub shape', async () => {
+        let system: PhysicsSystem | undefined;
+        const fired: string[] = [];
+        const seen: { index: number; userData: number; name?: string }[] = [];
+
+        const renderer = await create(
+            <Physics>
+                <Capture
+                    onSystem={(s) => {
+                        system = s;
+                    }}
+                />
+                {/* a floor in two halves, as one compound: only the right one is landed on */}
+                <RigidBody type="static" position={[0, -1, 0]}>
+                    <Shape>
+                        <Shape
+                            name="left"
+                            size={[8, 1, 8]}
+                            position={[-6, 0, 0]}
+                            onCollisionEnter={() => fired.push('left')}
+                        />
+                        <Shape
+                            name="right"
+                            size={[8, 1, 8]}
+                            position={[6, 0, 0]}
+                            onCollisionEnter={(e) => {
+                                fired.push('right');
+                                seen.push({
+                                    index: e.targetSubShape.index,
+                                    userData: e.targetSubShape.userData,
+                                    name: e.targetSubShape.descriptor?.name
+                                });
+                            }}
+                        />
+                    </Shape>
+                </RigidBody>
+                <RigidBody position={[6, 2, 0]}>
+                    <mesh>
+                        <boxGeometry args={[1, 1, 1]} />
+                    </mesh>
+                </RigidBody>
+            </Physics>
+        );
+
+        assert.isDefined(system);
+        for (let i = 0; i < 60 && fired.length === 0; i++) system!.onUpdate(STEP);
+
+        assert.deepEqual(fired, ['right'], 'the wrong <Shape> (or both) heard the contact');
+        assert.equal(seen[0].index, 1, 'the sub shape index did not come back');
+        assert.equal(seen[0].name, 'right', 'the descriptor did not come back');
+        assert.notEqual(seen[0].userData, 0, 'no user data was auto assigned');
+
+        await renderer.unmount();
+    });
+
+    test('an explicit userData is stamped, and nothing is stamped without one', async () => {
+        const bodyRef = React.createRef<BodyState>();
+        const renderer = await create(
+            <Physics>
+                <RigidBody ref={bodyRef} type="static">
+                    <Shape>
+                        <Shape size={[1, 1, 1]} position={[-1, 0, 0]} userData={4242} />
+                        <Shape size={[1, 1, 1]} position={[1, 0, 0]} />
+                    </Shape>
+                </RigidBody>
+            </Physics>
+        );
+
+        const shape = bodyRef.current!.body.GetShape();
+        const compound = Raw.module.castObject(shape, Raw.module.CompoundShape);
+        assert.equal(compound.GetSubShape(0).mShape.GetUserData(), 4242);
+        // a <Shape> with neither userData nor handlers stays at jolt's default
+        assert.equal(compound.GetSubShape(1).mShape.GetUserData(), 0);
+        // and the body kept the description its shape was built from
+        const descriptor = bodyRef.current!.shapeDescriptor;
+        assert.equal(descriptor?.type, 'staticCompound');
+        assert.equal(
+            descriptor?.type === 'staticCompound' ? descriptor.children.length : 0,
+            2,
+            'the body did not keep the description its shape was built from'
+        );
 
         await renderer.unmount();
     });

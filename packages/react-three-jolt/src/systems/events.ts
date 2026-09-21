@@ -5,6 +5,7 @@
 
 import type { Object3D, Vector3 } from 'three';
 import type { BodyState } from './body-state';
+import type { ShapeDescriptor } from './shape-system';
 
 /**
  * One bit per event type. `Emitter.mask` ors these together, which is what lets the Jolt
@@ -24,7 +25,13 @@ export const EventBit = {
      * keep getting their synchronous `ContactSettings` pass even when no user handler is
      * attached to the body.
      */
-    motionSource: 1 << 8
+    motionSource: 1 << 8,
+    /**
+     * Not a user event either: set by `BodyState.setSurfaceMaterials` so a heightfield with
+     * per-quad materials (issue #46) gets its synchronous `ContactSettings` pass - Jolt's
+     * materials carry no friction of their own, so it has to be written from the callback.
+     */
+    surfaceMaterial: 1 << 9
 } as const;
 
 /** Any of the contact driven bits - if none of these are set, contacts cost nothing. */
@@ -34,14 +41,16 @@ export const CONTACT_BITS =
     EventBit.collisionExit |
     EventBit.sensorEnter |
     EventBit.sensorExit |
-    EventBit.motionSource;
+    EventBit.motionSource |
+    EventBit.surfaceMaterial;
 
 /** Bits needed while a contact is being *added* or *persisted* (manifold/settings wrapping). */
 export const MANIFOLD_BITS =
     EventBit.collisionEnter |
     EventBit.collisionPersist |
     EventBit.sensorEnter |
-    EventBit.motionSource;
+    EventBit.motionSource |
+    EventBit.surfaceMaterial;
 
 /** Step events, shared by `PhysicsSystem` and the `useBeforePhysicsStep` / `useAfterPhysicsStep` hooks. */
 export type StepCallback = (deltaTime: number, subframe: number) => void;
@@ -65,6 +74,33 @@ export interface CollisionTarget {
     index?: number;
 }
 
+/**
+ * Which piece of a compound shape a contact happened on (issue #13).
+ *
+ * Resolved **lazily**: reading `payload.targetSubShape` is what walks the shape, so a handler
+ * that never asks costs nothing per contact. Like the payload itself, the object is pooled -
+ * read what you need inside the handler rather than keeping it.
+ */
+export interface SubShapeRef {
+    /** Raw `SubShapeID.GetValue()`. `-1` is Jolt's "empty" id. */
+    id: number;
+    /**
+     * Index of the top level compound child that was hit, or `-1` when the body's shape has no
+     * children (the whole shape is the contact).
+     */
+    index: number;
+    /**
+     * The `userData` stamped on the `<Shape>` / descriptor that produced this sub shape, at any
+     * nesting depth. `0` when nothing set one.
+     */
+    userData: number;
+    /**
+     * The descriptor the sub shape was built from, when the body kept one
+     * (`BodyState.shapeDescriptor`). A body built straight from a `Jolt.Shape` has none.
+     */
+    descriptor: ShapeDescriptor | undefined;
+}
+
 export interface CollisionPayload {
     /** The body the handler is registered on. World level handlers get the lower `handle`. */
     target: CollisionTarget;
@@ -73,6 +109,10 @@ export interface CollisionPayload {
     flipped: boolean;
     /** Sub-shape manifolds currently open between the two bodies. */
     contactCount: number;
+    /** Which piece of `target`'s shape was hit. Resolved on first read - see {@link SubShapeRef}. */
+    readonly targetSubShape: SubShapeRef;
+    /** Which piece of `other`'s shape was hit. Resolved on first read. */
+    readonly otherSubShape: SubShapeRef;
 }
 
 export interface CollisionEnterPayload extends CollisionPayload {
@@ -130,6 +170,25 @@ export type WorldEventMap = BodyEventMap & {
     /** Every dynamic body is asleep. Edge triggered. */
     settled: () => void;
     activityChange: (active: number, total: number) => void;
+
+    //* Registry events (issue #158) ---------------------------------------------------
+    // Not pooled and not dispatched from inside `Step()`: the `BodyState` handed over is the
+    // real one and stays valid for the duration of the call. They exist so a renderer (or any
+    // other observer) can mirror the contents of the world without polling `bodySystem.bodies`
+    // every frame.
+    /** A body finished being registered with the world and added to the simulation. */
+    bodyAdded: (body: BodyState) => void;
+    /**
+     * A body is on its way out. Fires *before* anything is torn down, so `body.object` and
+     * `body.body` are both still usable; do not retain either past the handler.
+     */
+    bodyRemoved: (body: BodyState) => void;
+    /**
+     * A body's shape was replaced or edited in place (`set shape`, `notifyShapeChanged`, and so
+     * every `addSubShape` / `removeSubShape` / `modifySubShape` on a mutable compound). Anything
+     * caching geometry per shape has to invalidate its entry for this body.
+     */
+    shapeChanged: (body: BodyState) => void;
 };
 
 /** Bit assignment handed to a `BodyState`'s `Emitter`. */

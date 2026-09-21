@@ -43,6 +43,10 @@ frame rather than rebuilding the world.
 | `defaultBodySettings` | `Jolt.BodyCreationSettings` fields | — | reactive |
 | `module` | Jolt module initializer | `jolt-physics` | mount only |
 
+Plus the world [event props](#world-events): `onCollisionEnter`, `onCollisionPersist`,
+`onCollisionExit`, `onSensorEnter`, `onSensorExit`, `onIntersectionEnter`, `onIntersectionExit`,
+`onSleep`, `onWake`, `onSettled` and `onActivityChange`.
+
 ```tsx
 <Physics
     gravity={20}
@@ -111,9 +115,62 @@ take over rendering yourself**. It only applies to `"follow"`.
 
 ### `debug`
 
-Turns on debugging globally: bodies draw their collision shapes, and the systems log lifecycle
-information. Individual [`<RigidBody debug>`](/api/rigid-body#props) props can opt in without
-switching the whole world on.
+Turns on debugging globally: the world draws a **wireframe of every collider in it**, and the
+systems log lifecycle information. Individual [`<RigidBody debug>`](/api/rigid-body#props) props
+can opt in without switching the whole world on.
+
+The overlay is one mesh per body, built from the body's *actual* Jolt shape — so it shows the
+convex hull a trimesh fell back to, the compound you assembled and the scale it was really
+given, not the three.js geometry you handed in. Wireframes are coloured by motion type:
+
+| colour | meaning |
+| --- | --- |
+| grey | static |
+| blue | kinematic |
+| green | dynamic, awake |
+| yellow | dynamic, asleep |
+| magenta | sensor |
+| white | constraint anchors |
+
+Turning it on for a running scene backfills the bodies that already exist; turning it off
+removes every wireframe and all of the per-frame work with it. Geometry is cached per Jolt
+shape, so a thousand boxes sharing one shape are triangulated once.
+
+For the overlay's own options, mount [`<Debug>`](#debug-component) yourself instead of (or as
+well as) setting `debug`.
+
+<a id="debug-component" />
+
+#### `<Debug>`
+
+```tsx
+import { Debug, Physics } from '@react-three/jolt';
+
+<Physics>
+    <Debug showContacts depthTest />
+</Physics>;
+```
+
+| prop | default | meaning |
+| --- | --- | --- |
+| `colors` | see above | override any of the per-category colours |
+| `showConstraints` | `true` | draw a line between each constraint's two anchor points |
+| `showContacts` | `false` | draw the contact points and normals of the last step |
+| `contactNormalLength` | `0.25` | length of the drawn normals, in world units |
+| `maxContacts` | `1024` | cap on contact segments drawn per frame |
+| `depthTest` | `false` | let the scene occlude the wireframes |
+| `updatePriority` | `0` | `useFrame` priority for the overlay update |
+
+`showContacts` is off by default because it subscribes to `collisionPersist`, which makes Jolt
+report (and the library wrap) every manifold of every touching pair, every step.
+
+The overlay is render-only: it reads body poses and shapes and writes three.js matrices, never
+the other way round, so having it mounted cannot change the simulation. It draws the same
+interpolated pose the bodies' own meshes get, so wireframes never lead their meshes.
+
+> [!NOTE]
+> This is built from the library's own shape triangulation, not Jolt's `DebugRenderer` — that
+> class only exists in jolt-physics' debug builds and has no JS binding in 1.1.0.
 
 Raycasters deliberately do **not** follow this flag — they can fire thousands of times a second
 and you rarely want the screen filled with lasers. Turn debugging on per caster instead
@@ -154,8 +211,132 @@ const defaultBodySettings = { mRestitution: 0.5 };
 ### `module`
 
 A `jolt-physics` module initializer to use instead of the bundled default — how you pick a
-different [build variant](/getting-started/installation#choosing-a-jolt-build). Keep its identity
-stable across renders.
+different [build variant](/getting-started/installation#choosing-a-jolt-build), including the
+`debug-wasm-compat` build whose `JoltInterface.sGetTotalMemory()` / `sGetFreeMemory()` let you
+profile the WASM heap.
+
+```tsx
+import InitJolt from 'jolt-physics/wasm';
+
+<Physics module={InitJolt}>{null}</Physics>;
+```
+
+Keep its identity stable across renders — a module-level import like the one above, not an inline
+arrow. Calling it again with the *same* factory reuses the module that is already running.
+Switching to a **different** factory while a `<Physics>` world exists is refused (every live body,
+shape and constraint points into the old module's heap): it warns under
+[`setDebug(true)`](/advanced/memory#debug-output) and keeps the active module. Initialise the
+variant you want before any `<Physics>` mounts.
+
+The prop is a single unconditional `suspend()` keyed on `module ?? 'default'`, so toggling it does
+not change the number of hooks between renders.
+
+## World events
+
+Jolt's contact listener is global, so `<Physics on*>` is the **cheap** path and the per-body
+[`<RigidBody on*>` props](/api/rigid-body#events) are the fan-out. A world handler fires **once per
+pair**, with `target` set to the body with the lower `handle`, so a world-wide counter is right
+without dividing by two.
+
+```tsx
+<Physics
+    onCollisionEnter={(e) => console.log(e.target.handle, e.other.handle)}
+    onSensorEnter={(e) => console.log('entered a sensor')}
+    onSleep={(e) => console.log(e.handle, 'asleep')}
+>
+    {null}
+</Physics>
+```
+
+Every name, payload shape, ordering rule and the "don't retain the payload" contract is the same
+as for a body — see [RigidBody → Events](/api/rigid-body#events). `onIntersectionEnter` /
+`onIntersectionExit` are the rapier-compatible aliases of the sensor props.
+
+### Steady state
+
+```tsx
+<Physics
+    onSettled={() => console.log('everything is asleep')}
+    onActivityChange={(active, total) => console.log(`${active}/${total} awake`)}
+>
+    {null}
+</Physics>
+```
+
+`onSettled` is **edge triggered**: it fires on the step where the last awake body goes to sleep,
+and not again until something wakes up. A world that was never active does not announce itself
+settled, and removing the last awake body settles the world (Jolt's `RemoveBody` deactivates
+synchronously).
+
+Both are driven by a count the activation listener maintains, so they cost one comparison per step
+rather than a per-frame scan of every body. The same numbers are readable at any time:
+
+| member | |
+| --- | --- |
+| `bodySystem.activeBodyCount` | awake bodies |
+| `bodySystem.simulatedBodyCount` | dynamic + kinematic bodies |
+| `bodySystem.isSettled` | `activeBodyCount === 0` |
+
+`activityChange` is emitted after that step's sleep/wake events, so a handler that counts those
+agrees with the totals.
+
+### Subscribing imperatively
+
+```tsx
+import { useJolt, useWorldEvent } from '@react-three/jolt';
+import { useEffect } from 'react';
+
+function Watcher() {
+    const { physicsSystem } = useJolt();
+
+    // either the hook…
+    useWorldEvent('collisionEnter', (e) => console.log(e.other.handle));
+
+    // …or the emitter directly; `on` returns the unsubscribe
+    useEffect(
+        () => physicsSystem.events.on('settled', () => console.log('settled')),
+        [physicsSystem]
+    );
+
+    return null;
+}
+```
+
+`JoltContext` also exposes the world emitter directly as `useJolt().events`.
+
+## Step hooks
+
+The physics step is where a force means a fixed amount of momentum: a rendered frame may run zero,
+one or five substeps, so a force applied from `useFrame` is frame-rate dependent and one applied
+from a step hook is not.
+
+```tsx
+import { useAfterPhysicsStep, useBeforePhysicsStep } from '@react-three/jolt';
+
+function Thruster() {
+    useBeforePhysicsStep((deltaTime, subframe) => {
+        // runs before pending body actions and before Step()
+    });
+    useAfterPhysicsStep((deltaTime) => {
+        // runs after Step() and after that step's contact/sensor/sleep events were dispatched
+    });
+    return null;
+}
+```
+
+Both hold the callback in a ref, so an inline arrow does not resubscribe on every render, and both
+unsubscribe on unmount. The imperative equivalents are `physicsSystem.onBeforeStep(fn)` and
+`physicsSystem.onAfterStep(fn)`, each returning its unsubscribe.
+
+The order, per substep, is:
+
+```
+beforeStep → pending body actions → joltInterface.Step() → queued events → afterStep
+```
+
+> [!NOTE]
+> There are no `onBeforeStep` / `onAfterStep` props on `<Physics>`. The hooks are the React
+> surface; they run per substep, which a prop on the world component would not make obvious.
 
 ## `useJolt()`
 
@@ -165,7 +346,8 @@ Inside `<Physics>`, `useJolt()` gives you the systems behind the components.
 import { useJolt } from '@react-three/jolt';
 
 function Inspector() {
-    const { jolt, physicsSystem, bodySystem, joltInterface, paused, debug, step } = useJolt();
+    const { jolt, physicsSystem, bodySystem, joltInterface, events, paused, debug, step } =
+        useJolt();
     // ...
     return null;
 }
@@ -176,6 +358,7 @@ function Inspector() {
 | `physicsSystem` | the `PhysicsSystem` for this world — gravity, stepping, queries, and every other system hangs off it |
 | `bodySystem` | shortcut for `physicsSystem.bodySystem`: create, look up and remove bodies |
 | `joltInterface` | the live `Jolt.JoltInterface`. Careful. |
+| `events` | the world [`Emitter`](#world-events), same object as `physicsSystem.events` |
 | `jolt` | the raw WASM module (`Raw.module`). **Very** careful — see [Memory & lifecycle](/advanced/memory) |
 | `paused`, `debug` | the world's current flags |
 | `step` | the step function the frame loop calls |
@@ -193,15 +376,18 @@ The object most of the world's behaviour lives on. Beyond the props above:
 | `accumulator` | simulation time not yet consumed by a fixed step, in seconds |
 | `resetAccumulator()` | drop it (e.g. after a long stall you handled yourself) |
 | `invalidatePoseCache()` | forget every body's cached poses; frames render live poses until it refills |
-| `addPreStepListener(fn)` / `addPostStepListener(fn)` / `removeStepListener(fn)` | fired `(deltaTime, currentSubframe)` |
+| `events` | the world [`Emitter`](#world-events) |
+| `onBeforeStep(fn)` / `onAfterStep(fn)` | [step hooks](#step-hooks), called `(deltaTime, subframe)`; each returns its unsubscribe |
+| `addPreStepListener(fn)` / `addPostStepListener(fn)` / `removeStepListener(fn)` | **deprecated** aliases of the above |
 | `getRaycaster()` / `getAdvancedRaycaster()` / `getMulticaster()` / `getShapecaster()` / `getShapeCollider()` | [queries](/api/queries) |
 | `constraintSystem` | [constraints](/api/rigid-body#constraints) |
 | `destroyed` | true once the world has been torn down |
 
-> [!WARNING]
-> Step listeners are currently removed by **function identity**, so an inline arrow function can
-> never be removed. Keep a reference if you intend to unsubscribe. A uniform `on(type, fn) => off`
-> API is coming in the next release.
+> [!NOTE]
+> `addPreStepListener` / `addPostStepListener` now return an unsubscribe too (they used to return
+> `void`, so this is source compatible), and `removeStepListener(fn)` removes *every* subscription
+> made for that function. Both are deprecated because removal by identity cannot work for the
+> inline arrows callers actually pass — keep the handle `onBeforeStep` gives you instead.
 
 ## Stepping and the frame loop
 
@@ -218,3 +404,75 @@ To restart a world from scratch, change its `key`:
 
 That unmounts the old `PhysicsSystem` (freeing its bodies and Jolt allocations) and builds a new
 one.
+
+## `<Attractor>`
+
+A point that pulls (or, with a negative `strength`, pushes) every dynamic body within `range` of
+it, once per **physics substep** — not once per rendered frame, which is what makes it frame rate
+independent. The API mirrors [@react-three/rapier's `<Attractor>`](https://github.com/pmndrs/react-three-rapier),
+so a scene can be ported across unchanged.
+
+```tsx
+import { Attractor, Physics, RigidBody } from '@react-three/jolt';
+
+<Physics gravity={0}>
+    <Attractor position={[0, 4, 0]} range={12} strength={40} type="linear">
+        <mesh>
+            <sphereGeometry args={[0.4]} />
+        </mesh>
+    </Attractor>
+    <RigidBody position={[8, 4, 0]}>
+        <mesh>
+            <sphereGeometry args={[0.5]} />
+        </mesh>
+    </RigidBody>
+</Physics>;
+```
+
+It renders a `<group>`, so it can be nested, animated or parented to a moving object and the
+attraction follows: its **world** position is re-read every substep. The step subscription is
+removed on unmount.
+
+### Props
+
+| prop | default | meaning |
+| --- | --- | --- |
+| `position` | `[0,0,0]` | local position of the wrapper group |
+| `strength` | `1` | force magnitude, in newtons; negative repels |
+| `range` | `10` | bodies further away than this are untouched |
+| `type` | `'static'` | falloff curve — see below |
+| `gravitationalConstant` | `6.673e-11` | `'newtonian'` only |
+| `mode` | `'force'` | `'force'` (frame rate independent) or `'impulse'` (rapier's behaviour) |
+| `enabled` | `true` | stop attracting without unmounting |
+| `group` | — | only attract bodies with this [`<RigidBody group>`](/api/collision-groups) id |
+| `filter` | — | `(body: BodyState) => boolean`, called per body per substep |
+| `activate` | `true` | wake sleeping bodies that come into range |
+
+### Falloff types
+
+Given strength `s`, range `r`, distance `d`, the attracted body's mass `m` and the gravitational
+constant `G`:
+
+| `type` | force | notes |
+| --- | --- | --- |
+| `'static'` | `s` | constant inside `range`, independent of mass — every body accelerates the same. The easiest to tune. |
+| `'linear'` | `s * (d / r)` | ramps *up* with distance, so it is gentlest at the centre. This is rapier's curve, kept identical for parity. |
+| `'newtonian'` | `G * s * m / d²` | real gravity: inverse square and proportional to mass. Needs a very large `strength` to do anything with the default `G`. |
+
+> [!NOTE]
+> `activate` exists because Jolt never clears the force accumulated on a *sleeping* body. Left
+> off, an attractor could neither start a body moving nor stop its pull going off all at once the
+> moment something else woke it.
+
+### `useAttractor()`
+
+The imperative half. Takes the same options plus `target` (a ref to any `Object3D`, whose world
+position is used) or a plain `position`, and returns the live world position the attraction is
+being applied from.
+
+```tsx
+const origin = useAttractor({ target: planetRef, strength: 60, range: 20 });
+```
+
+Both forms allocate nothing on the Jolt heap per step: the body list is walked with a hoisted
+callback and the force goes through the library's shared scratch vector.

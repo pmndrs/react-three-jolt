@@ -17,6 +17,8 @@ import {
     Vector3
 } from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+import { getValidatedHeightfieldSampleCount } from '../heightField/Generators';
+import { type SurfaceMaterial, SurfaceMaterialTable } from '../heightField/materials';
 import { Raw } from '../raw';
 import { type anyQuat, type anyVec3, devWarn, joltScratch, quat, vec3 } from '../utils';
 
@@ -108,8 +110,17 @@ export interface ShapeDescriptorBase {
      * to the generated shape.
      */
     offset?: Vec3Tuple;
-    /** User data stored on the sub shape when this descriptor is added to a compound. */
+    /**
+     * A 32 bit tag stamped onto the generated shape (and onto the compound's sub shape record).
+     * A contact reports it back as `payload.targetSubShape.userData`, which is how a `<Shape>`
+     * knows which contacts are its own - issue #13.
+     */
     userData?: number;
+    /**
+     * A human readable label, carried on the descriptor only - it never reaches Jolt. Reachable
+     * from a contact as `payload.targetSubShape.descriptor?.name`.
+     */
+    name?: string;
 }
 
 export interface BoxShapeDescriptor extends ShapeDescriptorBase {
@@ -172,6 +183,17 @@ export interface HeightfieldShapeDescriptor extends ShapeDescriptorBase {
     /** Distance between samples on x/z (and the height multiplier on y). */
     scale: Vec3Tuple;
     blockSize?: number;
+    /**
+     * Per-surface friction/restitution (issue #46). Built into the shape's
+     * `PhysicsMaterialList`; pass a {@link SurfaceMaterialTable} (rather than a plain array) to
+     * keep the pointer mapping the contact listener resolves friction through.
+     */
+    materials?: SurfaceMaterialTable | SurfaceMaterial[];
+    /**
+     * One material index per **quad**: `(sampleCount - 1)^2` entries, row major. Required when
+     * more than one material is given; ignored otherwise.
+     */
+    materialIndices?: NumberArray;
 }
 export interface StaticCompoundShapeDescriptor extends ShapeDescriptorBase {
     type: 'staticCompound';
@@ -242,6 +264,21 @@ export type ShapeOptions = {
     mesh?: THREE.Mesh;
     blockSize?: number;
     children?: ShapeDescriptor[];
+
+    //* heightfield, described from raw samples rather than a mesh (issue #155) ---
+    /** `sampleCount * sampleCount` height samples, row major. */
+    heights?: NumberArray;
+    /** Samples per edge. Must be `blockSize * 2^n`. */
+    sampleCount?: number;
+    /**
+     * Distance between samples on x/z and the height multiplier on y. Named apart from `scale`,
+     * which wraps the finished shape in a `ScaledShape`.
+     */
+    heightScale?: anyVec3;
+    /** Per-surface friction/restitution, see {@link HeightfieldShapeDescriptor.materials}. */
+    materials?: SurfaceMaterialTable | SurfaceMaterial[];
+    /** One material index per quad, see {@link HeightfieldShapeDescriptor.materialIndices}. */
+    materialIndices?: NumberArray;
 };
 
 /* ============================================================================
@@ -453,9 +490,17 @@ const describeHeightfieldMesh = (mesh: THREE.Mesh, blockSize = 2): HeightfieldSh
     const geometry = mesh.geometry as THREE.PlaneGeometry;
     const positions = geometry.attributes.position.array as ArrayLike<number>;
     const vertexCount = positions.length / 3;
-    const sampleCount = Math.sqrt(vertexCount);
+    // throws a clear error if this isn't a grid Jolt can accept at all
+    const sampleCount = getValidatedHeightfieldSampleCount(vertexCount, blockSize);
     const planeWidth = geometry.parameters.width;
-    const scale = planeWidth / sampleCount;
+    const planeDepth = geometry.parameters.height ?? planeWidth;
+    // `sampleCount` samples span `sampleCount - 1` segments, so the distance *between* samples
+    // is width / (sampleCount - 1). Dividing by sampleCount (what this used to do) stretched
+    // the physics field by one extra sample's worth - a visible render/physics mismatch at the
+    // edges of a coarse field, and the reason `addHeightfield` derives its corner offset from
+    // the same numbers instead of guessing.
+    const scaleX = planeWidth / (sampleCount - 1);
+    const scaleZ = planeDepth / (sampleCount - 1);
 
     const heights: number[] = new Array(vertexCount);
     for (let i = 0; i < vertexCount; i++) heights[i] = positions[i * 3 + 1];
@@ -464,7 +509,7 @@ const describeHeightfieldMesh = (mesh: THREE.Mesh, blockSize = 2): HeightfieldSh
         type: 'heightfield',
         heights,
         sampleCount,
-        scale: [scale, 1, scale],
+        scale: [scaleX, 1, scaleZ],
         blockSize
     };
 };
@@ -704,11 +749,30 @@ export function describeShapeFromOptions(
                 indices: flattenIndices(options.indices ?? options.indexes ?? [])
             };
         case 'heightfield': {
+            // #155: <HeightfieldCollider args={[samples, sampleCount, scale]}> hands over the
+            // samples directly; the mesh path below is what <Shape mesh={...}> has always done.
+            if (options.heights) {
+                const blockSize = options.blockSize ?? 2;
+                const sampleCount =
+                    options.sampleCount ??
+                    getValidatedHeightfieldSampleCount(options.heights.length, blockSize);
+                const descriptor: HeightfieldShapeDescriptor = {
+                    type: 'heightfield',
+                    heights: options.heights,
+                    sampleCount,
+                    scale: toTuple(vec3.three(options.heightScale ?? [1, 1, 1])),
+                    blockSize
+                };
+                if (options.materials) descriptor.materials = options.materials;
+                if (options.materialIndices) descriptor.materialIndices = options.materialIndices;
+                return descriptor;
+            }
             const mesh =
                 options.mesh ?? (options.geometry ? new THREE.Mesh(options.geometry) : undefined);
             if (!mesh)
                 throw new Error(
-                    'react-three-jolt: a heightfield needs a `mesh` (or `geometry`) to sample'
+                    'react-three-jolt: a heightfield needs `heights` (with `sampleCount`), or a ' +
+                        '`mesh`/`geometry` to sample'
                 );
             return describeHeightfieldMesh(mesh, options.blockSize);
         }
@@ -853,6 +917,61 @@ const createMeshShapeSettings = (
     return shapeSettings;
 };
 
+/**
+ * Attach a heightfield's materials (issue #46).
+ *
+ * `mMaterialIndices` is one `uint8` per quad - `(sampleCount - 1)^2`, row major - and Jolt only
+ * looks at it when there is more than one material. The `PhysicsMaterialList` is copied into the
+ * settings (and again into the shape), so the list is ours to destroy while the materials inside
+ * it are ref-counted by the shape; see `heightField/materials.ts` for the verified ref counts.
+ */
+const applyHeightfieldMaterials = (
+    shapeSettings: Jolt.HeightFieldShapeSettings,
+    descriptor: HeightfieldShapeDescriptor
+): void => {
+    const { materials, materialIndices, sampleCount } = descriptor;
+    if (!materials) return;
+    const table =
+        materials instanceof SurfaceMaterialTable ? materials : new SurfaceMaterialTable(materials);
+    if (table.size === 0) return;
+
+    const jolt = Raw.module;
+    if (table.size > 1) {
+        const quads = (sampleCount - 1) * (sampleCount - 1);
+        if (!materialIndices || materialIndices.length !== quads)
+            throw new Error(
+                `Heightfield: ${table.size} materials need one material index per quad ` +
+                    `(${quads} for ${sampleCount} samples per edge), got ` +
+                    `${materialIndices?.length ?? 0}.`
+            );
+        // an ArrayUint8 owned by the settings: resize allocates inside it, destroying the
+        // settings frees it
+        shapeSettings.mMaterialIndices.resize(quads);
+        const target = new Uint8Array(
+            jolt.HEAPU8.buffer,
+            jolt.getPointer(shapeSettings.mMaterialIndices.data()),
+            quads
+        );
+        for (let i = 0; i < quads; i++) {
+            const index = materialIndices[i];
+            if (!(index >= 0) || index >= table.size)
+                throw new Error(
+                    `Heightfield: material index ${index} at quad ${i} is outside the ` +
+                        `${table.size} materials given.`
+                );
+            target[i] = index;
+        }
+    }
+
+    const list = table.createList();
+    try {
+        // assignment copies the vector (and takes a reference on every material in it)
+        shapeSettings.mMaterials = list;
+    } finally {
+        jolt.destroy(list);
+    }
+};
+
 const createHeightfieldShapeSettings = (
     descriptor: HeightfieldShapeDescriptor
 ): Jolt.HeightFieldShapeSettings => {
@@ -881,6 +1000,13 @@ const createHeightfieldShapeSettings = (
         heightSamples[i] = heights[i];
         // TODO: NOTE, this implementation does not allow holes in the map, which Jolt supports
         //heightSamples[i] = Jolt.HeightFieldShapeConstantValues.prototype.cNoCollisionValue; // Invisible pixels make holes
+    }
+    try {
+        applyHeightfieldMaterials(shapeSettings, descriptor);
+    } catch (error) {
+        // nothing has taken ownership of the settings yet, so they are ours to free
+        jolt.destroy(shapeSettings);
+        throw error;
     }
     return shapeSettings;
 };
@@ -930,8 +1056,20 @@ const createCompoundShapeSettings = (
  * The children of a compound and the inner shape of a decorator are ref-counted by their parent:
  * destroying the returned settings frees the whole tree, and nothing inside it may be destroyed
  * by hand.
+ *
+ * Every descriptor's `userData` is stamped onto the shape itself (issue #13). That matters
+ * because `CompoundShape::GetSubShapeUserData` recurses into the child a `SubShapeID` points at
+ * and returns the **child shape's** user data - not the `mUserData` the compound stores per
+ * sub shape record - so the shape is the only place a contact can read it back from. Both are
+ * written: the record keeps `AddShape`'s copy for anyone walking the compound by index.
  */
 export function createShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSettings {
+    const settings = buildShapeSettings(descriptor);
+    if (descriptor.userData !== undefined) settings.mUserData = descriptor.userData;
+    return settings;
+}
+
+function buildShapeSettings(descriptor: ShapeDescriptor): Jolt.ShapeSettings {
     const jolt = Raw.module;
     switch (descriptor.type) {
         case 'box': {
@@ -1313,6 +1451,127 @@ export function modifySubShape(
     }
     mutable.AdjustCenterOfMass();
 }
+
+/* ============================================================================
+ * Sub shape identity (issue #13)
+ *
+ * A contact manifold names the two shapes that touched with a `SubShapeID`: a bit path from the
+ * root shape down to the leaf that was actually hit, packed into one 32 bit word from the low
+ * end, with every unused high bit set to 1. Jolt's "empty" id - what a shape with no children
+ * reports - is therefore `0xFFFFFFFF`, which reads as `-1` out of the `Int32Array` the event
+ * queue stores it in.
+ *
+ * Two things can be recovered from it:
+ *
+ *  - **user data**: `Shape::GetSubShapeUserData` walks the path and returns the leaf shape's
+ *    `mUserData`, which `createShapeSettings` stamps from the descriptor. This works at any
+ *    nesting depth and is what `<Shape>`'s scoped event props match on.
+ *  - **index**: which child of the *top level* compound the path starts at.
+ *    `CompoundShape::GetSubShapeIndexFromID` is not in the JS binding, so `subShapeIndexFromId`
+ *    redoes its arithmetic: pop `ceil(log2(numSubShapes))` bits off the low end.
+ *
+ * Note the consequence of the padding: for a two child compound, child 1's id is `0xFFFFFFFF` -
+ * the same word as the empty id. The two are only distinguishable by looking at the shape, which
+ * is why the index is resolved against the body's root shape rather than from the id alone.
+ * ========================================================================== */
+
+// One shared `SubShapeID`, same contract (and the same module-swap guard) as `joltScratch`:
+// `GetSubShapeUserData` copies what it reads, so nothing keeps a pointer to it.
+let subShapeIdModule: unknown = null;
+let subShapeIdScratch: Jolt.SubShapeID | null = null;
+const scratchSubShapeId = (value: number): Jolt.SubShapeID => {
+    if (subShapeIdModule !== Raw.module) {
+        subShapeIdModule = Raw.module;
+        subShapeIdScratch = null;
+    }
+    if (!subShapeIdScratch) subShapeIdScratch = new Raw.module.SubShapeID();
+    subShapeIdScratch.SetValue(value);
+    return subShapeIdScratch;
+};
+
+/** Jolt's "no sub shape" id, as it comes out of the event queue. */
+export const EMPTY_SUB_SHAPE_ID = -1;
+
+/**
+ * Strip the decorators (`ScaledShape`, `OffsetCenterOfMassShape`, `RotatedTranslatedShape`) that
+ * wrap a shape without contributing bits to a `SubShapeID`, so the compound underneath - if
+ * there is one - can be found. The loop is bounded because a cycle is impossible but a very
+ * deeply decorated shape is not worth walking forever.
+ */
+const undecorateShape = (shape: Jolt.Shape): Jolt.Shape => {
+    const jolt = Raw.module;
+    let current = shape;
+    for (let depth = 0; depth < 8; depth++) {
+        const subType = current.GetSubType();
+        if (
+            subType !== jolt.EShapeSubType_Scaled &&
+            subType !== jolt.EShapeSubType_OffsetCenterOfMass &&
+            subType !== jolt.EShapeSubType_RotatedTranslated
+        )
+            return current;
+        current = jolt.castObject(current, jolt.DecoratedShape).GetInnerShape();
+    }
+    return current;
+};
+
+/** True when `shape` (decorators stripped) is a compound, i.e. when it has sub shapes at all. */
+export const hasSubShapes = (shape: Jolt.Shape): boolean => {
+    const jolt = Raw.module;
+    const subType = undecorateShape(shape).GetSubType();
+    return (
+        subType === jolt.EShapeSubType_StaticCompound ||
+        subType === jolt.EShapeSubType_MutableCompound
+    );
+};
+
+/**
+ * Which child of `shape`'s top level compound a `SubShapeID` points at, or `-1` when the shape
+ * has no children (so the whole shape is the contact).
+ */
+export const subShapeIndexFromId = (shape: Jolt.Shape, subShapeId: number): number => {
+    const jolt = Raw.module;
+    const root = undecorateShape(shape);
+    const subType = root.GetSubType();
+    if (
+        subType !== jolt.EShapeSubType_StaticCompound &&
+        subType !== jolt.EShapeSubType_MutableCompound
+    )
+        return -1;
+    const count = jolt.castObject(root, jolt.CompoundShape).GetNumSubShapes();
+    if (count <= 0) return -1;
+    // `GetSubShapeIDBits()` is `32 - CountLeadingZeros(size - 1)`: just enough bits to hold the
+    // largest index. A one child compound uses none of them, so its only child is index 0.
+    const bits = count === 1 ? 0 : 32 - Math.clz32(count - 1);
+    const index = bits === 0 ? 0 : subShapeId & ((1 << bits) - 1);
+    return index < count ? index : -1;
+};
+
+/**
+ * The user data of the leaf shape a `SubShapeID` points at - `0` when nothing stamped one.
+ * Resolved against the shape at any nesting depth, not just the top level.
+ */
+export const subShapeUserData = (shape: Jolt.Shape, subShapeId: number): number =>
+    shape.GetSubShapeUserData(scratchSubShapeId(subShapeId)) >>> 0;
+
+/**
+ * The descriptor a top level sub shape index was built from, when the body kept the description
+ * it was built from (`BodyState.shapeDescriptor`). `index === -1` means the shape has no
+ * children, so the whole descriptor is the answer.
+ */
+export const descriptorForSubShape = (
+    descriptor: ShapeDescriptor | undefined,
+    index: number
+): ShapeDescriptor | undefined => {
+    if (!descriptor) return undefined;
+    let current: ShapeDescriptor = descriptor;
+    for (let depth = 0; depth < 8; depth++) {
+        if (current.type !== 'scaled' && current.type !== 'offsetCenterOfMass') break;
+        current = current.child;
+    }
+    if (current.type !== 'staticCompound' && current.type !== 'mutableCompound')
+        return index < 0 ? current : undefined;
+    return index < 0 ? undefined : current.children[index];
+};
 
 /* ============================================================================
  * Scaling (issue #40)

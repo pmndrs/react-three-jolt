@@ -21,22 +21,29 @@ import { RigidBody } from '@react-three/jolt';
 Children render inside an `<object3D>` the body drives. Anything non-visual (lights, groups,
 your own components) can live in there too; only meshes contribute to the collision shape.
 
+To place the collision shape yourself — a trigger volume with no mesh, a cheap primitive standing
+in for a detailed model, several pieces making up one body — use the named collider components
+and `<RigidBody colliders>`. See [Colliders](/api/colliders).
+
 ## Props
 
 | prop | type | notes |
 | --- | --- | --- |
 | `type` | `'dynamic' \| 'static' \| 'kinematic' \| 'rig'` | motion type. Defaults to dynamic |
 | `shape` | [`AutoShape`](/api/shapes#autoshape) | overrides shape autodetection for this body |
+| `colliders` | `false \| 'cuboid' \| 'ball' \| 'hull' \| 'trimesh'` | what to do about the meshes inside the body — see [Colliders](/api/colliders#<rigidbody-colliders>) |
 | `position` | `number[]` | setting it after creation **teleports** the body |
 | `rotation` | `number[]` | Euler angles, radians. Also a teleport |
-| `scale` | `number[]` | scales the collision shape as well as the object |
+| `scale` | `number[]` | scales the collision shape as well as the object. Applied **while the body is created**, not a frame later |
 | `quaternion` | `number[]` | accepted, currently only stored on the context |
-| `mass` | `number` | |
-| `friction` | `number` | **declared but not wired up** — set `body.friction` on the [`BodyState`](#material-and-mass) instead |
-| `linearDamping` | `number` | |
-| `angularDamping` | `number` | |
-| `isSensor` | `boolean` | fires contacts, causes no collision response |
-| `group` / `subGroup` | `number` | [collision filtering](/api/collision-groups). **Must be present at creation** to be usable later |
+| `mass` | `number` | kilograms. Ignored on static/kinematic bodies, which have infinite mass |
+| `friction` | `number` | `0` (ice) to `1` (glue). Jolt's default is `0.2`. Reactive |
+| `restitution` | `number` | bounciness, `0`–`1`. Default `0`. Reactive |
+| `gravityFactor` | `number` | multiplier on world gravity for this body. Default `1`. Reactive |
+| `linearDamping` | `number` | Jolt's default is `0.05` |
+| `angularDamping` | `number` | Jolt's default is `0.05` |
+| `isSensor` | `boolean` | fires sensor events, causes no collision response |
+| `group` / `subGroup` | `number` | [collision filtering](/api/collision-groups). Reactive, and `0` is a real id |
 | `dof` | `{ x?, y?, z?, rotX?, rotY?, rotZ? }` | per-axis degrees of freedom |
 | `lockRotations` | `boolean` | shorthand for all three rotations off |
 | `lockTranslations` | `boolean` | shorthand for all three translations off |
@@ -44,10 +51,16 @@ your own components) can live in there too; only meshes contribute to the collis
 | `obstructionTimelimit` | `number` | ms; switches obstruction to `'temporal'` |
 | `onlyInitialize` | `boolean` | apply `position`/`rotation` at creation only, then stop watching them |
 | `debug` | `boolean` | draw this body's collision shape |
-| `onContactAdded` | `(body1: number, body2: number) => void` | handles, not bodies — see [Events](#events) |
-| `onContactRemoved` | `(body1: number, body2: number) => void` | |
-| `onContactPersisted` | `(body1: number, body2: number) => void` | |
+| `activateOnChange` | `boolean` | default `true`. `false` stops `position`/`rotation`/`velocity`/`angularVelocity`/`scale`/`group`/`subGroup` writes from waking a sleeping body — see [Activation](#activation) |
+| `matrixAutoUpdate` | `boolean` | default `true`. `false` skips three's per-object matrix recompute in the physics sync — see [matrixAutoUpdate](#matrixautoupdate) |
+| `onContactAdded` | `(payload: CollisionEnterPayload) => void` | deprecated alias of `onCollisionEnter` — see [Events](#events) |
+| `onContactRemoved` | `(payload: CollisionPayload) => void` | deprecated alias of `onCollisionExit` |
+| `onContactPersisted` | `(payload: CollisionEnterPayload) => void` | deprecated alias of `onCollisionPersist` |
 | `ref` | `Ref<BodyState>` | see [the ref caveat](#the-ref-caveat) |
+
+Event props — `onCollisionEnter`, `onCollisionPersist`, `onCollisionExit`, `onSensorEnter`,
+`onSensorExit`, `onSleep`, `onWake`, `onContactValidate` (and the `onIntersectionEnter` /
+`onIntersectionExit` aliases) — have a [section of their own](#events).
 
 ```tsx
 <RigidBody
@@ -61,7 +74,7 @@ your own components) can live in there too; only meshes contribute to the collis
     group={0}
     subGroup={1}
     dof={{ x: true, y: true, z: true, rotX: false, rotY: true, rotZ: false }}
-    onContactAdded={(body1, body2) => console.log(body1, body2)}
+    onCollisionEnter={(e) => console.log(e.other.handle, e.normal)}
 >
     <mesh>
         <boxGeometry args={[1, 1, 1]} />
@@ -72,8 +85,8 @@ your own components) can live in there too; only meshes contribute to the collis
 
 > [!NOTE]
 > Writing `position` or `rotation` moves the body *instantly* — it does not push it there. For
-> kinematic motion use `body.moveKinematic(position, rotation, deltaTime)`, and for dynamic
-> bodies use forces and impulses.
+> kinematic motion use [`setKinematicTarget`](#kinematic-platforms), and for dynamic bodies use
+> forces and impulses.
 
 ## The ref
 
@@ -151,16 +164,22 @@ detail.
 
 | member | |
 | --- | --- |
-| `position` | `THREE.Vector3`, get/set (setting teleports) |
-| `rotation` | `THREE.Quaternion`, get/set |
-| `scale` | `THREE.Vector3 \| number[] \| number`, get/set — rebuilds the scaled shape |
-| `setPositionAndRotation(position, rotation)` | both at once |
+| `position` | `THREE.Vector3`, get/set (setting teleports) — activation per [`activateOnChange`](#activation) |
+| `rotation` | `THREE.Quaternion`, get/set — same activation rules as `position` |
+| `scale` | `THREE.Vector3 \| number[] \| number`, get/set — rebuilds the scaled shape; same activation rules |
+| `setPosition(position, { activate? })` | method form of `position`, with a one-call activation override (#167) |
+| `setRotation(rotation, { activate? })` | method form of `rotation` |
+| `setScale(scale, { activate? })` | method form of `scale` |
+| `setPositionAndRotation(position, rotation, { activate? })` | both at once |
 | `getPosition(asJolt?)` | `asJolt` returns a `Jolt.RVec3` — see [ownership](/advanced/memory) |
 | `getMatrix(matrix)` / `setMatrix(matrix)` | `THREE.Matrix4` in/out |
 | `readPose(outPosition, outRotation)` | allocation-free live pose |
 | `getInterpolatedPose(alpha, outPosition, outRotation)` | allocation-free blend of the last two steps |
 | `resetPoseCache()` | drop the pose history, e.g. after a teleport, so the next frame doesn't lerp across it |
-| `moveKinematic(position, rotation, deltaTime?)` | drive a kinematic body |
+| `moveKinematic(position, rotation?, deltaTime?)` | drive a kinematic body for one step |
+| `setKinematicTarget(position, rotation?)` | aim a kinematic body; the step loop drives it |
+| `clearKinematicTarget()` | stop driving it |
+| `isStatic` | read-only |
 
 ```tsx
 const position = useRef(new THREE.Vector3());
@@ -174,12 +193,109 @@ useFrame(() => {
 The `position`/`rotation` getters allocate a new three.js object each read — fine for effects,
 avoid in a per-frame loop, where `readPose` exists.
 
+### Kinematic platforms
+
+A kinematic body is moved by you and pushes everything it touches. Drive it with a target pose,
+never by writing `position` — that teleports, and a teleport carries nothing with it.
+
+```tsx
+const platform = useRef<BodyState>(null);
+
+useFrame((state) => {
+    // the step loop re-aims this every substep with that substep's real dt
+    platform.current?.setKinematicTarget([Math.sin(state.elapsed) * 5, 2, 0]);
+});
+```
+
+`setKinematicTarget` is the one to reach for: the target is sticky and re-applied at the top of
+every substep, so the body converges on it whatever the frame rate, and a body that has arrived
+simply parks there. `moveKinematic(position, rotation?, deltaTime?)` is the one-shot version —
+it applies once, with `deltaTime` defaulting to the world's step length
+(`physicsSystem.timeStep`, or the last frame delta when the world steps with `timeStep="vary"`).
+
+Leaving `rotation` out keeps the body's current rotation in both.
+
+Riders are carried because `MoveKinematic` gives the platform a real velocity, which is what
+wakes the sleeping bodies resting on it — this works with stock body settings. Two things are
+still worth tuning for a demo that has to feel solid:
+
+- **friction**: the default is `0.2`, which is slippery. A rider on a fast platform will lag
+  behind it and can slide off. Raise `friction` on the platform and/or the riders (`0.8`–`1`).
+- **sleeping**: a rider that is out of contact for a moment (a bumpy ride) can fall asleep in
+  mid-air's worth of time and miss the next push. `<Physics defaultBodySettings={{ mAllowSleeping:
+  false }}>` removes the question at the cost of never letting the scene idle.
+
+### Activation
+
+Setters that can move a body (`position`, `rotation`, `velocity`, `angularVelocity`, `scale`,
+`group`, `subGroup`) used to wake a sleeping body unconditionally (issue #167). `activateOnChange`
+controls that per body:
+
+```tsx
+const crate = useRef<BodyState>(null);
+
+useMount(() => {
+    // repositioning sleeping scenery shouldn't wake it just to move it and let it fall back
+    // asleep a moment later
+    crate.current!.activateOnChange = false;
+    crate.current!.position = new THREE.Vector3(3, 0.5, -2);
+});
+```
+
+- Default `true` — every setter's behavior before this flag existed. Nothing changes for
+  existing code.
+- `<RigidBody activateOnChange={false}>` sets it at the component level.
+- Each setter's method form (`setPosition`, `setRotation`, `setVelocity`, `setAngularVelocity`,
+  `setScale`, `setGroup`, `setSubGroup`) takes a one-call `{ activate }` override that wins over
+  the flag, e.g. `body.setPosition(v, { activate: true })` even while `activateOnChange` is
+  `false`.
+- A **static** body never activates, regardless of either flag — activating one asserts inside
+  Jolt and means nothing, since a static is never simulated.
+- Turn `activateOnChange` off for bulk repositioning of sleeping bodies: re-laying out a level's
+  sleeping props, snapping a stack of crates back to a saved layout, and similar "instant, no one
+  needs to notice" moves where waking every body just to move it — and having it fall back asleep
+  a step later — is wasted broadphase/island work.
+
+### `matrixAutoUpdate`
+
+Opt-in perf optimisation (issue #168). By default, the physics frame sync writes each body's pose
+into `object.position`/`object.quaternion`, and three.js recomposes `object.matrix` from those
+every frame on its own. With `bodyState.matrixAutoUpdate = false` (or
+`<RigidBody matrixAutoUpdate={false}>`), the sync instead composes the pose straight into
+`object.matrix` and flags `matrixWorldNeedsUpdate`, and turns off three's own
+`Object3D.matrixAutoUpdate` so nothing recomposes it a second time. `object.position` and
+`object.quaternion` are left exactly as they were at creation — reading them no longer tells you
+where the object is; use `bodyState.position` / `readPose` instead.
+
+```tsx
+<RigidBody matrixAutoUpdate={false} position={[0, 5, 0]}>
+    <mesh>
+        <boxGeometry args={[1, 1, 1]} />
+    </mesh>
+</RigidBody>
+```
+
+> [!CAUTION]
+> Only correct when this body's three.js parent transform is stable between physics steps — the
+> scene root, or a group that never moves, rotates or scales. The composed matrix is relative to
+> the parent space captured once in `invertedWorldMatrix` at body creation, exactly like every
+> other synced pose (this constraint already existed; `matrixAutoUpdate` does not add it, it
+> inherits it) — a moving parent was never supported by the sync loop.
+
+Measured with 1000 dynamic bodies stepped for 120 frames
+(`packages/react-three-jolt/test/matrix-auto-update.test.ts`): roughly a 4–6% reduction in
+sync-loop time, from skipping three's `Object3D.updateMatrix()` and an extra `Matrix4.decompose()`
+per body. Worth it for scenes with hundreds to thousands of always-visible dynamic bodies; not
+worth the readability cost for a handful.
+
 ### Motion
 
 | member | |
 | --- | --- |
-| `velocity` | `THREE.Vector3`, get/set |
-| `angularVelocity` | `THREE.Vector3`, get/set |
+| `velocity` | `THREE.Vector3`, get/set — activation per [`activateOnChange`](#activation) |
+| `angularVelocity` | `THREE.Vector3`, get/set — same activation rules |
+| `setVelocity(velocity, { activate? })` | method form of `velocity`, with a one-call override |
+| `setAngularVelocity(angularVelocity, { activate? })` | method form of `angularVelocity` |
 | `applyForce(force)` | |
 | `applyTorque(torque)` | |
 | `addImpulse(impulse)` | |
@@ -190,6 +306,12 @@ avoid in a per-frame loop, where `readPose` exists.
 `friction`, `restitution`, `mass`, `gravityFactor`, `linearDamping`, `angularDamping`,
 `isSensor` — all plain get/set number/boolean properties. `color` gets/sets the three.js material
 colour (and the per-instance colour on instanced bodies).
+
+`mass` is the body's *simulated* mass in kilograms, read from its motion properties rather than
+from the shape's density, so it reflects a `mass` prop or a later write. Static and kinematic
+bodies have infinite mass in Jolt and report `0`; setting it on one does nothing. Setting it
+scales the inertia tensor with it and leaves the body's [degrees of freedom](#degrees-of-freedom)
+untouched.
 
 ### Degrees of freedom
 
@@ -204,17 +326,42 @@ colour (and the per-instance colour on instanced bodies).
 ### Filtering and identity
 
 `handle`, `body` (the raw `Jolt.Body`), `BodyID`, `object` (the three.js object), `meshType`,
-`isInstance`, and `group` / `subGroup` — see [Collision groups & layers](/api/collision-groups).
+`isInstance`, and `group` / `subGroup` (plus the `collisionGroup` / `collisionSubGroup` aliases) —
+see [Collision groups & layers](/api/collision-groups).
+`setGroup(group, { activate? })` / `setSubGroup(subGroup, { activate? })` are the method forms
+with a one-call [activation](#activation) override (#167).
+
+### Shape
+
+| member | |
+| --- | --- |
+| `shape` | the live `Jolt.Shape`, get/set |
+| `scale` | `THREE.Vector3 \| number[] \| number`, get/set — wraps the shape in a `ScaledShape` |
+| `isMutableCompound` | is this body's shape a `MutableCompoundShape` |
+| `mutableCompound` | that shape, cast; throws a clear error if it isn't one |
+| `addSubShape(descriptor)` | add a child to a mutable compound; returns its index |
+| `removeSubShape(index)` | remove one (higher indices shift down) |
+| `modifySubShape(index, { position?, rotation? })` | move one |
+| `notifyShapeChanged(previousCenterOfMass?, updateMassProperties?)` | tell Jolt the shape changed underneath it |
+
+The three edit methods call `notifyShapeChanged` for you, so the body's mass properties and
+broadphase bounds follow the edit. You only call it yourself if you mutate a shape by hand through
+`body.shape`. See [mutable compounds](/api/shapes#mutable-compounds).
 
 ### Contacts
 
 | member | |
 | --- | --- |
-| `addContactListener(fn, 'added' \| 'removed' \| 'persisted')` | |
-| `removeContactListener(fn)` | |
-| `addActivationListener(fn)` / `removeActivationListener(fn)` | sleep/wake |
-| `isContacting(handle)` | is this body currently touching that one |
-| `contacts` | `Map<handle, count>` |
+| `events` | this body's [`Emitter`](#events) |
+| `on(type, fn)` | subscribe; returns the unsubscribe |
+| `onCollisionEnter/Persist/Exit(fn)`, `onSensorEnter/Exit(fn)`, `onSleep(fn)`, `onWake(fn)`, `onContactValidate(fn)` | named sugar for `on()` |
+| `eventMask` | bitfield of what this body is currently listening for |
+| `isContacting(handle)` | how many sub-shape manifolds are open against that body (`0` = not touching) |
+| `contacts` | `Map<handle, count>`, the same bookkeeping |
+| `dispose()` | close every open pair and drop every listener |
+| `addContactListener(fn, 'added' \| 'removed' \| 'persisted')` | **deprecated**, returns an unsubscribe |
+| `removeContactListener(fn)` | **deprecated**; removes the listener from every channel |
+| `addActivationListener(fn)` / `removeActivationListener(fn)` | **deprecated**; fires for both sleep and wake |
 
 ### Motion sources
 
@@ -326,31 +473,297 @@ export function Confetti() {
 }
 ```
 
+| prop | type | default | |
+| --- | --- | --- | --- |
+| `count` | `number` | `150` | changing it adds or removes bodies incrementally |
+| `color` | `THREE.ColorRepresentation` | `'#D9594C'` | seeds a *new* mesh's instance colours |
+| `position` | `THREE.Vector3 \| [number, number, number]` | — | |
+| `rotation` | `THREE.Euler \| [number, number, number]` | — | |
+
+It takes the same [event props](#events) as `<RigidBody>` — `onCollisionEnter`,
+`onCollisionPersist`, `onCollisionExit`, `onSensorEnter`, `onSensorExit`, `onIntersectionEnter`,
+`onIntersectionExit`, `onSleep`, `onWake` — subscribed on every instance body. The payload's
+**`target.index`** says which instance fired:
+
+```tsx
+<InstancedRigidBodyMesh
+    count={200}
+    onCollisionEnter={(e) => console.log('instance', e.target.index, 'hit', e.other.handle)}
+>
+    <mesh>
+        <boxGeometry args={[0.5, 0.5, 0.5]} />
+        <meshStandardMaterial />
+    </mesh>
+</InstancedRigidBodyMesh>
+```
+
 > [!NOTE]
-> `count`, `color`, `position` and `rotation` are all currently **required** by the type, and
-> changing `count` rebuilds every body. Instances with no explicit position all start at roughly
-> the same place (with a small jitter) and push each other apart — which is either a bug or a
-> shape fountain, depending on what you wanted.
+> Instances with no explicit position all start at roughly the same place (with a small jitter)
+> and push each other apart — which is either a bug or a shape fountain, depending on what you
+> wanted. On unmount every instance body is destroyed and the `InstancedMesh`'s GPU buffers are
+> released; a geometry or material you passed as a child stays owned by three-fiber.
 
 ## Events
 
-Today `<RigidBody>` exposes three contact props, and each hands you two body **handles**:
+Every event in the library — step, contact, sensor, sleep/wake — goes through one primitive and
+one set of names. A concept is spelled the same way whether you reach it as a React prop, a hook,
+or an imperative subscription.
+
+| concept | prop | imperative |
+| --- | --- | --- |
+| started touching | `onCollisionEnter` | `body.onCollisionEnter(fn)` / `body.on('collisionEnter', fn)` |
+| still touching | `onCollisionPersist` | `body.onCollisionPersist(fn)` |
+| stopped touching | `onCollisionExit` | `body.onCollisionExit(fn)` |
+| entered a sensor | `onSensorEnter` (alias `onIntersectionEnter`) | `body.onSensorEnter(fn)` |
+| left a sensor | `onSensorExit` (alias `onIntersectionExit`) | `body.onSensorExit(fn)` |
+| went to sleep | `onSleep` | `body.onSleep(fn)` |
+| woke up | `onWake` | `body.onWake(fn)` |
+| accept/reject a contact | `onContactValidate` | `body.onContactValidate(fn)` |
+
+The same names exist world-wide on [`<Physics>`](/api/physics#world-events), plus `onSettled` and
+`onActivityChange`.
 
 ```tsx
-<RigidBody
-    onContactAdded={(body1, body2) => {}}
-    onContactRemoved={(body1, body2) => {}}
-    onContactPersisted={(body1, body2) => {}}
-/>
+<RigidBody onCollisionEnter={(e) => console.log(e.other.object?.name, e.normal)}>
+    <mesh>
+        <boxGeometry args={[1, 1, 1]} />
+    </mesh>
+</RigidBody>
 ```
 
-Look bodies up with `bodySystem.getBody(handle)`. Contacts on heightfields are unreliable — they
-fire per triangle and confuse the contact bookkeeping.
+Handler identity is deliberately **not** a subscription dependency, so an inline arrow does not
+resubscribe on every render, and StrictMode's mount → cleanup → mount leaves exactly one
+subscription.
 
-> [!IMPORTANT]
-> **Coming in the next release.** The event system is being rewritten: rapier-style
-> `onCollisionEnter` / `onCollisionExit` / `onSensorEnter` / `onSensorExit` / `onSleep` / `onWake`
-> props carrying a payload object (`target`, `other`, `normal`, `points`, …) instead of bare
-> handles, world-level events on `<Physics>`, and one `on(type, fn) => off` subscription API for
-> every system. The props above will keep working for at least one release. Nothing in this
-> section describes shipped code beyond the three props listed.
+### Subscribing imperatively
+
+```ts
+import type { BodyState } from '@react-three/jolt';
+
+function watch(body: BodyState) {
+    const off = body.on('collisionEnter', (e) => console.log(e.other.handle));
+    off(); // unsubscribe
+}
+```
+
+**Every subscription returns its own unsubscribe, and removal never compares function identity.**
+Registering the same function twice gives two subscriptions and two handles, so an inline arrow is
+just as removable as a named one. `body.onCollisionEnter(fn)` and friends are one-line sugar for
+the same thing, spelled exactly like the props. The old `removeContactListener(fn)` /
+`removeActivationListener(fn)` methods still exist, are deprecated, and now remove *every*
+subscription made for that function.
+
+From a component, `useBodyEvent` and `useWorldEvent` do the same with an effect's lifetime:
+
+```tsx
+import { BodyState, useBodyEvent, useWorldEvent } from '@react-three/jolt';
+
+function Counter({ body }: { body: BodyState | undefined }) {
+    useBodyEvent(body, 'collisionEnter', (e) => console.log(e.penetration));
+    useWorldEvent('settled', () => console.log('the world stopped moving'));
+    return null;
+}
+```
+
+### Payloads
+
+```ts
+import type { BodyState } from '@react-three/jolt';
+import type * as THREE from 'three';
+
+interface CollisionTarget {
+    body: BodyState | undefined;
+    object: THREE.Object3D | undefined;
+    handle: number; // BodyID.GetIndexAndSequenceNumber()
+    subShapeId: number; // SubShapeID.GetValue(); -1 for a shape with no sub-shapes
+    index?: number; // instance index, for <InstancedRigidBodyMesh>
+}
+interface CollisionPayload {
+    target: CollisionTarget; // the body this handler is registered on
+    other: CollisionTarget;
+    flipped: boolean; // true when `target` is Jolt's body 2
+    contactCount: number; // open sub-shape manifolds between the two bodies
+}
+interface CollisionEnterPayload extends CollisionPayload {
+    normal: THREE.Vector3; // world space, from `other` toward `target`
+    penetration: number;
+    points: THREE.Vector3[]; // world space; points.length === pointCount
+    pointCount: number;
+}
+```
+
+`collisionEnter` and `collisionPersist` carry the manifold (`CollisionEnterPayload`);
+`collisionExit`, `sensorEnter` and `sensorExit` carry `CollisionPayload`. `sleep` and `wake` carry
+`ActivationPayload` (`{ body, handle }`), and `contactValidate` carries `ValidatePayload`
+(`{ target, other, baseOffset }`). All of them are exported types.
+
+> [!CAUTION]
+> **Payloads are pooled and reused.** Read what you need inside the handler, or clone it; do not
+> retain the payload, its `normal`, its `points` or either `CollisionTarget`. This is the contract
+> r3f pointer events and rapier's `TempContactManifold` already carry. Under
+> [`<Physics debug>`](/api/physics#debug) a payload is poisoned (`NaN` and frozen) after dispatch,
+> so retaining one fails loudly in development and costs nothing in production.
+
+```tsx
+// do
+<RigidBody onCollisionEnter={(e) => setPoint(e.points[0].clone())}>{mesh}</RigidBody>;
+// don't
+<RigidBody onCollisionEnter={(e) => setLastContact(e)}>{mesh}</RigidBody>;
+```
+
+`body` and `object` are `undefined` when the other side is a Jolt body that was never registered
+with `BodySystem` — the [vehicle](/api/controllers#vehicle) chassis and the character controller's
+rig anchor are both like this. `handle` is always valid.
+
+### Which part of a compound was hit
+
+`payload.targetSubShape` and `payload.otherSubShape` turn a raw `SubShapeID` into the `<Shape>`
+that produced it:
+
+```ts
+interface SubShapeRef {
+    id: number;                            // SubShapeID.GetValue()
+    index: number;                         // top-level compound child, or -1 for a leaf shape
+    userData: number;                      // the tag stamped on the <Shape>/descriptor, or 0
+    descriptor: ShapeDescriptor | undefined;  // what it was built from, `name` included
+}
+```
+
+**They are resolved on first read.** Touching `targetSubShape` is what walks the shape; a handler
+that never asks costs nothing per contact, which is why they are getters rather than fields. The
+`SubShapeRef` is pooled like the rest of the payload.
+
+`index` comes from the bit path Jolt packs into the id, and `userData` from
+`Shape::GetSubShapeUserData`, which resolves all the way down to the leaf that was hit. The two
+answer different questions: `index` is *which child of the body's shape*, `userData` is *which
+declaration*, at any nesting depth. `descriptor` is only filled in when the body kept the
+description it was built from — `<Shape>` and the automatic `describeObject` path both do;
+`bodySystem.addBody(object, { shape })` does not unless you also pass `shapeDescriptor`.
+
+```tsx
+<RigidBody onCollisionEnter={(e) => console.log('hit', e.targetSubShape.descriptor?.name)}>
+    <Shape>
+        <Shape name="hull" size={[4, 1, 2]} />
+        <Shape name="wing" size={[1, 0.2, 6]} position={[2, 0, 0]} />
+    </Shape>
+</RigidBody>
+```
+
+#### Per-`<Shape>` handlers
+
+A `<Shape>` takes the same `onCollisionEnter` / `onCollisionPersist` / `onCollisionExit` /
+`onSensorEnter` / `onSensorExit` props as a `<RigidBody>`, scoped to itself:
+
+```tsx
+<RigidBody type="static">
+    <Shape>
+        <Shape size={[8, 1, 8]} position={[-6, 0, 0]} onCollisionEnter={leftPanelLitUp} />
+        <Shape size={[8, 1, 8]} position={[6, 0, 0]} onCollisionEnter={rightPanelLitUp} />
+    </Shape>
+</RigidBody>
+```
+
+They subscribe on the parent body and filter by sub-shape, so they cost the same as the body's
+own handlers plus one integer compare. A `<Shape>` that has any of them and no explicit
+`userData` is assigned one automatically (from the top of the 32-bit range, well clear of your
+own numbering). Pass `userData` yourself to choose the tag, and `name` to label the descriptor.
+
+Two caveats, both from how Jolt resolves a `SubShapeID`:
+
+- a `<Shape>` with handlers should be a **leaf**. Jolt resolves a contact down to the leaf shape,
+  so an intermediate compound's own tag is never what a contact reports. A *root* `<Shape>` that
+  is the whole compound is the exception and is handled: it is the whole body, so its handlers
+  simply are the body's, unfiltered.
+- for a two-child compound, child 1's id is `0xFFFFFFFF` — the same word as the "empty" id, since
+  Jolt pads the unused high bits with ones. `index` is therefore resolved against the body's
+  shape rather than from the id alone, and is `-1` only when the shape genuinely has no children.
+
+### Ordering
+
+Per **substep**, not per rendered frame — under a fixed `timeStep` one frame may run several:
+
+```
+beforeStep → pending body actions → joltInterface.Step() → queued events → afterStep
+```
+
+and within the event flush:
+
+```
+collisionExit, sensorExit → collisionEnter, sensorEnter → collisionPersist → sleep, wake
+```
+
+Exits come first so a handler keeping a "things I'm touching" set is never transiently
+over-counted while a contact migrates between sub-shapes. Within one kind, world-level handlers
+run before per-body ones, and per-body fires for Jolt's body 1 then body 2, each with its own
+`target` / `other` / `flipped`.
+
+**You may do anything from a handler.** It runs after `Step()` has returned, so adding, moving and
+removing bodies is safe; the mutation lands at the top of the next substep. Each handler is
+dispatched inside its own `try/catch`, so a throw is logged and does not abort the rest of the
+frame.
+
+### `onContactValidate`
+
+The one exception to all of the above: it runs **synchronously inside the step**, because its
+answer is what Jolt asked for. It must be fast and must not touch bodies. Return `false` to reject
+the contact — one-way platforms, team pass-through:
+
+```tsx
+<RigidBody onContactValidate={(e) => (e.other.object?.userData.team === 'blue' ? false : true)}>
+    <mesh>
+        <boxGeometry args={[4, 0.5, 4]} />
+    </mesh>
+</RigidBody>
+```
+
+### What Jolt does that may surprise you
+
+- **A body going to sleep closes its contacts.** Jolt removes the manifolds of a deactivated body,
+  so a box resting on the floor reports `collisionExit` when it falls asleep and `collisionEnter`
+  again when something wakes it. If you need "is it still resting on something", use
+  `body.isContacting(handle)` together with `onSleep`.
+- **Destroying a body closes its pairs.** The peer gets exactly one `collisionExit`, on the next
+  step, with `other.body === undefined` (the body is already gone).
+- **`contactCount` counts sub-shape manifolds**, not contact points. A box on a floor is 1; a
+  compound shape resting on two of its children is 2.
+- **Contacts on heightfields are unreliable** — they fire per triangle, so "stopped touching" may
+  never arrive.
+
+### Cost
+
+If nothing is listening, contacts cost a pair refcount and nothing else: no manifold is wrapped,
+no payload is built, nothing is queued. Each `BodyState` publishes an `eventMask` bitfield and the
+world emitter another; the Jolt callback ors them and bails out. `onCollisionPersist` is therefore
+free to leave unsubscribed even though Jolt reports persisted contacts every step. Up to four
+contact points are copied per event. The pair refcount behind `isContacting()` is maintained
+whether or not anyone is listening, because it is public API in its own right.
+
+### Design notes
+
+The answers this implementation took to the event RFC's open questions, recorded here so they can
+be changed:
+
+- **Sensor event names.** `onSensorEnter` / `onSensorExit` are canonical (they match the existing
+  `isSensor` prop), **with** `onIntersectionEnter` / `onIntersectionExit` as documented
+  rapier-compatible aliases, resolved with one `??` at subscribe time. If both are given, the
+  canonical one wins.
+- **Pooled payloads.** Pooled, with dev-mode poisoning under `<Physics debug>`. Allocating fresh
+  payloads shows up as GC pressure in contact-heavy scenes, and the "don't retain the event"
+  contract already exists in r3f.
+- **The 900 ms contact debounce is gone**, along with `BodyState.contactThreshold` and
+  `contactTimestamps`. Enter/persist/exit now come from Jolt's **sub-shape pairs** rather than a
+  body-level refcount: Jolt guarantees one `OnContactRemoved` per `OnContactAdded` for the same
+  `SubShapeIDPair`, so the first pair opening is the enter and the last one closing is the exit.
+  The debounce only existed to hide the flicker a body-level count showed when a manifold split
+  between sub-shapes, and a 900 ms window silently swallowed legitimate re-collisions (a bouncing
+  ball).
+- **`<Physics>` collision granularity.** Once per pair, `target` = the lower handle. `flipped` is
+  reported truthfully (true when the chosen target is Jolt's body 2) so `normal` stays
+  interpretable.
+- **`on(type, fn)` vs named methods.** Both. `on()` is the documented primitive; the named
+  `onCollisionEnter(fn)` etc. are sugar.
+
+The old `onContactAdded` / `onContactRemoved` / `onContactPersisted` props are kept as deprecated
+aliases for `onCollisionEnter` / `onCollisionExit` / `onCollisionPersist`. They now receive the new
+payload; their declared type never matched what was actually dispatched, so nothing that worked
+before breaks.

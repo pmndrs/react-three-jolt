@@ -10,7 +10,7 @@ import React, {
     useEffect,
     //useMemo,
     useId,
-    // useRef,
+    useRef,
     useState
 } from 'react';
 //import InitJolt from 'jolt-physics/wasm-compat'
@@ -21,9 +21,10 @@ import { useMount, useSystemEvent, useUnmount } from '../hooks';
 import { initJolt, Raw } from '../raw';
 import type { WorldEventMap } from '../systems/events';
 // physics system import
-import { PhysicsSystem } from '../systems/physics-system';
+import { deferWorldDestroy, PhysicsSystem } from '../systems/physics-system';
 import type { AutoShape } from '../systems/shape-system';
 // library imports
+import { Debug } from './Debug';
 import { FrameStepper } from './FrameStepper';
 
 // TODO: Move this to a better place
@@ -108,7 +109,13 @@ export type PhysicsProps = {
      */
     updateLoop?: 'follow' | 'independent';
 
-    /** Log lifecycle info and warn when simulation time is dropped. @default false */
+    /**
+     * Draw a wireframe of every collider in the world, coloured by motion type (#158), and log
+     * lifecycle info / warn when simulation time is dropped. Toggling it on for a running scene
+     * backfills the existing bodies; toggling it off removes every wireframe and all of the
+     * per-frame work with them. Mount `<Debug>` yourself for the overlay's own options.
+     * @default false
+     */
     debug?: boolean;
 
     /**
@@ -201,6 +208,11 @@ export const Physics: FC<PhysicsProps> = (props) => {
     const [physicsSystem, setPhysicsSystem] = useState<PhysicsSystem>();
     const [contextApi, setContextApi] = useState<JoltContext>();
 
+    // The world this component is currently using. A ref as well as state, because the unmount
+    // cleanup below runs after the commit and needs to know which world is live *now*, not which
+    // one the closure that registered the cleanup was rendered with.
+    const liveSystem = useRef<PhysicsSystem | undefined>(undefined);
+
     useMount(() => {
         if (debug) console.log('** Physics Component: ' + pid + ' Mounted **');
         const ps = new PhysicsSystem(pid);
@@ -212,6 +224,7 @@ export const Physics: FC<PhysicsProps> = (props) => {
         ps.interpolate = interpolate;
         ps.timeStep = timeStep;
         ps.maxSubSteps = maxSubSteps;
+        liveSystem.current = ps;
         setPhysicsSystem(ps);
     });
 
@@ -223,9 +236,31 @@ export const Physics: FC<PhysicsProps> = (props) => {
         },
         [physicsSystem]
     );
-    // cleanup and destruction of system when component unmounts
+    // Cleanup and destruction of the world when the component unmounts.
+    //
+    // React runs a parent's effect cleanup BEFORE its children's, so destroying the world here
+    // and now would free the JoltInterface while every `<RigidBody>`, `useConstraint` and
+    // controller underneath still has its own cleanup to run - they would all be cleaning up
+    // against a dead world (issue #162). Deferring to a microtask puts the teardown after the
+    // whole commit, so the children tear themselves down first, against a world that is still
+    // alive, and `PhysicsSystem.destroy()` then finds (and frees) only what is genuinely left.
+    //
+    // StrictMode's mount -> unmount -> mount happens inside that window, so the callback checks
+    // that the world it captured is still the one in use. It never is after a remount (the
+    // second mount builds a fresh `PhysicsSystem`), which is exactly right: the captured world
+    // really is orphaned and really should be freed. The check is what stops a future change
+    // that *reuses* the world across a remount from killing the live one.
     useUnmount(() => {
-        if (physicsSystem) physicsSystem.destroy(pid);
+        const dying = liveSystem.current;
+        if (!dying) return;
+        if (debug) console.log('** Physics Component: ' + pid + ' Unmounted **');
+        // clear it first: a remount inside the deferral window puts its own world back here,
+        // and that - not this one - is the world that must survive.
+        liveSystem.current = undefined;
+        deferWorldDestroy(() => {
+            if (liveSystem.current === dying) return;
+            dying.destroy();
+        });
     });
 
     // These will be effects for props to send to the correct systems
@@ -304,6 +339,10 @@ export const Physics: FC<PhysicsProps> = (props) => {
         <joltContext.Provider value={contextApi}>
             <FrameStepper type={updateLoop} onStep={step} updatePriority={updatePriority} />
             {children}
+            {/* The wireframe collider overlay (#158). Rendered after the stepper so its
+                `useFrame` subscription is made second and it draws the poses of the step that
+                just ran; mounting it is the only cost `debug` adds to the frame loop. */}
+            {debug && <Debug />}
         </joltContext.Provider>
     );
 };

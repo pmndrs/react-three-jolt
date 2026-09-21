@@ -1,13 +1,28 @@
+// Heightfields, three ways (issues #45/#46):
+//   - "noise": terrain generated on the CPU from the ported psrddnoise, no image involved
+//   - "materials": a flat field split into an ice half and a grippy half, per-quad friction
+//   - "image": the original heightmap png
 import { Environment } from '@react-three/drei';
 import {
     type CollisionEnterPayload,
     type CollisionExitPayload,
+    generateHeightfield,
     Heightfield,
     Physics,
     RigidBody
 } from '@react-three/jolt';
+import { useControls } from 'leva';
+import { useMemo } from 'react';
 import { useDemo } from '../App';
 import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
+
+// low friction on the -x half, grippy on the +x half. `materialIndex` is called once per quad
+// with the quad's centre in the same field-local coordinates the height generator sees.
+const SURFACES = [
+    { name: 'ice', friction: 0.02, restitution: 0 },
+    { name: 'grip', friction: 1.5, restitution: 0 }
+];
+const iceOnTheLeft = (x: number) => (x < 0 ? 0 : 1);
 
 export function HeightfieldDemo() {
     const { debug, paused, interpolate, physicsKey, module } = useDemo();
@@ -30,8 +45,40 @@ export function HeightfieldDemo() {
         console.log(Date.now(), ': contact exit', event.target.handle, event.other.handle);
     };
 
-    // body settings so shapes bounce
+    const { source, size, noise, octaves, amplitude, frequency, seed, spacing } = useControls(
+        'Heightfield',
+        {
+            source: { value: 'noise', options: ['noise', 'materials', 'image'] },
+            size: { value: 128, options: [32, 64, 128, 256] },
+            noise: { value: 'psrd', options: ['psrd', 'simplex'] },
+            octaves: { value: 4, min: 1, max: 8, step: 1 },
+            amplitude: { value: 20, min: 1, max: 80, step: 1 },
+            frequency: { value: 0.01, min: 0.001, max: 0.1, step: 0.001 },
+            spacing: { value: 2, min: 0.5, max: 8, step: 0.5 },
+            seed: { value: 1, min: 0, max: 999, step: 1 }
+        }
+    );
 
+    // Generation is synchronous, so it belongs in a memo: a 256x256 field with 8 octaves is
+    // ~500k noise samples. Anything much larger should be generated once, off the render path,
+    // and handed to <Heightfield samples={...}> as a plain Float32Array.
+    const generated = useMemo(
+        () =>
+            source === 'noise'
+                ? generateHeightfield({
+                      size,
+                      noise: noise as 'psrd' | 'simplex',
+                      octaves,
+                      frequency,
+                      amplitude: 1,
+                      spacing,
+                      seed
+                  }).samples
+                : undefined,
+        [source, size, noise, octaves, frequency, spacing, seed]
+    );
+
+    // body settings so shapes bounce
     const defaultBodySettings = {
         mRestitution: 0.1
     };
@@ -111,7 +158,28 @@ export function HeightfieldDemo() {
                     </mesh>
                 </RigidBody>
             ))}
-            <Heightfield url="heightmaps/wp1024.png" size={512} />
+
+            {source === 'noise' && (
+                <Heightfield
+                    samples={generated}
+                    size={size}
+                    scale={[spacing, amplitude, spacing]}
+                />
+            )}
+
+            {/* one flat field, two surfaces: balls skate on the left half and stick on the right */}
+            {source === 'materials' && (
+                <Heightfield
+                    generator={() => 0}
+                    size={size}
+                    scale={[spacing, 1, spacing]}
+                    materials={SURFACES}
+                    materialIndex={iceOnTheLeft}
+                    color="#2D5F8F"
+                />
+            )}
+
+            {source === 'image' && <Heightfield url="heightmaps/wp1024.png" size={512} />}
             <directionalLight
                 castShadow
                 position={[10, 10, 10]}

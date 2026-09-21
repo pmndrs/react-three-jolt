@@ -1,28 +1,18 @@
 // this system lets us create raycasts, shapecasts, and specific collision tests
+//import { PhysicsSystem } from '../physics-system';
 
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
-import { Layer } from '../../constants';
 import { Raw } from '../../raw';
 import { type anyVec3, generateJoltMatrix, vec3 } from '../../utils';
+import { CastQueryBase, HitBase } from './query-base';
 
-type Callback = (hit?: ShapecastHit | ShapecastHit[]) => void;
-
-type CastShapeCollector =
+type ShapecasterCollector =
     | Jolt.CastShapeAllHitCollisionCollector
     | Jolt.CastShapeClosestHitCollisionCollector
-    | Jolt.CastShapeAllHitCollisionCollector;
+    | Jolt.CastShapeAnyHitCollisionCollector;
 
-export class Shapecaster {
-    joltPhysicsSystem: Jolt.PhysicsSystem;
-    joltInterface: Jolt.JoltInterface;
-    // filters
-    bpFilter: Jolt.DefaultBroadPhaseLayerFilter;
-    objectFilter: Jolt.DefaultObjectLayerFilter;
-    // TODO figure out how to do custom body filters
-    bodyFilter: Jolt.BodyFilter = new Raw.module.BodyFilter(); // BodyFilterJS?
-    shapeFilter: Jolt.ShapeFilter = new Raw.module.ShapeFilter();
-
+export class Shapecaster extends CastQueryBase<ShapecastHit, ShapecasterCollector> {
     // shapecast settings
     shapecast!: Jolt.RShapeCast;
     shapecastSettings = new Raw.module.ShapeCastSettings();
@@ -33,44 +23,25 @@ export class Shapecaster {
     activeRotation = new THREE.Quaternion();
     activeDirection = new THREE.Vector3();
     activeScale = new THREE.Vector3(1, 1, 1);
-    activeShape = new Raw.module.SphereShape(0.5);
+    /** Default cast shape, owned by this caster: see the AddRef in the constructor. */
+    activeShape: Jolt.Shape = new Raw.module.SphereShape(0.5);
 
-    //important
-    type = 'closest';
-    // @ts-ignore
-    collector: CastShapeCollector;
-    hits: ShapecastHit[] = [];
-    hasCast = false;
-    active = true;
     // probably never need this
     baseOffset = new Raw.module.RVec3(0, 0, 0);
 
-    // For debugging. Still not sure this belongs on the class or as a subclass/hook
-    isDebugging = false;
-    lineColor = '#68D8D6';
-
-    drawPoints = false;
-    drawMarkers = false;
-    startColor = '#3454D1';
-    pointColor = '#E6AF2E';
-    endColor = '#FE654F';
-
-    // store multi debug items until cleared
-    // @ts-ignore
-    debugObject: THREE.Object3D;
-
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem, joltInterface: Jolt.JoltInterface) {
-        this.joltPhysicsSystem = joltPhysicsSystem;
-        this.joltInterface = joltInterface;
-        // these two filters mean the ray will cast as if its a dynamic object
-        this.bpFilter = new Raw.module.DefaultBroadPhaseLayerFilter(
-            joltInterface.GetObjectVsBroadPhaseLayerFilter(),
-            Layer.MOVING
-        );
-        this.objectFilter = new Raw.module.DefaultObjectLayerFilter(
-            joltInterface.GetObjectLayerPairFilter(),
-            Layer.MOVING
-        );
+        super(joltPhysicsSystem, joltInterface);
+        // `activeShape` is a Jolt reference counted object (RefTarget) and `new SphereShape(...)`
+        // starts it at zero references (see the jolt-physics README's "Reference counting
+        // objects" section). `RShapeCast` stores a *raw* pointer to it - verified against
+        // jolt-physics 1.1.0: the sphere's refcount is still 0 after the cast is constructed,
+        // and its 40 bytes are still allocated after the cast is destroyed - so nothing else
+        // will ever free it (the leak flagged on issue #162). AddRef() here also means the
+        // `shape` setter/destroy() below can treat `activeShape` uniformly with Release(),
+        // whether it is this default shape or one a caller handed us. Mirrors `ShapeCollider`
+        // (#174/issue #142).
+        this.activeShape.AddRef();
+        this.createFilters();
         // initialize the shapecast
         this.initializeShapecast();
 
@@ -78,21 +49,33 @@ export class Shapecaster {
         this.setCollector();
     }
     // Cleanup ---------------------------------------
-    destroy() {
+    protected releaseResources(): void {
         this.active = false;
         this.stopDebugging();
+        this._disposeDebugResources();
+
+        // `activeShape` is reference counted - see the `shape` setter and the constructor. We
+        // AddRef()'d whatever shape we're holding, so give that reference back with Release()
+        // rather than a hard destroy(), which would free memory a caller (or another owner) might
+        // still be using (issue #192, mirrors ShapeCollider from #174).
+        if (this.activeShape) {
+            this.activeShape.Release();
+            this.activeShape = null as unknown as Jolt.Shape;
+        }
+
         Raw.module.destroy(this.shapecast);
         Raw.module.destroy(this.shapecastSettings);
-        Raw.module.destroy(this.bpFilter);
-        Raw.module.destroy(this.objectFilter);
-        Raw.module.destroy(this.bodyFilter);
-        Raw.module.destroy(this.shapeFilter);
+        this.destroyFilters();
         Raw.module.destroy(this.collector);
         Raw.module.destroy(this.baseOffset);
+        // give back the reference the constructor took; the shapecast that pointed at it is gone
+        if (this.activeShape) {
+            this.activeShape.Release();
+            this.activeShape = null as unknown as Jolt.Shape;
+        }
     }
 
     // this shouldnt be needed but changing the origin doesn't seem to work correctly
-
     initializeShapecast() {
         const mat4 = generateJoltMatrix(this.activePosition, this.activeRotation, this.activeScale);
         const scale = vec3.jolt(this.activeScale);
@@ -160,11 +143,31 @@ export class Shapecaster {
     }
     //shape
     get shape() {
-        return this.shapecast.mShape;
+        return this.activeShape;
     }
-    set shape(value) {
-        // remove the old one
-        this.shapecast.set_mShape(value);
+    set shape(value: Jolt.Shape) {
+        if (value === this.activeShape) return;
+        // Shape is reference counted (RefTarget) and starts life with a refcount of 0. AddRef()
+        // here means a caller that later Release()s (or reassigns) its own reference to `value`
+        // doesn't leave us holding a dangling pointer once they're done with theirs, and
+        // Release() (rather than a hard destroy()) on whichever shape we're replacing means it's
+        // only actually freed once every owner - us included - is done with it. Mirrors
+        // `ShapeCollider.shape` (#174/issue #142).
+        value.AddRef();
+        const previous = this.activeShape;
+        this.activeShape = value;
+        if (previous) previous.Release();
+        // `RShapeCast.mShape` is a read-only getter at runtime - there is no `set_mShape`
+        // despite the type declarations advertising one - so the only way to change it is to
+        // rebuild the RShapeCast, the same as setOrigin() does for position/rotation/scale.
+        // Capture + restore the current direction across the rebuild: initializeShapecast()
+        // otherwise reconstructs it from `activeDirection`, which the `direction` setter below
+        // never updates (it mutates the live shapecast in place instead), so a naive rebuild here
+        // would silently reset direction back to zero.
+        const direction = vec3.three(this.shapecast.mDirection);
+        Raw.module.destroy(this.shapecast);
+        this.initializeShapecast();
+        this.direction = direction;
     }
 
     //* Methods ---------------------------------------
@@ -180,7 +183,7 @@ export class Shapecaster {
         //Raw.module.destroy(translation);
     }
     //this has no callback, it just triggers the ray and you have to process it
-    rawCast() {
+    rawCast(): void {
         if (!this.active) return;
         this.joltPhysicsSystem
             .GetNarrowPhaseQuery()
@@ -195,231 +198,27 @@ export class Shapecaster {
                 this.shapeFilter
             );
     }
-    // set the collector
-    setCollector(type = 'closest') {
-        //console.log('setting collector', type);
-        // destroy exising collector
-        if (this.collector) Raw.module.destroy(this.collector);
-        this.type = type;
+    protected createCollector(type: string): ShapecasterCollector {
         switch (type) {
             case 'any':
-                this.collector = new Raw.module.CastShapeAnyHitCollisionCollector();
-                break;
+                return new Raw.module.CastShapeAnyHitCollisionCollector();
             case 'all':
-                this.collector = new Raw.module.CastShapeAllHitCollisionCollector();
-                break;
+                return new Raw.module.CastShapeAllHitCollisionCollector();
             default:
-                this.collector = new Raw.module.CastShapeClosestHitCollisionCollector();
-                break;
+                return new Raw.module.CastShapeClosestHitCollisionCollector();
         }
     }
-    // ease of life handler to match how threeJS does setting the raycaster
-    set(origin: THREE.Vector3, direction: THREE.Vector3) {
-        this.origin = origin;
-        this.direction = direction;
-    }
-    // do the cast, runs optional handlers and returns the hits
-    // @ts-ignore early bail return triggers TS
-    cast(successHandler?: any, failHandler?: any) {
-        // clear the collector
-        if (this.hasCast) this.collector.Reset();
-        this.hasCast = true;
-        //clear the hits
-        this.hits = [];
-        //run the cast
-        this.rawCast();
-        //handle results
-        // @ts-ignore jolt collector TS issue
-        if (this.collector.HadHit()) {
-            if (this.type === 'all') {
-                // multi-hit case
-                // @ts-ignore Jolt TS issue
-                for (let i = 0; i < this.collector.mHits.size(); i++) {
-                    const hit = new ShapecastHit(
-                        this.joltPhysicsSystem,
-                        this.shapecast,
-                        // @ts-ignore jolt TS issue for collector
-                        this.collector.mHits.at(i),
-                        i
-                    );
-                    this.hits.push(hit);
-                }
-                if (successHandler) successHandler(this.hits);
-                //return this.hits;
-            } else {
-                // single hit case
-                const hit = new ShapecastHit(
-                    this.joltPhysicsSystem,
-                    this.shapecast,
-                    // @ts-ignore Jolt TS issue
-                    this.collector.mHit,
-                    0
-                );
-                if (successHandler) successHandler(hit);
-                this.hits.push(hit);
-                //return hit;
-            }
-        }
-        // debugging
-        if (this.isDebugging) {
-            this.drawDebuggingLine();
-            if (this.drawPoints) this.drawDebuggingPoints();
-            if (this.drawMarkers) this.drawDebuggingMarkers();
-        }
-        // return single if just one, or array if multi.
-        // moved here to allow debugging
-        if (this.hits.length > 0) {
-            if (this.type !== 'all') return this.hits[0];
-            return this.hits;
-        }
-
-        if (failHandler) failHandler();
-    }
-    // ease of life handler to change the origin when casting
-    castFrom(origin: anyVec3, successHandler?: Callback, failHandler?: Callback) {
-        this.origin = origin;
-        return this.cast(successHandler, failHandler);
-    }
-    // ease of life to cast from the origin to a point
-    castTo(destination: anyVec3, successHandler?: Callback, failHandler?: Callback) {
-        this.direction = vec3.three(destination).clone().sub(this.origin);
-        return this.cast(successHandler, failHandler);
-    }
-    // ease of life to set an origin and point
-    castBetween(
-        origin: THREE.Vector3,
-        destination: THREE.Vector3,
-        successHandler?: Callback,
-        failHandler?: Callback
-    ) {
-        this.origin = origin;
-        this.direction = vec3.three(destination).sub(this.origin);
-        return this.cast(successHandler, failHandler);
-    }
-
-    //* Debugging -------------------------------------
-    // Not sure I want this on all raycasts, maybe a subclass or hook?
-    //set the scene and init the debugger values
-    initDebugging(scene: THREE.Scene, color?: any) {
-        this.debugObject = new THREE.Object3D();
-        scene.add(this.debugObject);
-        if (color) this.lineColor = color;
-        this.isDebugging = true;
-    }
-    stopDebugging() {
-        if (!this.isDebugging) return;
-        // get the parent of our debug object, then remove ourselves
-        const parent = this.debugObject.parent;
-        if (parent) parent.remove(this.debugObject);
-        // TODO even though removed do we need to destroy the children of the object?
-        this.isDebugging = false;
-    }
-    // clear the debug object
-    clearDebugging() {
-        const parent = this.debugObject.parent;
-        if (!parent) return;
-        parent.remove(this.debugObject);
-        this.debugObject = new THREE.Object3D();
-        parent.add(this.debugObject);
-    }
-    // draw the debugging line
-    drawDebuggingLine(
-        origin = this.origin,
-        end = this.origin.clone().add(this.direction),
-        color = this.lineColor
-    ) {
-        const points = [origin, end];
-        const geometry = new THREE.BufferGeometry().setFromPoints(points);
-        const material = new THREE.LineBasicMaterial({ color: color });
-        const newLine = new THREE.Line(geometry, material);
-        this.debugObject.add(newLine);
-    }
-    // draw the debugging points
-    drawDebuggingPoints() {
-        // points
-        const geometry = new THREE.BufferGeometry();
-
-        // build new points geometry
-        const numPoints = 2 + this.hits.length;
-        const points: { position: THREE.Vector3; color: string }[] = [];
-        const positions = new Float32Array(numPoints * 3);
-        const colors = new Float32Array(numPoints * 3);
-        // build points array
-        //start point
-        points.push({ position: this.origin, color: this.startColor });
-        //hits
-        this.hits.forEach((hit) => {
-            points.push({ position: hit.position, color: this.pointColor });
-        });
-        //end point
-        points.push({
-            position: this.origin.clone().add(this.direction),
-            color: this.endColor
-        });
-        // set the positions and colors
-        points.forEach((point, i) => {
-            positions[i * 3] = point.position.x;
-            positions[i * 3 + 1] = point.position.y;
-            positions[i * 3 + 2] = point.position.z;
-            const color = new THREE.Color(point.color);
-            colors[i * 3] = color.r;
-            colors[i * 3 + 1] = color.g;
-            colors[i * 3 + 2] = color.b;
-        });
-        // set the geometry attributes
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        geometry.computeBoundingBox();
-        // copy the points object
-        const material = new THREE.PointsMaterial({
-            color: this.pointColor,
-            vertexColors: true,
-            size: 0.3
-        });
-        const newPoints = new THREE.Points(geometry, material);
-
-        // add the new points to the debugObject
-        this.debugObject.add(newPoints);
-    }
-    drawDebuggingMarkers() {
-        this.hits.forEach((hit) => this.drawMarker(hit));
-    }
-    drawMarker(hit: ShapecastHit, size = 0.5, color = '#C6D8D3') {
-        const center = hit.position;
-        const normal = hit.impactNormal;
-        // draw the normal and inverse normal
-        this.drawDebuggingLine(center, center.clone().add(normal), '#3CD048');
-        const markerSize = size;
-        const points: THREE.Vector3[] = [];
-        // TODO: Apply the normal to these to correctly rotate the axis
-        points.push(
-            new THREE.Vector3(center.x - markerSize, center.y, center.z),
-            new THREE.Vector3(center.x + markerSize, center.y, center.z),
-            // vertical
-            new THREE.Vector3(center.x, center.y - markerSize, center.z),
-            new THREE.Vector3(center.x, center.y + markerSize, center.z),
-
-            new THREE.Vector3(center.x, center.y, center.z - markerSize),
-            new THREE.Vector3(center.x, center.y, center.z + markerSize)
+    protected buildHit(mHit: unknown, index: number): ShapecastHit {
+        return new ShapecastHit(
+            this.joltPhysicsSystem,
+            this.shapecast,
+            mHit as Jolt.ShapeCastResult,
+            index
         );
-        const markerGeometry = new THREE.BufferGeometry().setFromPoints(points);
-        const markerMaterial = new THREE.LineBasicMaterial({ color: color });
-        const marker = new THREE.LineSegments(markerGeometry, markerMaterial);
-        this.debugObject.add(marker);
     }
 }
 
-export class ShapecastHit {
-    start: THREE.Vector3;
-    end: THREE.Vector3;
-    position: THREE.Vector3;
-    shapeIdValue: number;
-    bodyHandle: number;
-    index: number;
-
-    //not sure how to get these
-    // triangleIndex: number;
-    private joltPhysicsSystem: Jolt.PhysicsSystem;
+export class ShapecastHit extends HitBase {
     constructor(
         joltPhysicsSystem: Jolt.PhysicsSystem,
         shapecast: Jolt.RShapeCast,
@@ -427,62 +226,19 @@ export class ShapecastHit {
         index = 0,
         bodyID?: Jolt.BodyID
     ) {
-        // can we get the body with the handle
-
-        this.joltPhysicsSystem = joltPhysicsSystem;
-        this.start = vec3.three(shapecast.mCenterOfMassStart.GetTranslation());
-        this.end = this.start.clone().add(vec3.three(shapecast.mDirection));
-        this.shapeIdValue = mHit.mSubShapeID2.GetValue();
-        this.index = index;
-        this.bodyHandle = bodyID
-            ? bodyID.GetIndexAndSequenceNumber()
-            : mHit.mBodyID2.GetIndexAndSequenceNumber();
+        const start = vec3.three(shapecast.mCenterOfMassStart.GetTranslation());
+        const end = start.clone().add(vec3.three(shapecast.mDirection));
         // GetPointOnRay returns its Vec3/RVec3 BY VALUE through jolt-physics' WebIDL binder,
         // which hands back a pointer to ONE STATIC TEMPORARY per bound function (overwritten on
-        // the next call, shared across every shapecast). Destroying it - as this did - frees
-        // memory the binder still owns and immediately reuses, corrupting the next reader.
-        // `vec3.three()` copies the components straight out, so there is nothing to free here.
-        // Same fix as RaycastHit in raycasters.ts; this sibling was missed.
+        // the next call, shared across every shapecast) - never destroy it. `vec3.three()`
+        // copies the components straight out, so there is nothing to free here.
         //@ts-ignore this function was added to jolt.js #155
-        const joltPosition = shapecast.GetPointOnRay(mHit.mFraction);
-        this.position = vec3.three(joltPosition);
-    }
-    //* the more complex  values we set as getters and arent stored on the object
-    get distance(): number {
-        return this.start.distanceTo(this.position);
-    }
-    // unreal calls it Normal
-    get normal(): THREE.Vector3 {
-        return this.end.clone().sub(this.start).normalize();
-    }
-    // others use direction
-    get direction(): THREE.Vector3 {
-        return this.normal;
-    }
-    get impactNormal(): THREE.Vector3 {
-        const bodyID = new Raw.module.BodyID(this.bodyHandle);
-        const shapeID = new Raw.module.SubShapeID();
-        // `vec3.rjolt` always allocates a vector we own (issue #76), so it has to be released
-        // here - this getter is read per hit, per frame, by the camera rig.
-        const position = vec3.rjolt(this.position);
-        let toReturn = new THREE.Vector3();
-        shapeID.SetValue(this.shapeIdValue);
-        const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
-        if (body) {
-            // `GetWorldSpaceSurfaceNormal` returns "by value", which in the WebIDL binder
-            // means a pointer to a static temporary the binder owns - read it out immediately
-            // and never destroy it.
-            const joltNormal = body.GetWorldSpaceSurfaceNormal(shapeID, position);
-            toReturn = vec3.three(joltNormal);
-        }
-        // bodyID/shapeID/position ARE fresh allocations we made above with `new Raw.module.X()`,
-        // so - unlike joltNormal - these three are genuinely ours and must be freed: this getter
-        // leaked all three of them on every single call. Mirrors the RaycastHit fix in
-        // raycasters.ts.
-        Raw.module.destroy(shapeID);
-        Raw.module.destroy(bodyID);
-        Raw.module.destroy(position);
-        return toReturn;
+        const position = vec3.three(shapecast.GetPointOnRay(mHit.mFraction));
+        const shapeIdValue = mHit.mSubShapeID2.GetValue();
+        const bodyHandle = bodyID
+            ? bodyID.GetIndexAndSequenceNumber()
+            : mHit.mBodyID2.GetIndexAndSequenceNumber();
+        super(joltPhysicsSystem, start, end, position, shapeIdValue, bodyHandle, index);
     }
     //TODO Fix this to work with the bodyID Handle after removing BodyID
     /*

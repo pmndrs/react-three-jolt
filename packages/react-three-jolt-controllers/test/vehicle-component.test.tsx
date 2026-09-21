@@ -6,7 +6,7 @@
 // chassis and the wheels can be the caller's own objects - synced by the manager, disposed only
 // by whoever created them.
 
-import { Physics, type PhysicsSystem, Raw, useJolt } from '@react-three/jolt';
+import { Physics, type PhysicsSystem, Raw, RigidBody, useJolt } from '@react-three/jolt';
 import { create } from '@react-three/test-renderer';
 import React, { act, useEffect } from 'react';
 import * as THREE from 'three';
@@ -321,6 +321,93 @@ test('<Vehicle> uses its children as the chassis', async () => {
         chassis!.getWorldPosition(new THREE.Vector3()).distanceTo(manager.position),
         1e-6
     );
+
+    await renderer.unmount();
+});
+
+// Issue #41: the secondary physics props. They are all live - a debug panel re-tunes them
+// without rebuilding the vehicle - and the three event props subscribe exactly once.
+test('<Vehicle> wires the secondary physics props, live, and unsubscribes on unmount', async () => {
+    let system: AnyPhysicsSystem | undefined;
+    let vehicle: VehicleManager | null = null;
+    let engineCalls = 0;
+    let lastRpm = 0;
+    let maxAngle = 0.4;
+
+    const onReady = (s: AnyPhysicsSystem) => {
+        system = s;
+    };
+    const tree = (show: boolean, rollMax: number | false) => (
+        <Physics>
+            {/* the vehicle has to be on something: in free fall the only acceleration is
+                straight down the chassis' own up axis, which is neither roll nor pitch */}
+            <RigidBody position={[0, -1, 0]} type="static">
+                <mesh>
+                    <boxGeometry args={[400, 1, 400]} />
+                </mesh>
+            </RigidBody>
+            <Harness show={show} onReady={onReady}>
+                <Vehicle
+                    position={[0, 4, 0]}
+                    bodyRoll={
+                        rollMax === false
+                            ? false
+                            : {
+                                  maxAngle: rollMax,
+                                  maxPitchAngle: rollMax,
+                                  referenceAcceleration: 3
+                              }
+                    }
+                    wheelSmoothing={{ suspension: 0.2, steering: 0.2 }}
+                    skid={{ lateralSlip: 0.3 }}
+                    onEngine={(state) => {
+                        engineCalls++;
+                        lastRpm = state.rpm;
+                    }}
+                    onVehicle={(created) => {
+                        vehicle = created;
+                    }}
+                />
+            </Harness>
+        </Physics>
+    );
+
+    const renderer = await create(tree(false, maxAngle));
+    await settle(() => system !== undefined);
+    await renderer.update(tree(true, maxAngle));
+    await settle(() => vehicle !== null);
+    const manager = vehicle as unknown as VehicleManager;
+    assert.isNotNull(vehicle, '<Vehicle> never created a vehicle');
+
+    manager.move(new THREE.Vector2(0, 1));
+    await act(async () => {
+        for (let i = 0; i < 90; i++) system!.onUpdate(1 / 60);
+    });
+
+    assert.isAbove(engineCalls, 0, 'onEngine never fired');
+    assert.isAbove(lastRpm, 0, 'onEngine reported no rpm');
+    assert.isAbove(manager.speed, 0, 'the vehicle never drove off');
+    assert.isAbove(Math.abs(manager.bodyPitchAngle), 1e-4, 'bodyRoll did not reach the manager');
+
+    // re-rendering with a tighter limit re-tunes the spring rather than rebuilding the vehicle
+    maxAngle = 0.01;
+    await renderer.update(tree(true, maxAngle));
+    await act(async () => {
+        for (let i = 0; i < 60; i++) system!.onUpdate(1 / 60);
+    });
+    assert.equal(vehicle, manager, 'changing bodyRoll rebuilt the whole vehicle');
+    assert.isAtMost(Math.abs(manager.bodyPitchAngle), 0.01 + 1e-9, 'the new maxAngle was ignored');
+
+    // ... and false hands the chassis object's rotation back
+    await renderer.update(tree(true, false));
+    assert.equal(manager.bodyRollAngle, 0);
+
+    const callsBeforeUnmount = engineCalls;
+    await renderer.update(tree(false, false));
+    await act(async () => {
+        for (let i = 0; i < 10; i++) system!.onUpdate(1 / 60);
+    });
+    assert.equal(engineCalls, callsBeforeUnmount, 'onEngine outlived the component');
 
     await renderer.unmount();
 });

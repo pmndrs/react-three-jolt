@@ -31,6 +31,7 @@ import { HeightfieldDemo } from './examples/Heightfield';
 import { Impulses } from './examples/Impulses';
 import { JustBoxes } from './examples/JustBoxes';
 import { MotionSources } from './examples/motionSources';
+import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
@@ -87,20 +88,24 @@ export function ControlWrapper(props: any) {
     const { position = [0, 10, 10], target = [0, 1, 0], transition = true, ...rest } = props;
     const { controls } = useThree();
     useEffect(() => {
+        if (!controls) return;
         const newPosition = vec3.three(position);
         const newTarget = vec3.three(target);
-        if (controls)
-            //@ts-expect-error can't get the types to work here
-            controls.setLookAt(
-                newPosition.x,
-                newPosition.y,
-                newPosition.z,
-                newTarget.x,
-                newTarget.y,
-                newTarget.z,
-                transition
-            );
-    }, [position]);
+        //@ts-expect-error can't get the types to work here
+        controls.setLookAt(
+            newPosition.x,
+            newPosition.y,
+            newPosition.z,
+            newTarget.x,
+            newTarget.y,
+            newTarget.z,
+            transition
+        );
+        // `controls` is included so that on a cold mount -- where CameraControls
+        // registers itself into the r3f store *after* this effect's first run --
+        // we retry once it becomes available instead of leaving the camera at
+        // camera-controls' internal default framing forever (see #182).
+    }, [position, controls]);
     return <CameraControls makeDefault {...rest} />;
 }
 type Routes = {
@@ -146,6 +151,13 @@ const routes: Routes = {
         target: [0, 5, 0],
         background: '#264653',
         element: <FloatingPlatforms />
+    },
+    OneWayPlatform: {
+        label: 'One-Way Platform',
+        position: [0, 14, 34],
+        target: [0, 5, 0],
+        background: '#1d3557',
+        element: <OneWayPlatform />
     },
     Vehicle: {
         position: [2, 25, 51],

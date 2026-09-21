@@ -13,24 +13,91 @@ import {
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import {
+    type BodyRollSettings,
+    type ResolvedBodyRollSettings,
     type ResolvedFourWheelVehicleSettings,
+    type ResolvedSkidSettings,
     type ResolvedVehicleSettings,
+    type ResolvedWheelSmoothingSettings,
+    resolveBodyRoll,
+    resolveSkid,
     resolveVehicleSettings,
-    type VehicleSettings
+    resolveWheelSmoothing,
+    type SkidSettings,
+    type VehicleSettings,
+    type WheelSmoothingSettings
 } from './vehicle-settings';
-import { WheelState } from './wheel-state';
+import { SKID_STARTED, WheelState } from './wheel-state';
 import { createWheelSettings, disposeGeneratedObject } from './wheels';
 
 // biome-ignore lint/suspicious/noExplicitAny: the Jolt constraint callbacks are untyped here
 type VehicleStepCallback = (vehicle: any, deltaTime: number, physicsSystem: any) => void;
 // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
 type VehicleActionCallback = (action: any) => void;
+
+/**
+ * Issue #41: what a skidding wheel reports. The object handed to a listener is **pooled** - it
+ * is the same one on every dispatch, so read what you need and copy anything you keep.
+ */
+export type VehicleSkidEvent = {
+    /** the wheel that started or stopped skidding */
+    wheel: WheelState;
+    /** its name ('fl' | 'fr' | 'bl' | 'br', or 'front' | 'back') */
+    name: string;
+    /** its index in the constraint */
+    index: number;
+    /** jolt's longitudinal slip ratio at the moment of the transition */
+    slipRatio: number;
+    /** jolt's lateral slip angle, in radians */
+    lateralSlip: number;
+    /** the contact patch in world space. Pooled like the event: copy it if you keep it. */
+    position: THREE.Vector3;
+    /** the vehicle's forward speed in km/h */
+    speedKmh: number;
+};
+
+/**
+ * Issue #41: the engine readout, for audio and instruments. Pooled, exactly like
+ * {@link VehicleSkidEvent} - never retain it.
+ */
+export type VehicleEngineState = {
+    /** jolt's current engine RPM */
+    rpm: number;
+    /** 0 while in neutral, 1..n forward, negative in reverse */
+    gear: number;
+    /** the driver's throttle, 0..1 */
+    throttle: number;
+    /** the driver's brake input, 0..1 */
+    brake: number;
+    /** signed forward speed in metres per second */
+    speed: number;
+    /** signed forward speed in km/h */
+    speedKmh: number;
+    /** true while the transmission is between gears */
+    shifting: boolean;
+    /** the clutch friction, 0..1 */
+    clutch: number;
+    /** true while any wheel is skidding */
+    skidding: boolean;
+};
+
+export type VehicleSkidListener = (event: VehicleSkidEvent) => void;
+export type VehicleEngineListener = (state: VehicleEngineState) => void;
+
 type VehicleEventMap = {
     preStep: VehicleStepCallback;
     postCollide: VehicleStepCallback;
     postStep: VehicleStepCallback;
     action: VehicleActionCallback;
+    skidStart: VehicleSkidListener;
+    skidEnd: VehicleSkidListener;
+    engine: VehicleEngineListener;
 };
+
+/** the explicit integrator behind `bodyRoll` goes unstable if a frame is allowed to be huge */
+const MAX_ROLL_STEP = 1 / 30;
+const clamp = (value: number, limit: number) =>
+    value < -limit ? -limit : value > limit ? limit : value;
 
 const FL_WHEEL = 0;
 const FR_WHEEL = 1;
@@ -107,12 +174,118 @@ export class VehicleManager {
     /** issue #26: the chassis object the *user* gave us. Synced, never disposed. */
     private userBodyObject?: THREE.Object3D;
 
+    //* Secondary physics (issue #41) =========================================================
+    /** resolved `bodyRoll` options, or undefined while the visual tilt is off */
+    protected bodyRollOptions?: ResolvedBodyRollSettings;
+    /** resolved `wheelSmoothing` options, or undefined while the rendered values are raw */
+    protected wheelSmoothingOptions?: ResolvedWheelSmoothingSettings;
+    /** resolved `skid` options, or undefined while skid detection is off */
+    protected skidOptions?: ResolvedSkidSettings;
+
+    /** the chassis object's current visual lean, in radians (positive = leaning left) */
+    bodyRollAngle = 0;
+    /** the chassis object's current visual pitch, in radians (positive = nose up) */
+    bodyPitchAngle = 0;
+    private rollVelocity = 0;
+    private pitchVelocity = 0;
+    /** true once a velocity has been sampled, so the first frame doesn't read as a huge jerk */
+    private hasPreviousVelocity = false;
+
+    /**
+     * The engine and gearbox of the controller. Both are members of the controller rather than
+     * things we own: emscripten hands back the same cached wrapper for the same pointer, so
+     * reading them every frame allocates nothing, and neither may ever be destroyed.
+     */
+    protected engine?: Jolt.VehicleEngine;
+    protected transmission?: Jolt.VehicleTransmission;
+
+    /** the pooled payload of `skidStart`/`skidEnd`. One object for the vehicle's whole life. */
+    private readonly skidEvent: VehicleSkidEvent = {
+        wheel: undefined as unknown as WheelState,
+        name: '',
+        index: 0,
+        slipRatio: 0,
+        lateralSlip: 0,
+        position: new THREE.Vector3(),
+        speedKmh: 0
+    };
+    /** the pooled payload of `engine` */
+    private readonly engineState: VehicleEngineState = {
+        rpm: 0,
+        gear: 0,
+        throttle: 0,
+        brake: 0,
+        speed: 0,
+        speedKmh: 0,
+        shifting: false,
+        clutch: 0,
+        skidding: false
+    };
+
     //* Per frame scratch (three side) - avoids garbage in postPhysicsUpdate
     protected readonly _position = new THREE.Vector3();
     protected readonly _rotation = new THREE.Quaternion();
+    private readonly _velocity = new THREE.Vector3();
+    private readonly _previousVelocity = new THREE.Vector3();
+    private readonly _acceleration = new THREE.Vector3();
+    private readonly _tilt = new THREE.Euler();
+    // the `speed` getter has its own pair: it is public, so it can be called from anywhere in a
+    // frame, including from inside a handler that is in the middle of using the scratch above
+    private readonly _speedVector = new THREE.Vector3();
+    private readonly _speedRotation = new THREE.Quaternion();
 
     get position() {
         return this.threeObject.position;
+    }
+
+    //* Engine / audio readouts (issue #41) ===================================================
+    /** the engine's current RPM, 0 when there is no engine (a destroyed vehicle) */
+    get rpm(): number {
+        return this.engine?.GetCurrentRPM() ?? 0;
+    }
+    /** 0 in neutral, 1..n forward, negative in reverse */
+    get gear(): number {
+        return this.transmission?.GetCurrentGear() ?? 0;
+    }
+    /** true while the transmission is between gears */
+    get shifting(): boolean {
+        return this.transmission?.IsSwitchingGear() ?? false;
+    }
+    /** the clutch friction, 0..1 */
+    get clutch(): number {
+        return this.transmission?.GetClutchFriction() ?? 0;
+    }
+    /** the driver's throttle, 0..1 (the absolute value of the forward input) */
+    get throttle(): number {
+        return Math.abs(this.wheeledController?.GetForwardInput() ?? 0);
+    }
+    /** the driver's brake input, 0..1 */
+    get brakeInput(): number {
+        return this.wheeledController?.GetBrakeInput() ?? 0;
+    }
+    /** the chassis' signed forward speed in metres per second */
+    get speed(): number {
+        if (this.destroyed || !this.carBody) return 0;
+        // both getters return static temporaries; nothing here allocates
+        const velocity = vec3.joltToThree(this.carBody.GetLinearVelocity(), this._speedVector);
+        const rotation = quat.joltToThree(this.carBody.GetRotation(), this._speedRotation);
+        return velocity.applyQuaternion(rotation.conjugate()).z;
+    }
+    /** the chassis' signed forward speed in km/h */
+    get speedKmh(): number {
+        return this.speed * 3.6;
+    }
+    /** true while any wheel is over the skid thresholds */
+    get skidding(): boolean {
+        for (let i = 0; i < this.wheelOrder.length; i++) {
+            if (this.wheels.get(this.wheelOrder[i])?.isSkidding) return true;
+        }
+        return false;
+    }
+
+    /** the controller seen as a `WheeledVehicleController`; a `MotorcycleController` is one too */
+    protected get wheeledController(): Jolt.WheeledVehicleController | undefined {
+        return this.controller as Jolt.WheeledVehicleController | undefined;
     }
     /** whatever is being synced as the chassis: the user's object if there is one */
     get bodyObject(): THREE.Object3D | undefined {
@@ -134,9 +307,56 @@ export class VehicleManager {
         // same defaults `VehicleSystem`/`useVehicle` would have given it
         this.settings = resolveVehicleSettings(settings as VehicleSettings);
         this.physicsSystem = physicsSystem;
+        // issue #41: the presentational layer is on unless it is explicitly turned off
+        this.bodyRollOptions = resolveBodyRoll(this.settings.bodyRoll);
+        this.wheelSmoothingOptions = resolveWheelSmoothing(this.settings.wheelSmoothing);
+        this.skidOptions = resolveSkid(this.settings.skid);
         this.createBody();
         this.createConstraint();
         this.bindListeners();
+    }
+
+    //* Secondary physics setters (issue #41) =================================================
+    /**
+     * Change (or turn off, with `false`) the visual body roll. Turning it off puts the chassis
+     * object back to its own orientation so nothing is left leaning.
+     */
+    setBodyRoll(settings: BodyRollSettings | false) {
+        this.bodyRollOptions = resolveBodyRoll(settings);
+        if (!this.bodyRollOptions) this.resetBodyRoll();
+    }
+    /** Change (or turn off, with `false`) the easing of the rendered wheels. */
+    setWheelSmoothing(settings: WheelSmoothingSettings | false) {
+        this.wheelSmoothingOptions = resolveWheelSmoothing(settings);
+    }
+    /**
+     * Change (or turn off, with `false`) skid detection. Turning it off ends every skid that is
+     * currently running, so a listener that started a particle effect gets its `skidEnd`.
+     */
+    setSkid(settings: SkidSettings | false) {
+        this.skidOptions = resolveSkid(settings);
+        if (!this.skidOptions) this.updateSkidState(0);
+    }
+
+    /** put the chassis object back to level and forget the spring's state */
+    private resetBodyRoll() {
+        this.bodyRollAngle = 0;
+        this.bodyPitchAngle = 0;
+        this.rollVelocity = 0;
+        this.pitchVelocity = 0;
+        this.hasPreviousVelocity = false;
+        this.bodyObject?.quaternion.identity();
+    }
+
+    /**
+     * Cache the controller's engine and gearbox for the readouts. Called once the subclass has
+     * cast `this.controller`; both are plain members of the controller, so they live exactly as
+     * long as the constraint does and are never ours to free.
+     */
+    protected bindControllerReadouts() {
+        const controller = this.wheeledController;
+        this.engine = controller?.GetEngine();
+        this.transmission = controller?.GetTransmission();
     }
 
     /**
@@ -179,6 +399,11 @@ export class VehicleManager {
 
         this.constraintStepListener = undefined;
         this.callbacks = undefined;
+        // issue #41: the engine and gearbox belong to the controller, which the constraint just
+        // took with it. Drop the wrappers rather than freeing anything.
+        this.engine = undefined;
+        this.transmission = undefined;
+        this.skidEvent.wheel = undefined as unknown as WheelState;
         this.constraint = undefined as unknown as Jolt.VehicleConstraint;
         this.controller = undefined as unknown as Jolt.VehicleController;
         this.carBody = undefined as unknown as Jolt.Body;
@@ -450,6 +675,8 @@ export class VehicleManager {
             this.constraint.GetController(),
             Raw.module.WheeledVehicleController
         );
+        // issue #41: cache the engine and gearbox the readouts are read from
+        this.bindControllerReadouts();
 
         // the constraint has copied the wheels and built its controller, so the settings (and
         // everything they own: the wheel settings, the controller settings) can go
@@ -541,6 +768,31 @@ export class VehicleManager {
     onPostStep(listener: VehicleStepCallback): Unsubscribe {
         return this.events.on('postStep', listener);
     }
+    /**
+     * Issue #41: a wheel crossed the skid thresholds - start the tyre smoke, the skid mark, the
+     * screech. The payload is pooled; copy anything you keep.
+     */
+    onSkidStart(listener: VehicleSkidListener): Unsubscribe {
+        return this.events.on('skidStart', listener);
+    }
+    /** Issue #41: that wheel has had grip again for `skid.releaseTime` seconds. */
+    onSkidEnd(listener: VehicleSkidListener): Unsubscribe {
+        return this.events.on('skidEnd', listener);
+    }
+    /**
+     * Issue #41: the engine readout, once per physics step, for audio and instruments. The state
+     * object is pooled - read what you need inside the handler.
+     *
+     * ```ts
+     * vehicle.onEngine(({ rpm, gear, throttle }) => {
+     *     engineSound.playbackRate = 0.5 + rpm / 6000;
+     *     engineSound.volume = 0.2 + 0.8 * throttle;
+     * });
+     * ```
+     */
+    onEngine(listener: VehicleEngineListener): Unsubscribe {
+        return this.events.on('engine', listener);
+    }
     // take an action type and filter it
     // biome-ignore lint/suspicious/noExplicitAny: action payloads are user defined
     onAction(actionType: string, listener: (action: any, manager: VehicleManager) => void) {
@@ -578,6 +830,9 @@ export class VehicleManager {
             joltScratch.rvec3(position),
             Raw.module.EActivation_Activate
         );
+        // a teleport is not acceleration: forget the sampled velocity so the body roll spring
+        // does not get a one frame kick out of the jump (issue #41)
+        this.hasPreviousVelocity = false;
     }
 
     //* Physics Update ====================================
@@ -630,19 +885,139 @@ export class VehicleManager {
             }
         ).SetDriverInput(forward, right, brake, handBrake);
     }
-    postPhysicsUpdate(_deltaTime: number) {
+    /**
+     * Everything render side happens here, after jolt has solved the step: the chassis and the
+     * wheels are synced, the presentational layer of issue #41 is advanced (body roll, wheel
+     * easing, skid detection) and the readouts are published.
+     *
+     * It allocates nothing, on either side of the wasm boundary: every jolt getter used here
+     * returns a number or a static temporary, and every three object it writes to is scratch
+     * owned by the manager or by a `WheelState`.
+     */
+    postPhysicsUpdate(deltaTime: number) {
         if (this.destroyed) return;
         // lets try what happens if we update the render state after the world tick.
         // GetPosition/GetRotation return static temporaries by value, so reading straight into
         // the three objects neither allocates wasm memory nor produces per frame garbage.
         vec3.three(this.carBody.GetPosition(), undefined, undefined, this.threeObject.position);
         quat.joltToThree(this.carBody.GetRotation(), this.threeObject.quaternion);
-        this.updateWheelTransforms();
+        this.updateWheelTransforms(deltaTime);
+        this.updateSkidState(deltaTime);
+        this.updateBodyRoll(deltaTime);
+        this.emitEngineState();
     }
     //update the wheels
-    updateWheelTransforms() {
-        this.wheels.forEach((wheel) => {
-            wheel.updateLocalTransform();
-        });
+    updateWheelTransforms(deltaTime = 0) {
+        // a plain loop over the wheel order rather than `wheels.forEach(fn)`: the callback would
+        // be a fresh closure on every step of every vehicle
+        for (let i = 0; i < this.wheelOrder.length; i++) {
+            const wheel = this.wheels.get(this.wheelOrder[i]);
+            wheel?.updateLocalTransform(deltaTime, this.wheelSmoothingOptions);
+        }
+    }
+
+    /**
+     * Issue #41: advance each wheel's skid hysteresis and emit the transitions. Nothing is built
+     * unless somebody is listening, and the payload that is handed out is the pooled one.
+     */
+    protected updateSkidState(deltaTime: number) {
+        // read once for every wheel; `speed` costs two calls into wasm
+        const speed = this.skidOptions ? Math.abs(this.speed) : 0;
+        for (let i = 0; i < this.wheelOrder.length; i++) {
+            const name = this.wheelOrder[i];
+            const wheel = this.wheels.get(name);
+            if (!wheel) continue;
+            const transition = wheel.updateSkid(this.skidOptions, deltaTime, speed);
+            if (transition === 0) continue;
+            const type = transition === SKID_STARTED ? 'skidStart' : 'skidEnd';
+            if (!this.events.has(type)) continue;
+            const event = this.skidEvent;
+            event.wheel = wheel;
+            event.name = name;
+            event.index = i;
+            event.slipRatio = wheel.slipRatio;
+            event.lateralSlip = wheel.lateralSlip;
+            event.speedKmh = this.speedKmh;
+            // GetContactPosition returns an RVec3 by value - a static temporary, read never freed
+            if (wheel.hasContact && wheel.joltWheel) {
+                vec3.three(
+                    wheel.joltWheel.GetContactPosition(),
+                    undefined,
+                    undefined,
+                    event.position
+                );
+            } else {
+                event.position.set(0, 0, 0);
+            }
+            this.events.emit(type, event);
+        }
+    }
+
+    /**
+     * Issue #41: the spring damped visual tilt. The chassis *body* is never touched - this only
+     * writes the local rotation of the object being synced as the chassis, which sits inside
+     * `threeObject` and therefore leans relative to the body jolt solved.
+     *
+     * The tilt is driven by the chassis' own acceleration rotated into its local frame, so a
+     * steady turn (whose world space acceleration is purely centripetal) reads as pure lateral
+     * acceleration and leans the body outwards, exactly as a real sprung mass does.
+     */
+    protected updateBodyRoll(deltaTime: number) {
+        const options = this.bodyRollOptions;
+        const object = this.bodyObject;
+        if (!options || !object || deltaTime <= 0) return;
+
+        vec3.joltToThree(this.carBody.GetLinearVelocity(), this._velocity);
+        if (this.hasPreviousVelocity) {
+            this._acceleration
+                .subVectors(this._velocity, this._previousVelocity)
+                .divideScalar(deltaTime)
+                // into the chassis' own frame. `_rotation` is scratch, and conjugating it in
+                // place is what turns the body rotation into its inverse.
+                .applyQuaternion(this._rotation.copy(this.threeObject.quaternion).conjugate());
+        } else {
+            this._acceleration.set(0, 0, 0);
+            this.hasPreviousVelocity = true;
+        }
+        this._previousVelocity.copy(this._velocity);
+
+        const reference = options.referenceAcceleration || 1;
+        // a right hand turn accelerates the chassis towards its local +x and leans it to the
+        // left, which is a positive rotation about the local forward axis
+        const targetRoll = clamp(this._acceleration.x / reference, 1) * options.maxAngle;
+        const targetPitch = clamp(this._acceleration.z / reference, 1) * options.maxPitchAngle;
+
+        const step = deltaTime > MAX_ROLL_STEP ? MAX_ROLL_STEP : deltaTime;
+        this.rollVelocity +=
+            ((targetRoll - this.bodyRollAngle) * options.stiffness -
+                this.rollVelocity * options.damping) *
+            step;
+        this.pitchVelocity +=
+            ((targetPitch - this.bodyPitchAngle) * options.stiffness -
+                this.pitchVelocity * options.damping) *
+            step;
+        this.bodyRollAngle = clamp(this.bodyRollAngle + this.rollVelocity * step, options.maxAngle);
+        this.bodyPitchAngle = clamp(
+            this.bodyPitchAngle + this.pitchVelocity * step,
+            options.maxPitchAngle
+        );
+
+        object.quaternion.setFromEuler(this._tilt.set(this.bodyPitchAngle, 0, this.bodyRollAngle));
+    }
+
+    /** Issue #41: fill and dispatch the pooled engine readout, if anybody asked for it. */
+    protected emitEngineState() {
+        if (!this.events.has('engine')) return;
+        const state = this.engineState;
+        state.rpm = this.rpm;
+        state.gear = this.gear;
+        state.throttle = this.throttle;
+        state.brake = this.brakeInput;
+        state.speed = this.speed;
+        state.speedKmh = state.speed * 3.6;
+        state.shifting = this.shifting;
+        state.clutch = this.clutch;
+        state.skidding = this.skidding;
+        this.events.emit('engine', state);
     }
 }

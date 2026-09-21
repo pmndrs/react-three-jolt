@@ -1,6 +1,7 @@
 //import * as THREE from "three";
 import { useThree } from '@react-three/fiber';
-import { Physics, RigidBody } from '@react-three/jolt';
+import { Attractor, type AttractorType, Physics, RigidBody } from '@react-three/jolt';
+import { useControls } from 'leva';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useDemo } from '../App';
 import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
@@ -46,6 +47,18 @@ export function BallBox() {
 
     const [gravity, setGravity] = useState([0, -9.8, 0]);
     const [showPrompt, setShowPrompt] = useState(false);
+
+    //* Attractor (issue #159) ----------------------------------
+    // Off by default so the demo still opens as the gravity toy it has always been. Turn it on
+    // and the balls orbit the marker instead of piling up in a corner; `strength` is a force in
+    // newtons, and these bodies are around a kilogram each.
+    const attractor = useControls('Attractor', {
+        enabled: false,
+        strength: { value: 40, min: -200, max: 200, step: 5 },
+        range: { value: 14, min: 1, max: 40, step: 1 },
+        type: { value: 'linear' as AttractorType, options: ['static', 'linear', 'newtonian'] },
+        height: { value: 4, min: -2, max: 12, step: 0.5 }
+    });
 
     //* Changing gravity with mouse ----------------------------
     const updateGravityOnMouse = (e: MouseEvent) => {
@@ -129,6 +142,25 @@ export function BallBox() {
                 )}
 
                 <BoxContainer />
+
+                <Attractor
+                    position={[0, attractor.height, 0]}
+                    enabled={attractor.enabled}
+                    strength={attractor.strength}
+                    range={attractor.range}
+                    type={attractor.type as AttractorType}
+                >
+                    {attractor.enabled && (
+                        <mesh>
+                            <sphereGeometry args={[0.4, 16, 16]} />
+                            <meshStandardMaterial
+                                color="#ffd23d"
+                                emissive="#ffd23d"
+                                emissiveIntensity={0.6}
+                            />
+                        </mesh>
+                    )}
+                </Attractor>
 
                 <RigidBody
                     scale={[0.03, 0.03, 0.03]}

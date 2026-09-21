@@ -9,9 +9,10 @@ import {
     Quaternion,
     Vector3
 } from 'three';
+import type { SurfaceMaterialTable } from '../heightField/materials';
 import { Raw } from '../raw';
 
-import { anyVec3, joltScratch, quat, vec3 } from '../utils';
+import { anyQuat, anyVec3, devWarn, joltScratch, quat, vec3 } from '../utils';
 import { type BodySystem, getThreeObjectForBody } from './body-system';
 import { Emitter, type Unsubscribe } from './emitter';
 import { BODY_EVENT_BITS, type BodyEventMap, EventBit } from './events';
@@ -43,6 +44,50 @@ export class BodyState {
     activeScale = new THREE.Vector3(1, 1, 1);
     isDebugging = false;
 
+    /**
+     * Whether the setters that can wake a sleeping body (`position`, `rotation`, `velocity`,
+     * `angularVelocity`, `scale`, `group`/`subGroup`) are allowed to activate it (issue #167).
+     *
+     * Defaults to `true`, which is every setter's behavior before this flag existed - nothing
+     * changes for existing callers. Turn it off for bulk repositioning of sleeping bodies (e.g.
+     * re-laying out a stack of crates that should stay asleep) where waking every body just to
+     * move it - and having it fall back asleep a moment later - is wasted broadphase/island work.
+     *
+     * A static body never activates regardless of this flag: activating one asserts inside Jolt
+     * and means nothing, since a static is never simulated (see the `position` setter, #61/#208).
+     *
+     * Each setter also has a method form (`setPosition`, `setRotation`, `setVelocity`,
+     * `setAngularVelocity`, `setScale`, `setGroup`, `setSubGroup`) taking an `{ activate }`
+     * override for a single call, which wins over this flag.
+     */
+    activateOnChange = true;
+
+    /**
+     * When `false` (opt-in, issue #168), the frame sync writes this body's pose straight into
+     * `object.matrix` (and flags `matrixWorldNeedsUpdate`) instead of `object.position` /
+     * `object.quaternion`, and turns off three's own `Object3D.matrixAutoUpdate` so nothing
+     * recomposes the matrix from those a moment later. This skips both `Object3D.updateMatrix()`
+     * (three's per-object recompute) and the position/quaternion writes that would otherwise
+     * trigger it.
+     *
+     * Only correct when this object's parent transform is stable between physics steps - the
+     * scene root or a group that never moves/rotates/scales. The composed matrix is relative to
+     * the parent space captured once in {@link invertedWorldMatrix} at body creation, exactly
+     * like every other synced pose - a moving parent was already unsupported by the sync loop
+     * before this flag existed, and this flag does not add that constraint, it inherits it.
+     *
+     * No effect on an instanced body: an instance's transform always goes through
+     * {@link setMatrix} and was never driven by `object.position`/`object.quaternion`.
+     */
+    get matrixAutoUpdate(): boolean {
+        return this._matrixAutoUpdate;
+    }
+    set matrixAutoUpdate(value: boolean) {
+        this._matrixAutoUpdate = value;
+        if (!this.isInstance) this.object.matrixAutoUpdate = value;
+    }
+    private _matrixAutoUpdate = true;
+
     // obstruction and collision
     allowObstruction = true; // temporarily block obstruction
     obstructionType: 'any' | 'temporal' = 'any';
@@ -65,6 +110,14 @@ export class BodyState {
     motionType: 'linear' | 'angular' = 'linear';
     motionAsSurfaceVelocity = false;
 
+    //* Surface materials (issue #46) ========================
+    /**
+     * Per-surface friction/restitution for a shape whose sub-shapes carry Jolt materials - in
+     * practice a heightfield built with `materials`. Set through {@link setSurfaceMaterials};
+     * read inside the contact callback, which is the only place friction can be changed.
+     */
+    surfaceMaterials?: SurfaceMaterialTable;
+
     get isSleeping() {
         return !this.body.IsActive();
     }
@@ -76,10 +129,28 @@ export class BodyState {
     }
 
     /**
+     * True for a body Jolt will never move on its own (`type="static"`).
+     *
+     * Static bodies *can* still be moved from the outside - see the `position` / `rotation`
+     * setters - they are simply never simulated, never active, and therefore never visited by
+     * the render sync loop.
+     */
+    get isStatic() {
+        return this.body.IsStatic();
+    }
+
+    /**
      * Open sub-shape manifolds per peer handle, maintained by `BodySystem`'s contact listener.
      * Derived state - write through the listener, read through {@link isContacting}.
      */
     contacts: Map<number, number> = new Map();
+
+    /**
+     * The description this body's shape was built from, when it was built from one (`<Shape>`
+     * and the `describeObject` path both set it; a body handed a ready made `Jolt.Shape` has
+     * none). Only used to answer `payload.targetSubShape.descriptor` - issue #13.
+     */
+    shapeDescriptor?: ShapeDescriptor;
 
     // Listeners ----------------------------------
     /**
@@ -249,6 +320,11 @@ export class BodyState {
         this.events.clear();
         this.legacySubs.clear();
         this.internalMask = 0;
+        // the jolt materials themselves are owned by the shape and go with it; this only frees
+        // the scratch SubShapeID and drops the pointer map (whose pointers are about to be
+        // recycled by jolt anyway)
+        this.surfaceMaterials?.dispose();
+        this.surfaceMaterials = undefined;
     }
     //* Interpolation pose cache ==============================
     /*
@@ -333,6 +409,7 @@ export class BodyState {
         this.bodyInterface.SetShape(this.BodyID, shape, false, Raw.module.EActivation_Activate);
         // update the debug object if it exists
         if (this.debugMesh) this.updateDebugMesh();
+        this.bodySystem.worldEvents?.emit('shapeChanged', this);
     }
 
     //* Mutable compounds (issue #108) ========================
@@ -373,6 +450,9 @@ export class BodyState {
             Raw.module.EActivation_Activate
         );
         if (this.debugMesh) this.updateDebugMesh();
+        // An in-place compound edit keeps the same shape pointer, so a geometry cache keyed on
+        // that pointer cannot see it. This is the only notification there is (issue #158).
+        this.bodySystem.worldEvents?.emit('shapeChanged', this);
     }
 
     /**
@@ -481,20 +561,71 @@ export class BodyState {
         }
         */
     }
+    /**
+     * Write an already-composed local (parent space) matrix straight onto the object and flag
+     * `matrixWorldNeedsUpdate`, without touching `position`/`quaternion` or forcing an immediate
+     * recursive `updateMatrixWorld` (unlike {@link setMatrix}) - three propagates `matrixWorld`
+     * from it on its own next pass. Issue #168's frame-sync fast path: `matrixAutoUpdate = false`
+     * turned off three's own recompute (see the setter), so nothing else will pick this up.
+     *
+     * Called by `PhysicsSystem.syncBodyToObject`; not meant for a regular (`matrixAutoUpdate`
+     * still `true`) body, which goes through {@link update} instead.
+     */
+    setLocalMatrix(matrix: Matrix4) {
+        this.object.matrix.copy(matrix);
+        this.object.matrixWorldNeedsUpdate = true;
+    }
 
-    // Set the body position
+    /**
+     * What activation mode a setter should use for this call (issue #167): an explicit
+     * `activate` argument wins, then {@link activateOnChange}, and a static body always gets
+     * `false` - activating one asserts inside Jolt and means nothing, since a static is never
+     * simulated (see {@link position}, #61/#208).
+     */
+    private shouldActivate(activate?: boolean): boolean {
+        if (this.isStatic) return false;
+        return activate ?? this.activateOnChange;
+    }
+    /** {@link shouldActivate} as the `Jolt.EActivation` enum the body interface calls take. */
+    private resolveActivation(activate?: boolean): Jolt.EActivation {
+        return this.shouldActivate(activate)
+            ? Raw.module.EActivation_Activate
+            : Raw.module.EActivation_DontActivate;
+    }
+
+    /**
+     * Move the body. Works on every motion type, **including static bodies** (issue #61):
+     * `SetPosition` updates the broadphase, and the three.js object is brought along by the
+     * dirty-static drain in `PhysicsSystem.onUpdate`, since the frame loop only walks bodies
+     * that can be awake.
+     *
+     * Moving a static body every frame is an anti pattern - it teleports, so nothing resting on
+     * it is carried, sleeping neighbours are not woken, and contacts are resolved as if the body
+     * had always been there. Use `type="kinematic"` with {@link setKinematicTarget} (or
+     * {@link moveKinematic}) for anything that moves repeatedly; statics are for the occasional
+     * reposition of scenery.
+     *
+     * @param options.activate override {@link activateOnChange} for this call (issue #167) - e.g.
+     * `setPosition(v, { activate: false })` to reposition a sleeping body without waking it, for
+     * a bulk relayout of scenery that should stay asleep.
+     */
     // `SetPosition` takes an RVec3Arg and copies it, so the shared scratch vector is safe here
     // and keeps this setter allocation free - it is driven from useFrame by user code.
-    set position(position) {
+    setPosition(position: anyVec3, options?: { activate?: boolean }) {
         this.bodyInterface.SetPosition(
             this.BodyID,
             joltScratch.rvec3(position),
-            Raw.module.EActivation_Activate
+            this.resolveActivation(options?.activate)
         );
         // A setter is a teleport, not simulation: the cached previous/current poses now bracket
         // a jump the body never travelled, and interpolating across them would smear the object
         // from its old place to its new one over the next frame.
         this.resetPoseCache();
+        this.markMovedIfStatic();
+    }
+    /** {@link setPosition} with the default activation - see {@link activateOnChange}. */
+    set position(position: THREE.Vector3) {
+        this.setPosition(position);
     }
     // get the position of the body and wrap it in a three vector
     getPosition(asJolt?: boolean): THREE.Vector3 | Jolt.RVec3 {
@@ -504,25 +635,46 @@ export class BodyState {
     get position(): THREE.Vector3 {
         return this.getPosition() as THREE.Vector3;
     }
-    // Set the body rotation
+    /**
+     * Turn the body. Same rules as {@link setPosition}, statics included (issue #61) and the
+     * `{ activate }` override (#167).
+     */
     // `SetRotation` takes a QuatArg and copies it; shared scratch, no allocation per call.
-    set rotation(rotation: THREE.Quaternion) {
+    setRotation(rotation: anyQuat, options?: { activate?: boolean }) {
         this.bodyInterface.SetRotation(
             this.BodyID,
             joltScratch.quat(rotation),
-            Raw.module.EActivation_Activate
+            this.resolveActivation(options?.activate)
         );
         // see the `position` setter: a teleport must not be slerped across.
         this.resetPoseCache();
+        this.markMovedIfStatic();
+    }
+    /** {@link setRotation} with the default activation - see {@link activateOnChange}. */
+    set rotation(rotation: THREE.Quaternion) {
+        this.setRotation(rotation);
     }
     // get the rotation of the body and wrap it in a three quaternion
     get rotation(): THREE.Quaternion {
         return quat.joltToThree(this.body.GetRotation());
     }
+    /**
+     * Static bodies are not in the frame loop's iteration (they can never be awake), so a static
+     * that was just moved has to tell the body system, which hands it to the render sync exactly
+     * once. Costs nothing for every other motion type.
+     */
+    private markMovedIfStatic() {
+        if (this.isStatic) this.bodySystem.markStaticMoved(this);
+    }
+
     // set both position and rotation
-    setPositionAndRotation(position: THREE.Vector3, rotation: THREE.Quaternion) {
-        this.position = position;
-        this.rotation = rotation;
+    setPositionAndRotation(
+        position: THREE.Vector3,
+        rotation: THREE.Quaternion,
+        options?: { activate?: boolean }
+    ) {
+        this.setPosition(position, options);
+        this.setRotation(rotation, options);
         // the two setters above each drop the cache already; kept explicit so this stays correct
         // if either of them is ever reimplemented against the body interface directly.
         this.resetPoseCache();
@@ -542,8 +694,10 @@ export class BodyState {
      * Re-scaling replaces the `ScaledShape` rather than stacking a new one on top of it, so the
      * scale is always relative to the *unscaled* shape and the superseded wrapper is freed with
      * the body's reference.
+     *
+     * @param options.activate override {@link activateOnChange} for this call (issue #167).
      */
-    set scale(inScale: THREE.Vector3 | number[] | number) {
+    setScale(inScale: THREE.Vector3 | number[] | number, options?: { activate?: boolean }) {
         // `inScale instanceof Number` was always false for a primitive number, so a numeric
         // scale used to fall through to `vec3.three(2)` -> (2, undefined, undefined).
         const requested =
@@ -592,7 +746,12 @@ export class BodyState {
         );
         // set the new shape - the body takes its own reference, and drops the one it held on the
         // shape we are replacing (which frees the superseded ScaledShape)
-        this.bodyInterface.SetShape(this.BodyID, newShape, true, Raw.module.EActivation_Activate);
+        this.bodyInterface.SetShape(
+            this.BodyID,
+            newShape,
+            true,
+            this.resolveActivation(options?.activate)
+        );
 
         // if we are a regular shape we can get an accurate actualScale
         let actualScale = scale;
@@ -609,22 +768,51 @@ export class BodyState {
             this.object.scale.copy(actualScale);
         }
     }
+    /** {@link setScale} with the default activation - see {@link activateOnChange}. */
+    set scale(inScale: THREE.Vector3 | number[] | number) {
+        this.setScale(inScale);
+    }
     // get the velocity of the body
     get velocity() {
         return vec3.three(this.body.GetLinearVelocity());
     }
-    // set the velocity of the body
-    // `SetLinearVelocity` takes a Vec3Arg and copies it; shared scratch, no allocation per call.
+    /**
+     * Set the body's linear velocity (issue #167).
+     *
+     * Jolt's `Body.SetLinearVelocity` (no `BodyInterface`) never wakes a sleeping body - the
+     * value is stored but the body stays asleep and never applies it. `BodyInterface.SetLinearVelocity`
+     * always does, unconditionally; there is no `EActivation` parameter on either to choose with,
+     * so which one gets called is what implements the `{ activate }` override here.
+     *
+     * @param options.activate override {@link activateOnChange} for this call.
+     */
+    // Both calls take a Vec3Arg and copy it; shared scratch, no allocation per call.
+    setVelocity(velocity: Vector3, options?: { activate?: boolean }) {
+        if (this.shouldActivate(options?.activate)) {
+            this.bodyInterface.SetLinearVelocity(this.BodyID, joltScratch.vec3(velocity));
+        } else {
+            this.body.SetLinearVelocity(joltScratch.vec3(velocity));
+        }
+    }
+    /** {@link setVelocity} with the default activation - see {@link activateOnChange}. */
     set velocity(velocity: Vector3) {
-        this.body.SetLinearVelocity(joltScratch.vec3(velocity));
+        this.setVelocity(velocity);
     }
     // get the angular velocity of the body
     get angularVelocity() {
         return vec3.three(this.body.GetAngularVelocity());
     }
-    // set the angular velocity of the body
+    /** {@link setVelocity}'s angular counterpart. */
+    setAngularVelocity(angularVelocity: Vector3, options?: { activate?: boolean }) {
+        if (this.shouldActivate(options?.activate)) {
+            this.bodyInterface.SetAngularVelocity(this.BodyID, joltScratch.vec3(angularVelocity));
+        } else {
+            this.body.SetAngularVelocity(joltScratch.vec3(angularVelocity));
+        }
+    }
+    /** {@link setAngularVelocity} with the default activation - see {@link activateOnChange}. */
     set angularVelocity(angularVelocity: Vector3) {
-        this.body.SetAngularVelocity(joltScratch.vec3(angularVelocity));
+        this.setAngularVelocity(angularVelocity);
     }
     get color(): THREE.Color {
         // if we are a mesh, get the material color of the mesh
@@ -692,29 +880,66 @@ export class BodyState {
     get restitution() {
         return this.body.GetRestitution();
     }
+    /**
+     * This body's `MotionProperties`, or `undefined` for a static body - which has none at all.
+     * `Body::GetMotionProperties()` asserts on a static body in a debug build and hands back a
+     * null pointer in a release one, so every caller goes through here.
+     */
+    private get motionProperties(): Jolt.MotionProperties | undefined {
+        if (this.body.IsStatic()) return undefined;
+        return this.body.GetMotionProperties();
+    }
     get angularDamping() {
-        return this.body.GetMotionProperties().GetAngularDamping();
+        return this.motionProperties?.GetAngularDamping() ?? 0;
     }
     set angularDamping(damping: number) {
-        this.body.GetMotionProperties().SetAngularDamping(damping);
+        this.motionProperties?.SetAngularDamping(damping);
     }
     get linearDamping() {
-        return this.body.GetMotionProperties().GetLinearDamping();
+        return this.motionProperties?.GetLinearDamping() ?? 0;
     }
     set linearDamping(damping: number) {
-        this.body.GetMotionProperties().SetLinearDamping(damping);
+        this.motionProperties?.SetLinearDamping(damping);
     }
     get gravityFactor() {
-        return this.body.GetMotionProperties().GetGravityFactor();
+        return this.motionProperties?.GetGravityFactor() ?? 0;
     }
     set gravityFactor(factor: number) {
-        this.body.GetMotionProperties().SetGravityFactor(factor);
+        this.motionProperties?.SetGravityFactor(factor);
     }
-    get mass() {
-        return this.body.GetShape().GetMassProperties().mMass;
+    /**
+     * The body's mass in kilograms (issue #201).
+     *
+     * Read from the body's own `MotionProperties`, not from the shape: a body created with a
+     * `mass` option (or scaled afterwards) overrides what the shape's density implies, and the
+     * old getter reported the shape's number and ignored the override entirely.
+     *
+     * **`0` for static and kinematic bodies**, which Jolt treats as having infinite mass - they
+     * have no inverse mass to invert. Setting it on one is a no-op.
+     */
+    get mass(): number {
+        // only a dynamic body has a meaningful inverse mass; Jolt asserts on the others
+        if (!this.body.IsDynamic()) return 0;
+        const inverseMass = this.body.GetMotionProperties().GetInverseMass();
+        return inverseMass > 0 ? 1 / inverseMass : 0;
     }
     set mass(mass: number) {
-        this.bodySystem.setMass(this.handle, mass);
+        const motionProperties = this.motionProperties;
+        if (!motionProperties || !this.body.IsDynamic()) {
+            devWarn(
+                `*** R3/Jolt: mass has no meaning on a ${
+                    this.body.IsStatic() ? 'static' : 'kinematic'
+                } body (Jolt treats it as infinite); ignoring ***`
+            );
+            return;
+        }
+        if (!(mass > 0)) {
+            devWarn(`*** R3/Jolt: mass must be greater than 0, got ${mass}; ignoring ***`);
+            return;
+        }
+        // scales the inverse mass and the inertia tensor together, and - unlike going through
+        // `SetMassProperties` - leaves the body's allowed degrees of freedom alone
+        motionProperties.ScaleToMass(mass);
     }
 
     //* Group Filtering ----------------------------------
@@ -728,14 +953,38 @@ export class BodyState {
     get group() {
         return this.body.GetCollisionGroup().GetGroupID();
     }
+    /**
+     * Set this body's collision group (issue #167's `{ activate }` override; #95 for the group
+     * filter itself). `SetCollisionGroup` has no `EActivation` parameter in Jolt - the wake is
+     * `BodySystem`'s own explicit `ActivateBody` call, gated here on {@link activateOnChange}.
+     */
+    setGroup(group: number, options?: { activate?: boolean }) {
+        this.bodySystem.setBodyCollisionGroup(
+            this.handle,
+            group,
+            undefined,
+            this.shouldActivate(options?.activate)
+        );
+    }
+    /** {@link setGroup} with the default activation - see {@link activateOnChange}. */
     set group(group: number) {
-        this.bodySystem.setBodyCollisionGroup(this.handle, group);
+        this.setGroup(group);
     }
     get subGroup() {
         return this.body.GetCollisionGroup().GetSubGroupID();
     }
+    /** {@link setGroup}'s sub group counterpart. */
+    setSubGroup(subGroup: number, options?: { activate?: boolean }) {
+        this.bodySystem.setBodyCollisionGroup(
+            this.handle,
+            undefined,
+            subGroup,
+            this.shouldActivate(options?.activate)
+        );
+    }
+    /** {@link setSubGroup} with the default activation - see {@link activateOnChange}. */
     set subGroup(subGroup: number) {
-        this.bodySystem.setBodyCollisionGroup(this.handle, undefined, subGroup);
+        this.setSubGroup(subGroup);
     }
     /** Alias of {@link group}. */
     get collisionGroup() {
@@ -854,15 +1103,116 @@ export class BodyState {
     addImpulse(impulse: Vector3) {
         this.body.AddImpulse(joltScratch.vec3(impulse));
     }
-    //move kinematic
-    // `rotation` is optional in practice; `joltScratch.quat(undefined)` is the identity rotation.
-    moveKinematic(position: Vector3, rotation: THREE.Quaternion, deltaTime = 0) {
+    //* Kinematic motion ----------------------------------
+    /**
+     * Drive a kinematic body towards `position` (and `rotation`) over `deltaTime`.
+     *
+     * Jolt derives the body's velocity from `(target - current) / deltaTime`, which is what makes
+     * a kinematic platform push and carry the things resting on it - a plain `position` write
+     * teleports instead, and carries nothing.
+     *
+     * @param position world space target position.
+     * @param rotation world space target rotation. Omitted (or `null`) keeps the body's current
+     * rotation, so `moveKinematic(pos)` never silently straightens a rotated platform (#194).
+     * @param deltaTime seconds to cover the distance in. Defaults to the world's step length:
+     * `physicsSystem.timeStep` when it is a number, otherwise the last frame delta. It used to
+     * default to `0`, which produces no velocity and therefore no motion at all.
+     *
+     * Called from `useFrame`, this applies the whole move in the first substep of the frame;
+     * {@link setKinematicTarget} is the smoother option, since the step loop re-aims it with the
+     * real substep dt.
+     */
+    moveKinematic(
+        position: anyVec3,
+        rotation?: THREE.Quaternion | Jolt.Quat | null,
+        deltaTime: number = this.stepDelta
+    ) {
         this.bodyInterface.MoveKinematic(
             this.BodyID,
             joltScratch.rvec3(position),
-            joltScratch.quat(rotation),
+            // `rvec3` and `quat` are separate scratch singletons, so both are live here
+            joltScratch.quat(rotation ?? this.body.GetRotation()),
             deltaTime
         );
+    }
+
+    /**
+     * Give this body per-surface materials, and tell the contact listener to keep calling us
+     * even when no user handler is attached (the friction write is synchronous, inside
+     * `Step()`, so it cannot be deferred like a normal event).
+     *
+     * The table's Jolt materials belong to the *shape*, not to this body: `dispose()` only drops
+     * the JS side bookkeeping.
+     */
+    setSurfaceMaterials(table: SurfaceMaterialTable | undefined) {
+        this.surfaceMaterials?.dispose();
+        this.surfaceMaterials = table;
+        if (table) this.internalMask |= EventBit.surfaceMaterial;
+        else this.internalMask &= ~EventBit.surfaceMaterial;
+    }
+
+    /**
+     * Where this body is being driven to by {@link setKinematicTarget}, or `null`. Preallocated
+     * and written in place - the step loop reads it every substep, so it must not allocate.
+     */
+    kinematicTarget: { position: Vector3; rotation: Quaternion } | null = null;
+
+    /**
+     * Aim a kinematic body at a world space pose and let the step loop do the driving (#194).
+     *
+     * Unlike {@link moveKinematic}, which is applied once with whatever delta the caller passes,
+     * the target is re-applied at the top of **every substep** with that substep's real dt, so
+     * the body converges on the target exactly however many substeps a frame runs, and riders
+     * see a steady velocity instead of one big lurch followed by nothing.
+     *
+     * The target is sticky: set it once per frame (or once, and leave it) and clear it with
+     * {@link clearKinematicTarget}. Once reached, the derived velocity is zero, so a stale
+     * target simply parks the body where it asked to be.
+     *
+     * @param rotation omitted keeps the body's current rotation.
+     */
+    setKinematicTarget(position: anyVec3, rotation?: THREE.Quaternion | Jolt.Quat | null) {
+        if (!this.kinematicTarget)
+            this.kinematicTarget = { position: new Vector3(), rotation: new Quaternion() };
+        const target = this.kinematicTarget;
+        // `three()`'s out parameter is its fourth argument (it also takes loose x/y/z numbers)
+        vec3.three(position, undefined, undefined, target.position);
+        quat.three(rotation ?? this.body.GetRotation(), target.rotation);
+        this.bodySystem.trackKinematicTarget(this);
+    }
+
+    /** Stop driving this body; it keeps whatever velocity the last substep gave it. */
+    clearKinematicTarget() {
+        this.kinematicTarget = null;
+        this.bodySystem.untrackKinematicTarget(this);
+    }
+
+    /**
+     * Apply the standing target with the step's own dt. Called by `BodySystem` from inside the
+     * fixed step loop, before `Step()`; not part of the public API.
+     * @internal
+     */
+    applyKinematicTarget(deltaTime: number) {
+        const target = this.kinematicTarget;
+        if (!target || deltaTime <= 0) return;
+        this.bodyInterface.MoveKinematic(
+            this.BodyID,
+            joltScratch.rvec3(target.position),
+            joltScratch.quat(target.rotation),
+            deltaTime
+        );
+    }
+
+    /**
+     * How long one physics step is, for callers that don't want to pass a delta. The fixed step
+     * length when the world runs one, the last frame delta when it steps with `timeStep="vary"`,
+     * and 1/60 when there is no world to ask (a body built against a bare `BodySystem`).
+     */
+    private get stepDelta(): number {
+        const world = this.bodySystem.world;
+        if (!world) return 1 / 60;
+        if (typeof world.timeStep === 'number' && world.timeStep > 0) return world.timeStep;
+        return world.lastDelta > 0 ? world.lastDelta : 1 / 60;
     }
 
     //* Motion Source ----------------------------------

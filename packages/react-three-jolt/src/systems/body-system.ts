@@ -10,6 +10,11 @@ import {
     Vector3
 } from 'three';
 import { Layer } from '../constants';
+import {
+    applySurfaceMaterial,
+    type SurfaceMaterial,
+    SurfaceMaterialTable
+} from '../heightField/materials';
 import { Raw } from '../raw';
 import { devWarn, quat, vec3, withJolt } from '../utils';
 import { BodyState } from './body-state';
@@ -23,7 +28,14 @@ import {
     PayloadPool
 } from './contact-events';
 import type { Emitter } from './emitter';
-import { type CollisionTarget, EventBit, type ValidatePayload, type WorldEventMap } from './events';
+import {
+    type CollisionTarget,
+    EventBit,
+    type SubShapeRef,
+    type ValidatePayload,
+    type WorldEventMap
+} from './events';
+import type { PhysicsSystem } from './physics-system';
 import {
     type AutoShape,
     checkDynamicMeshStrategy,
@@ -33,15 +45,37 @@ import {
     createShapeSettings,
     type DynamicMeshStrategy,
     describeObject,
-    generateHeightfieldShapeFromThree,
+    describeShape,
+    descriptorForSubShape,
+    type HeightfieldShapeDescriptor,
     makeDescriptorDynamicSafe,
     releaseShape,
-    ShapeSystem
+    type ShapeDescriptor,
+    ShapeSystem,
+    subShapeIndexFromId,
+    subShapeUserData
 } from './shape-system';
 
 // TYPES ========================================
 export type BodyType = 'dynamic' | 'static' | 'kinematic' | 'rig';
 export type PendingAction = { action: string; handle: number; value: any };
+
+/** Extras `addHeightfield` accepts beyond the mesh itself (issues #45/#46). */
+export interface HeightfieldBodyOptions {
+    /** Friction of the whole field. Per-quad values come from `materials` instead. */
+    friction?: number;
+    /** Restitution (bounciness) of the whole field. */
+    restitution?: number;
+    /**
+     * Surfaces this field is made of. With more than one, `materialIndices` says which quad is
+     * which. Pass a {@link SurfaceMaterialTable} to reuse one across rebuilds.
+     */
+    materials?: SurfaceMaterial[] | SurfaceMaterialTable;
+    /** One index per quad, `(sampleCount - 1)^2` entries, row major. */
+    materialIndices?: ArrayLike<number>;
+    /** Jolt's heightfield block size (default 2). */
+    blockSize?: number;
+}
 
 // We call things "bodySettings" to clarify from shapes or other similar labels
 export interface GenerateBodyOptions {
@@ -58,6 +92,13 @@ export interface GenerateBodyOptions {
     group?: number;
     subGroup?: number;
     shape?: Jolt.Shape;
+    /**
+     * The description `shape` was built from. Stored on the `BodyState` so a contact's
+     * `SubShapeID` can be traced back to the descriptor child that produced it (issue #13).
+     * The `describeObject` path fills this in by itself; pass it when you hand over a
+     * ready made `shape`.
+     */
+    shapeDescriptor?: ShapeDescriptor;
     /**
      * What to do with a trimesh shape on a **dynamic** body (issue #112). Jolt cannot simulate
      * one: mesh vs mesh has no collision, so the body falls through the world and ends up with a
@@ -83,6 +124,35 @@ export class BodySystem {
     staticBodies = new Map<number, BodyState>();
     kinematicBodies = new Map<number, BodyState>();
 
+    /**
+     * Static bodies that were moved since the last frame (issue #61).
+     *
+     * The frame loop only walks bodies that can be awake, so a static body's three.js object
+     * would otherwise keep the pose it was created with. `BodyState`'s position/rotation setters
+     * drop the body in here and `PhysicsSystem.onUpdate` drains it once per frame - so this
+     * costs nothing at all in a scene whose statics never move.
+     */
+    readonly movedStatics = new Set<BodyState>();
+
+    /** Called by {@link BodyState}'s setters; see {@link movedStatics}. */
+    markStaticMoved(state: BodyState) {
+        this.movedStatics.add(state);
+    }
+
+    /**
+     * Bodies with a standing `setKinematicTarget` (issue #194), re-aimed at the top of every
+     * substep with that substep's real dt. Empty unless something uses the API.
+     */
+    private readonly kinematicTargets = new Set<BodyState>();
+    /** @internal called by {@link BodyState.setKinematicTarget}. */
+    trackKinematicTarget(state: BodyState) {
+        this.kinematicTargets.add(state);
+    }
+    /** @internal called by {@link BodyState.clearKinematicTarget}. */
+    untrackKinematicTarget(state: BodyState) {
+        this.kinematicTargets.delete(state);
+    }
+
     //* Events ======================================
     /** Jolt listener objects, kept so they can be freed. See {@link destroy}. */
     contactListener?: Jolt.ContactListenerJS;
@@ -95,6 +165,12 @@ export class BodySystem {
     readonly payloads = new PayloadPool();
     /** The world level emitter, wired up by `PhysicsSystem`. */
     worldEvents?: Emitter<WorldEventMap>;
+    /**
+     * The `PhysicsSystem` that owns this body system, wired up by it at construction. Bodies read
+     * the world's step timing through it (see `BodyState.moveKinematic`); it is optional because
+     * a `BodySystem` can be built on a bare Jolt physics system in tests.
+     */
+    world?: PhysicsSystem;
     /** Mirrors `PhysicsSystem.debug`: turns on payload poisoning after dispatch. */
     debug = false;
     /**
@@ -122,6 +198,16 @@ export class BodySystem {
     // pending actions to be called at the begining of a frame
     //todo: type these
     pendingActions: PendingAction[] = [];
+
+    /**
+     * How `createBody` hands the descriptor it described an Object3D as back to
+     * `addExistingBody`, without allocating a result object per body. The handle is checked so a
+     * caller that created a body by hand and then added a *different* one gets nothing.
+     */
+    private readonly describedShape: { descriptor?: ShapeDescriptor; handle: number } = {
+        descriptor: undefined,
+        handle: -1
+    };
 
     joltPhysicsSystem: Jolt.PhysicsSystem;
     bodyInterface: Jolt.BodyInterface;
@@ -254,10 +340,14 @@ export class BodySystem {
     /**
      * Change a body's collision group and/or sub group at runtime. Jolt's Body keeps its own copy
      * of the CollisionGroup, so ours is the source of truth and gets pushed across with
-     * `BodyInterface.SetCollisionGroup`. A sleeping body is woken so the new filtering is applied
-     * on the next step rather than whenever something else happens to touch it.
+     * `BodyInterface.SetCollisionGroup`.
+     *
+     * @param activate (issue #167) when true (the default), a sleeping body is woken so the new
+     * filtering is applied on the next step rather than whenever something else happens to touch
+     * it - `BodyState.group`/`subGroup` default to this and take it from `activateOnChange`.
+     * Pass `false` to change the group without disturbing a sleeping body.
      */
-    setBodyCollisionGroup(bodyHandle: number, group?: number, subGroup?: number) {
+    setBodyCollisionGroup(bodyHandle: number, group?: number, subGroup?: number, activate = true) {
         const bodyState = this.getBody(bodyHandle);
         if (!bodyState) return;
         if (subGroup !== undefined && !this.isValidSubGroup(subGroup, 'setBodyCollisionGroup'))
@@ -276,6 +366,7 @@ export class BodySystem {
         this.bodyInterface.SetCollisionGroup(bodyID, collisionGroup);
         // static bodies are never active, and activating one asserts inside Jolt
         if (
+            activate &&
             !bodyState.body.IsStatic() &&
             this.bodyInterface.IsAdded(bodyID) &&
             !bodyState.body.IsActive()
@@ -289,7 +380,10 @@ export class BodySystem {
         // fall back to the system wide default shape when the caller didn't pick one
         if (options.shapeType === undefined && this.defaultShape !== undefined)
             options = { ...options, shapeType: this.defaultShape };
-        let settings = generateBodySettings(objectOrShape, options);
+        // #13: `generateBodySettings` is the only place that knows the descriptor an Object3D was
+        // described as. It reports it here so `addExistingBody` can keep it on the BodyState.
+        this.describedShape.descriptor = undefined;
+        let settings = generateBodySettings(objectOrShape, options, this.describedShape);
         // if there are properties in the default, merge them with settings
         if (Object.keys(this.defaultBodySettings).length > 0)
             settings = mergeBodyCreationSettings(settings, this.defaultBodySettings);
@@ -305,6 +399,7 @@ export class BodySystem {
         }
 
         const body = this.bodyInterface.CreateBody(settings);
+        this.describedShape.handle = body.GetID().GetIndexAndSequenceNumber();
         // remove the settings
         this.jolt.destroy(settings);
         if (collisionGroup) {
@@ -332,6 +427,11 @@ export class BodySystem {
         const state = new BodyState(object, body, this.joltPhysicsSystem, this, options?.index);
         // generate the handle
         const handle = body.GetID().GetIndexAndSequenceNumber();
+        // #13: what this body's shape was described as, either handed to us with the shape or
+        // recorded by the `createBody` call just above
+        state.shapeDescriptor =
+            options?.shapeDescriptor ??
+            (this.describedShape.handle === handle ? this.describedShape.descriptor : undefined);
         // Stamp the handle into Jolt's user data so the activation listener - whose second
         // argument is `inBodyUserData` - resolves a body with no wrapPointer and no lookup.
         // Jolt >=0.39 narrowed user data to 32 bit unsigned, which is exactly what
@@ -360,6 +460,9 @@ export class BodySystem {
 
         // VERY IMPORTANT! ADD TO THE ACTUAL SIMULATION
         this.bodyInterface.AddBody(body.GetID(), activationState);
+        // Registry event (#158), after the body is fully live so a listener may read its shape
+        // and pose. Costs nothing when nothing is listening.
+        this.worldEvents?.emit('bodyAdded', state);
         return handle;
     }
     getBody(handle: number) {
@@ -370,6 +473,10 @@ export class BodySystem {
         // get the body so we can process it
         const bodyState = this.getBody(bodyHandle);
         if (!bodyState) return;
+        // Registry event (#158). Emitted before anything is torn down - every early return below
+        // still leaves the body out of the maps, so a listener that mirrors the world has to hear
+        // about it exactly once, here.
+        this.worldEvents?.emit('bodyRemoved', bodyState);
         // The collision group is ours, not the body's (Jolt copied it), so free it up front -
         // every early return below would otherwise leak it and hand the recycled handle a stale
         // one. (issue #95)
@@ -415,34 +522,86 @@ export class BodySystem {
         // console.log('Removed body', bodyHandle);
     }
 
+    /**
+     * Remove and destroy every registered body, whether it was made by `addBody` or handed in
+     * through `addExistingBody`. Used by `PhysicsSystem.destroy()` (issue #162): the
+     * JoltInterface's destructor would free the bodies anyway, but going through `removeBody`
+     * is what closes open contact pairs, frees each body's `CollisionGroup` and drops the
+     * constraints attached to it - none of which the interface knows about.
+     *
+     * @returns how many bodies were removed
+     */
+    removeAllBodies(): number {
+        let removed = 0;
+        // snapshot: removeBody mutates every map it iterates, and a contact `exit` dispatched
+        // from `dispose()` may add more pending actions
+        for (const handle of [...this.bodies.keys()]) {
+            if (!this.bodies.has(handle)) continue;
+            this.removeBody(handle);
+            removed++;
+        }
+        this.pendingActions = [];
+        return removed;
+    }
+
     /** Drop a handle from every map. Jolt recycles handles, so nothing may be left behind. */
     private forget(bodyHandle: number) {
+        const state = this.bodies.get(bodyHandle);
+        if (state) {
+            this.movedStatics.delete(state);
+            this.kinematicTargets.delete(state);
+        }
         this.bodies.delete(bodyHandle);
         this.dynamicBodies.delete(bodyHandle);
         this.staticBodies.delete(bodyHandle);
         this.kinematicBodies.delete(bodyHandle);
     }
 
-    // There's probably a better pattern, but im making my own function for this
-    public addHeightfield(planeMesh: THREE.Mesh): number {
-        //const position = vec3.threeToJolt(planeMesh.position);
-        // const quaternion = quat.threeToJolt(planeMesh.quaternion);
-        const shapeSettings = generateHeightfieldShapeFromThree(planeMesh);
-        //const position = new Raw.module.Vec3(0, -20, 0); // The image tends towards 'white', so offset it down closer to zero
+    /**
+     * Add a (flat, square) plane mesh as a static heightfield body.
+     *
+     * The heights come from the mesh's vertices, so whatever put them there - a heightmap image,
+     * `generateHeightfield`, your own callback - render and physics see the same numbers.
+     *
+     * `friction`/`restitution` apply to the whole body (issue #46); `materials` +
+     * `materialIndices` give individual quads their own, resolved synchronously inside the
+     * contact listener (see `heightField/materials.ts`).
+     */
+    public addHeightfield(planeMesh: THREE.Mesh, options: HeightfieldBodyOptions = {}): number {
+        const { friction, restitution, materials, materialIndices, blockSize } = options;
+        const descriptor = describeShape(planeMesh, {
+            type: 'heightfield',
+            blockSize
+        }) as HeightfieldShapeDescriptor;
+
+        // one table per body: it owns the jolt-material -> {friction, restitution} mapping the
+        // contact listener resolves through, and it is disposed with the body
+        const table =
+            materials instanceof SurfaceMaterialTable
+                ? materials
+                : materials && materials.length
+                  ? new SurfaceMaterialTable(materials)
+                  : undefined;
+        if (table) {
+            descriptor.materials = table;
+            if (materialIndices) descriptor.materialIndices = materialIndices;
+        }
+
         const quaternion = new Raw.module.Quat(0, 0, 0, 1);
-        const size = shapeSettings.mSampleCount;
-        //@ts-expect-error  yes it does exist
-        const planeWidth = planeMesh.geometry.parameters.width;
-        const scale = planeWidth / size;
-        const offset = -size * scale * 0.5;
+        // Jolt's heightfield grows from its origin in +x/+z, so shift it back by half the field
+        // to line the shape up with the (centred) plane geometry. The extent is one sample less
+        // than the sample count: `sampleCount` samples span `sampleCount - 1` quads.
+        const { sampleCount, scale } = descriptor;
+        const offsetX = -(sampleCount - 1) * scale[0] * 0.5;
+        const offsetZ = -(sampleCount - 1) * scale[2] * 0.5;
         const position = new Raw.module.RVec3(
-            offset + planeMesh.position.x,
+            offsetX + planeMesh.position.x,
             planeMesh.position.y,
-            planeMesh.position.z + offset
+            planeMesh.position.z + offsetZ
         );
 
         // this destroys the shapeSettings and hands back a shape we hold a reference on
-        const shape = createShapeFromSettings(shapeSettings);
+        const shape = createShapeFromSettings(createShapeSettings(descriptor));
         const creationSettings = new Raw.module.BodyCreationSettings(
             shape,
             position,
@@ -450,6 +609,8 @@ export class BodySystem {
             Raw.module.EMotionType_Static,
             Layer.NON_MOVING
         );
+        if (friction !== undefined) creationSettings.mFriction = friction;
+        if (restitution !== undefined) creationSettings.mRestitution = restitution;
         const body = this.bodyInterface.CreateBody(creationSettings);
         // cleanup before returning. The body holds its own reference to the shape and the
         // creation settings copied the transform, so all of this is ours to free.
@@ -457,21 +618,37 @@ export class BodySystem {
         this.jolt.destroy(position);
         this.jolt.destroy(quaternion);
         releaseShape(shape);
-        return this.addExistingBody(planeMesh, body, { bodyType: 'static' });
+
+        const handle = this.addExistingBody(planeMesh, body, { bodyType: 'static' });
+        // `table.mapped` is only true once the shape actually built the material list
+        if (table?.mapped) this.getBody(handle)?.setSurfaceMaterials(table);
+        return handle;
     }
     //* Body Modification ===================================
     // change the mass of a body
     setMass(bodyHandle: number, mass: number) {
         const body = this.getBody(bodyHandle);
         if (!body) return;
-        changeMassInertia(body.body, mass);
+        // one implementation, on BodyState: it scales the motion properties rather than pushing
+        // a fresh MassProperties through `SetMassProperties`, which also reset the body's
+        // allowed degrees of freedom to "all" (issue #201)
+        body.mass = mass;
     }
 
     //* Loop Functions ===================================
     createPendingAction(action: string, handle: number, value: any) {
         this.pendingActions.push({ action, handle, value });
     }
-    handlePendingActions() {
+    /**
+     * Run at the top of every substep, before `Step()`.
+     *
+     * @param deltaTime the substep's own length in seconds, used to re-aim every standing
+     * kinematic target (issue #194) so `MoveKinematic` derives a velocity that lands the body on
+     * its target within this step, however many substeps the frame runs.
+     */
+    handlePendingActions(deltaTime = 0) {
+        if (deltaTime > 0 && this.kinematicTargets.size)
+            for (const state of this.kinematicTargets) state.applyKinematicTarget(deltaTime);
         if (!this.pendingActions.length) return;
         // { action: string, handle: number, value: any }
         // lets try this first utilizing setters
@@ -567,7 +744,28 @@ export class BodySystem {
      * refcount. Everything user facing is written to `eventQueue` and dispatched from
      * `flushEvents()` once `Step()` has returned.
      */
+    /**
+     * Turn one side's raw `SubShapeID` into the `<Shape>` (or descriptor child) that produced it
+     * - issue #13. Handed to the payload pool, which calls it only when a handler actually reads
+     * `payload.targetSubShape` / `.otherSubShape`, so an unused sub shape costs nothing.
+     *
+     * A body whose shape has no children reports Jolt's empty id; `subShapeIndexFromId` looks at
+     * the shape rather than the id to tell that apart from "child 1 of a two child compound",
+     * whose id happens to be the same word.
+     */
+    private resolveSubShape = (target: CollisionTarget, out: SubShapeRef): void => {
+        const state = target.body;
+        // an unregistered or already destroyed body: `id` is all the caller gets
+        if (!state || state.disposed) return;
+        const shape = state.body.GetShape();
+        if (!shape) return;
+        out.index = subShapeIndexFromId(shape, target.subShapeId);
+        out.userData = subShapeUserData(shape, target.subShapeId);
+        out.descriptor = descriptorForSubShape(state.shapeDescriptor, out.index);
+    };
+
     private initializeContactListeners() {
+        this.payloads.subShapeResolver = this.resolveSubShape;
         const listener = new Raw.module.ContactListenerJS();
         listener.OnContactValidate = (
             body1: number,
@@ -670,6 +868,20 @@ export class BodySystem {
         } else {
             count = this.contactPairs.count(handle1, handle2);
             sensor = this.contactPairs.isSensorPair(handle1, handle2);
+        }
+
+        // Tier A: a heightfield's per-quad friction (issue #46). Jolt's own materials carry no
+        // friction, so the material under this contact is resolved here and written into the
+        // live `ContactSettings` - the only place it can be changed.
+        if (mask & EventBit.surfaceMaterial) {
+            if (!manifold) manifold = jolt.wrapPointer(manifoldPtr, jolt.ContactManifold);
+            if (sub1 < 0) {
+                sub1 = manifold.get_mSubShapeID1().GetValue();
+                sub2 = manifold.get_mSubShapeID2().GetValue();
+            }
+            const settings = jolt.wrapPointer(settingsPtr, jolt.ContactSettings);
+            applyMaterialContact(state1, body1, sub1, body2, settings);
+            applyMaterialContact(state2, body2, sub2, body1, settings);
         }
 
         // Tier A: the conveyor / bounce pad surface velocity writes have to happen here,
@@ -956,6 +1168,8 @@ export class BodySystem {
         this.dynamicBodies.clear();
         this.staticBodies.clear();
         this.kinematicBodies.clear();
+        this.movedStatics.clear();
+        this.kinematicTargets.clear();
         this.pendingActions = [];
         // Our own allocations, not listeners installed on the JoltInterface: these are freed even
         // when the interface belongs to another world (issue #95).
@@ -982,6 +1196,26 @@ function setContactCount(state: BodyState | undefined, peer: number, count: numb
     if (!state) return;
     if (count > 0) state.contacts.set(peer, count);
     else state.contacts.delete(peer);
+}
+
+/**
+ * Resolve the surface material under one side of a contact and write it into `ContactSettings`.
+ *
+ * A no-op for every body that has no material table, which is all of them except heightfields
+ * built with `materials` - and the `EventBit.surfaceMaterial` gate means this is not even
+ * reached otherwise.
+ */
+function applyMaterialContact(
+    state: BodyState | undefined,
+    body: Jolt.Body,
+    subShapeId: number,
+    otherBody: Jolt.Body,
+    settings: Jolt.ContactSettings
+): void {
+    const table = state?.surfaceMaterials;
+    if (!table) return;
+    const material = table.resolve(body.GetShape(), subShapeId);
+    if (material) applySurfaceMaterial(material, otherBody, settings);
 }
 
 /** Fill one side of a payload in place. An unregistered Jolt body leaves body/object blank. */
@@ -1015,7 +1249,9 @@ export function mergeBodyCreationSettings(
 
 export function generateBodySettings(
     object: Object3D | Jolt.Shape,
-    options: GenerateBodyOptions = {}
+    options: GenerateBodyOptions = {},
+    /** Out parameter: receives the descriptor an `Object3D` was described as (issue #13). */
+    describedShape?: { descriptor?: ShapeDescriptor }
 ): Jolt.BodyCreationSettings {
     const jolt = Raw.module;
     const isObject = object instanceof Object3D;
@@ -1101,7 +1337,6 @@ export function generateBodySettings(
     // while we still know the motion type. https://jrouwe.github.io/JoltPhysics/#dynamic-mesh-shapes
     const meshStrategy = options.dynamicMeshStrategy ?? 'convex';
     let shape: Jolt.Shape;
-    let convertedFromMesh = false;
     if (isObject) {
         // one place decides what this object is; when the body is dynamic, any trimesh in that
         // description becomes a convex hull before anything is allocated
@@ -1109,7 +1344,7 @@ export function generateBodySettings(
         const descriptor = isDynamic
             ? makeDescriptorDynamicSafe(described, meshStrategy)
             : described;
-        convertedFromMesh = descriptor !== described;
+        if (describedShape) describedShape.descriptor = descriptor;
         // takes ownership of the settings (and of any sub-settings they reference) and gives us
         // a shape we hold one reference on - released below, once the BodyCreationSettings has
         // taken its own.
@@ -1123,7 +1358,6 @@ export function generateBodySettings(
             checkDynamicMeshStrategy(meshStrategy);
             shape = convexHullFromShape(shape);
             ownsShape = true;
-            convertedFromMesh = true;
         }
     }
 
@@ -1132,10 +1366,13 @@ export function generateBodySettings(
         new jolt.BodyCreationSettings(shape, position, quaternion, motionType, layer),
         options.bodySettings
     );
-    if (convertedFromMesh && options.mass !== undefined) {
-        // #112: the shape is a real convex hull now, so its own mass properties are meaningful -
-        // scale those to the requested mass instead of pretending the body is a solid box.
-        // `GetMassProperties()` hands back a static temporary: read it, never destroy it.
+    // `GetMassProperties()` hands back a static temporary: read it, never destroy it.
+    const shapeMass = isDynamic ? shape.GetMassProperties().mMass : 0;
+    if (isDynamic && options.mass !== undefined && shapeMass > 0) {
+        // #201 (and #112, which is the convex hull case of the same thing): the shape's own mass
+        // properties describe its distribution correctly, so scale those to the requested mass
+        // rather than pretending the body is a solid box - or, as before this, ignoring
+        // `options.mass` altogether on everything but a converted trimesh.
         const massProperties = shape.GetMassProperties();
         settings.mOverrideMassProperties = jolt.EOverrideMassProperties_MassAndInertiaProvided;
         settings.mMassPropertiesOverride.mMass = massProperties.mMass;
@@ -1165,14 +1402,11 @@ export function generateBodySettings(
 
 // TODO: my base generators require three objects. perhaps abastract out or make better names
 
-// Change a bodies mass settings after already being created
+// Changing a body's mass after creation lives on `BodyState.mass` now (issue #201). What used to
+// be here rebuilt a MassProperties from the *shape* and pushed it through
+// `SetMassProperties(EAllowedDOFs_All, ...)`, which threw away any locked degrees of freedom and
+// ignored a mass override the body had been created with.
 // src:PhoenixIllusion @ https://github.com/jrouwe/JoltPhysics.js/discussions/112
-function changeMassInertia(body: Jolt.Body, mass: number) {
-    const motionProps = body.GetMotionProperties();
-    const massProps = body.GetShape().GetMassProperties();
-    massProps.ScaleToMass(mass); //<--- newly exposed function
-    motionProps.SetMassProperties(Raw.module.EAllowedDOFs_All, massProps);
-}
 /* og
 export function changeMassInertia(body: Jolt.Body, mass: number) {
     const motionProps = body.GetMotionProperties();
