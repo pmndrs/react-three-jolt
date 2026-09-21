@@ -1,7 +1,7 @@
 import { type ThreeElements, useThree } from '@react-three/fiber';
 import { useEventCallback, useForwardedRef, useJolt } from '@react-three/jolt';
 import { type CommandVector, isCommandVector, useCommand } from '@react-three/jolt-addons';
-import React, { forwardRef, memo, type ReactNode, useEffect, useRef, useState } from 'react';
+import React, { memo, type ReactNode, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { CharacterEventMap, HeadHitInfo } from '../systems/character-controller';
 import { CharacterControllerSystem } from '../systems/character-controller';
@@ -95,216 +95,216 @@ export interface CControllerProps extends Omit<ThreeElements['object3D'], 'ref' 
      * (issue #88).
      */
     onHeadHit?: (info: HeadHitInfo) => void;
+    /** Hands back the {@link CharacterControllerSystem} itself once it exists (issue #212). */
+    ref?: React.Ref<CharacterControllerSystem>;
 }
-// The `ref` on `<CharacterController>` hands back the `CharacterControllerSystem` itself (see the
-// comment on `characterRef.current = newCCS` below) - `forwardRef`'s type parameters say so
-// explicitly, rather than the previous `React.FC<CControllerProps>` annotation, which quietly
-// erased the ref from the public type even though the runtime always supported it (issue #212).
-export const CharacterController = memo(
-    forwardRef<CharacterControllerSystem, CControllerProps>((props, forwardedRef) => {
-        const {
-            children,
-            radius = 1,
-            height = 2,
-            position,
-            debug = true,
-            onMove,
-            onStop,
-            onSlide,
-            onSlideEnd,
-            onJump,
-            onLand,
-            onGround,
-            onAirborne,
-            onCrouch,
-            onStand,
-            onContactAdded,
-            onContactPersisted,
-            onContactRemoved,
-            onAction,
-            moveThreshold,
-            slideThreshold,
-            headAngle,
-            onHeadHit,
-            ...objectProps
-        } = props;
-        // pass the body via the ref
-        const characterRef = useForwardedRef<CharacterControllerSystem | null>(forwardedRef);
+// React 19 native convention (#49): `ref` is a plain prop on `CControllerProps`, so this is a
+// plain function component - no `forwardRef` wrapper. It used to be `React.FC<CControllerProps>`,
+// which quietly erased the ref from the public type even though the runtime always supported it
+// (issue #212); the prop now says so explicitly.
+export const CharacterController = memo(function CharacterController(props: CControllerProps) {
+    const {
+        ref: forwardedRef,
+        children,
+        radius = 1,
+        height = 2,
+        position,
+        debug = true,
+        onMove,
+        onStop,
+        onSlide,
+        onSlideEnd,
+        onJump,
+        onLand,
+        onGround,
+        onAirborne,
+        onCrouch,
+        onStand,
+        onContactAdded,
+        onContactPersisted,
+        onContactRemoved,
+        onAction,
+        moveThreshold,
+        slideThreshold,
+        headAngle,
+        onHeadHit,
+        ...objectProps
+    } = props;
+    // pass the body via the ref
+    const characterRef = useForwardedRef<CharacterControllerSystem | null>(forwardedRef ?? null);
 
-        const objectRef = useRef<THREE.Object3D>(null);
+    const objectRef = useRef<THREE.Object3D>(null);
 
-        const { physicsSystem } = useJolt();
-        //TODO: Not really sure why we had to do this as a state but oh well
-        const [characterSystem, setCharacterSystem] = useState<
-            CharacterControllerSystem | undefined
-        >(undefined);
+    const { physicsSystem } = useJolt();
+    //TODO: Not really sure why we had to do this as a state but oh well
+    const [characterSystem, setCharacterSystem] = useState<CharacterControllerSystem | undefined>(
+        undefined
+    );
 
-        // we need the three camera
-        const { camera, scene } = useThree();
+    // we need the three camera
+    const { camera, scene } = useThree();
 
+    const cameraRotation = new THREE.Quaternion();
+    // set values and initializers for characterSystem
+    useEffect(() => {
+        const newCCS = new CharacterControllerSystem(physicsSystem);
+        if (objectRef.current) newCCS.add(objectRef.current);
+        newCCS.addToScene(scene);
+        // expose the controller through the forwarded ref (this is what the ref was always
+        // for; nothing ever assigned it, so `ref` silently stayed null)
+        characterRef.current = newCCS;
+        // radius/height/position are applied by the effects below, which run right after this
+        // one on the same mount (issue #212) - `characterSystem` only becomes defined once
+        // `setCharacterSystem` below commits, so nothing has stepped the controller yet.
+
+        setCharacterSystem(newCCS);
+        // destroy on unload. `destroy()` frees every jolt object the controller owns and
+        // takes its pre-step listener back off the physics system (issue #138); dropping the
+        // state as well keeps the commands below from driving a destroyed controller.
+        return () => {
+            newCCS.destroy();
+            characterRef.current = null;
+            setCharacterSystem(undefined);
+        };
+    }, [physicsSystem, scene]);
+
+    // set debugging
+    useEffect(() => {
+        if (!characterSystem) return;
+        characterSystem.debug = debug;
+    }, [characterSystem, debug]);
+
+    // radius/height were accepted but never reached the CharacterVirtual (issue #212):
+    // `setCapsule` rebuilds both the standing and crouching shapes and pushes the standing
+    // one onto the character immediately, at creation and on every later change.
+    useEffect(() => {
+        if (!characterSystem) return;
+        characterSystem.setCapsule(radius, height);
+    }, [characterSystem, radius, height]);
+
+    // `position` used to be silently absorbed into `objectProps` and applied to the child
+    // `<object3D>` instead of the character itself, so it never moved the capsule (issue
+    // #212). Normalize whatever shape `object3D.position` accepts (a Vector3, a tuple or a
+    // uniform scalar) the same way `<Vehicle position>` does, then drive the actual
+    // `CharacterVirtual` position with it, at creation and on every later change.
+    const [px, py, pz] =
+        position === undefined
+            ? [undefined, undefined, undefined]
+            : typeof position === 'number'
+              ? [position, position, position]
+              : position instanceof THREE.Vector3
+                ? [position.x, position.y, position.z]
+                : position;
+    useEffect(() => {
+        if (!characterSystem || px === undefined || py === undefined || pz === undefined) return;
+        characterSystem.position = new THREE.Vector3(px, py, pz);
+    }, [characterSystem, px, py, pz]);
+
+    //* Events -------------------------------------------
+    // Each of these is an effect whose cleanup is the unsubscribe handle, keyed on the
+    // controller instance. Nothing subscribes for a prop that was not passed, so the mask
+    // behind the forwarded contact stream stays clear and costs nothing per contact.
+    useCharacterEvent(characterSystem, 'move', onMove);
+    useCharacterEvent(characterSystem, 'stop', onStop);
+    useCharacterEvent(characterSystem, 'slide', onSlide);
+    useCharacterEvent(characterSystem, 'slideEnd', onSlideEnd);
+    useCharacterEvent(characterSystem, 'jump', onJump);
+    useCharacterEvent(characterSystem, 'land', onLand);
+    useCharacterEvent(characterSystem, 'ground', onGround);
+    useCharacterEvent(characterSystem, 'airborne', onAirborne);
+    useCharacterEvent(characterSystem, 'crouch', onCrouch);
+    useCharacterEvent(characterSystem, 'stand', onStand);
+    useCharacterEvent(characterSystem, 'contactAdded', onContactAdded);
+    useCharacterEvent(characterSystem, 'contactPersisted', onContactPersisted);
+    useCharacterEvent(characterSystem, 'contactRemoved', onContactRemoved);
+    useCharacterEvent(characterSystem, 'action', onAction);
+
+    useEffect(() => {
+        if (!characterSystem) return;
+        if (moveThreshold !== undefined) characterSystem.moveThreshold = moveThreshold;
+        if (slideThreshold !== undefined) characterSystem.slideThreshold = slideThreshold;
+    }, [characterSystem, moveThreshold, slideThreshold]);
+
+    // wire up head/ceiling collision configuration (issue #88)
+    useEffect(() => {
+        if (!characterSystem) return;
+        if (headAngle !== undefined) characterSystem.headAngle = headAngle;
+        characterSystem.onHeadHit = onHeadHit;
+    }, [characterSystem, headAngle, onHeadHit]);
+
+    // trigger commands
+    useCommand(
+        'run',
+        (info) => {
+            if (!info.isInitial) return;
+            // console.log('Start running', info);
+            characterSystem!.startRunning();
+        },
+        () => {
+            //console.log('Stop running', info);
+            characterSystem!.stopRunning();
+        }
+    );
+    // TODO move to utils
+    // gets the horizontal rotation of the camera
+    const getHorizontalRotation = () => {
         const cameraRotation = new THREE.Quaternion();
-        // set values and initializers for characterSystem
-        useEffect(() => {
-            const newCCS = new CharacterControllerSystem(physicsSystem);
-            if (objectRef.current) newCCS.add(objectRef.current);
-            newCCS.addToScene(scene);
-            // expose the controller through the forwarded ref (this is what the ref was always
-            // for; nothing ever assigned it, so `ref` silently stayed null)
-            characterRef.current = newCCS;
-            // radius/height/position are applied by the effects below, which run right after this
-            // one on the same mount (issue #212) - `characterSystem` only becomes defined once
-            // `setCharacterSystem` below commits, so nothing has stepped the controller yet.
-
-            setCharacterSystem(newCCS);
-            // destroy on unload. `destroy()` frees every jolt object the controller owns and
-            // takes its pre-step listener back off the physics system (issue #138); dropping the
-            // state as well keeps the commands below from driving a destroyed controller.
-            return () => {
-                newCCS.destroy();
-                characterRef.current = null;
-                setCharacterSystem(undefined);
-            };
-        }, [physicsSystem, scene]);
-
-        // set debugging
-        useEffect(() => {
-            if (!characterSystem) return;
-            characterSystem.debug = debug;
-        }, [characterSystem, debug]);
-
-        // radius/height were accepted but never reached the CharacterVirtual (issue #212):
-        // `setCapsule` rebuilds both the standing and crouching shapes and pushes the standing
-        // one onto the character immediately, at creation and on every later change.
-        useEffect(() => {
-            if (!characterSystem) return;
-            characterSystem.setCapsule(radius, height);
-        }, [characterSystem, radius, height]);
-
-        // `position` used to be silently absorbed into `objectProps` and applied to the child
-        // `<object3D>` instead of the character itself, so it never moved the capsule (issue
-        // #212). Normalize whatever shape `object3D.position` accepts (a Vector3, a tuple or a
-        // uniform scalar) the same way `<Vehicle position>` does, then drive the actual
-        // `CharacterVirtual` position with it, at creation and on every later change.
-        const [px, py, pz] =
-            position === undefined
-                ? [undefined, undefined, undefined]
-                : typeof position === 'number'
-                  ? [position, position, position]
-                  : position instanceof THREE.Vector3
-                    ? [position.x, position.y, position.z]
-                    : position;
-        useEffect(() => {
-            if (!characterSystem || px === undefined || py === undefined || pz === undefined)
-                return;
-            characterSystem.position = new THREE.Vector3(px, py, pz);
-        }, [characterSystem, px, py, pz]);
-
-        //* Events -------------------------------------------
-        // Each of these is an effect whose cleanup is the unsubscribe handle, keyed on the
-        // controller instance. Nothing subscribes for a prop that was not passed, so the mask
-        // behind the forwarded contact stream stays clear and costs nothing per contact.
-        useCharacterEvent(characterSystem, 'move', onMove);
-        useCharacterEvent(characterSystem, 'stop', onStop);
-        useCharacterEvent(characterSystem, 'slide', onSlide);
-        useCharacterEvent(characterSystem, 'slideEnd', onSlideEnd);
-        useCharacterEvent(characterSystem, 'jump', onJump);
-        useCharacterEvent(characterSystem, 'land', onLand);
-        useCharacterEvent(characterSystem, 'ground', onGround);
-        useCharacterEvent(characterSystem, 'airborne', onAirborne);
-        useCharacterEvent(characterSystem, 'crouch', onCrouch);
-        useCharacterEvent(characterSystem, 'stand', onStand);
-        useCharacterEvent(characterSystem, 'contactAdded', onContactAdded);
-        useCharacterEvent(characterSystem, 'contactPersisted', onContactPersisted);
-        useCharacterEvent(characterSystem, 'contactRemoved', onContactRemoved);
-        useCharacterEvent(characterSystem, 'action', onAction);
-
-        useEffect(() => {
-            if (!characterSystem) return;
-            if (moveThreshold !== undefined) characterSystem.moveThreshold = moveThreshold;
-            if (slideThreshold !== undefined) characterSystem.slideThreshold = slideThreshold;
-        }, [characterSystem, moveThreshold, slideThreshold]);
-
-        // wire up head/ceiling collision configuration (issue #88)
-        useEffect(() => {
-            if (!characterSystem) return;
-            if (headAngle !== undefined) characterSystem.headAngle = headAngle;
-            characterSystem.onHeadHit = onHeadHit;
-        }, [characterSystem, headAngle, onHeadHit]);
-
-        // trigger commands
-        useCommand(
-            'run',
-            (info) => {
-                if (!info.isInitial) return;
-                // console.log('Start running', info);
-                characterSystem!.startRunning();
-            },
-            () => {
-                //console.log('Stop running', info);
-                characterSystem!.stopRunning();
-            }
-        );
-        // TODO move to utils
-        // gets the horizontal rotation of the camera
-        const getHorizontalRotation = () => {
-            const cameraRotation = new THREE.Quaternion();
+        camera.getWorldQuaternion(cameraRotation);
+        cameraRotation.x = 0;
+        cameraRotation.z = 0;
+        cameraRotation.normalize();
+        return cameraRotation;
+    };
+    useCommand(
+        'jump',
+        (info) => {
+            if (!info.isInitial) return;
+            if (characterSystem) characterSystem.jump();
+        },
+        undefined,
+        { rate: 0.1, keys: [' '] }
+    );
+    useCommand(
+        'move',
+        (info) => {
+            // get the camera direction
             camera.getWorldQuaternion(cameraRotation);
-            cameraRotation.x = 0;
-            cameraRotation.z = 0;
-            cameraRotation.normalize();
-            return cameraRotation;
-        };
-        useCommand(
-            'jump',
-            (info) => {
-                if (!info.isInitial) return;
-                if (characterSystem) characterSystem.jump();
-            },
-            undefined,
-            { rate: 0.1, keys: [' '] }
-        );
-        useCommand(
-            'move',
-            (info) => {
-                // get the camera direction
-                camera.getWorldQuaternion(cameraRotation);
-                // `move` is bound with `{ asVector: true }`, so its value is the two axis
-                // kind; narrow rather than cast, since reading `.x` off a scalar would quietly
-                // build a NaN direction.
-                if (!isCommandVector(info.value)) return;
-                const move: CommandVector = info.value;
-                const direction = new THREE.Vector3(move.x, 0, move.y)
-                    .applyQuaternion(getHorizontalRotation())
-                    .normalize();
+            // `move` is bound with `{ asVector: true }`, so its value is the two axis
+            // kind; narrow rather than cast, since reading `.x` off a scalar would quietly
+            // build a NaN direction.
+            if (!isCommandVector(info.value)) return;
+            const move: CommandVector = info.value;
+            const direction = new THREE.Vector3(move.x, 0, move.y)
+                .applyQuaternion(getHorizontalRotation())
+                .normalize();
 
-                if (characterSystem) characterSystem.move(direction);
-            },
-            () => {
-                if (characterSystem) characterSystem.move(new THREE.Vector3(0, 0, 0));
-            },
-            { asVector: true }
-        );
-        useCommand(
-            'c',
-            (info) => {
-                if (!info.isInitial) return;
-                characterSystem?.setCrouched(true);
-            },
-            () => {
-                characterSystem?.setCrouched(false);
-            }
-        );
+            if (characterSystem) characterSystem.move(direction);
+        },
+        () => {
+            if (characterSystem) characterSystem.move(new THREE.Vector3(0, 0, 0));
+        },
+        { asVector: true }
+    );
+    useCommand(
+        'c',
+        (info) => {
+            if (!info.isInitial) return;
+            characterSystem?.setCrouched(true);
+        },
+        () => {
+            characterSystem?.setCrouched(false);
+        }
+    );
 
-        const contextValue: CharacterControllerContextValue = {
-            characterSystem
-        };
+    const contextValue: CharacterControllerContextValue = {
+        characterSystem
+    };
 
-        return (
-            <CharacterControllerContext.Provider value={contextValue}>
-                <object3D ref={objectRef} {...objectProps}>
-                    {children}
-                </object3D>
-            </CharacterControllerContext.Provider>
-        );
-    })
-);
+    return (
+        <CharacterControllerContext.Provider value={contextValue}>
+            <object3D ref={objectRef} {...objectProps}>
+                {children}
+            </object3D>
+        </CharacterControllerContext.Provider>
+    );
+});

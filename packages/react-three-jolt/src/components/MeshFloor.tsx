@@ -9,13 +9,23 @@ if You really wanted a body like this, probably use the heigtfield instead
 */
 //import { RigidBody } from './RidgedBody';
 
+import type { ThreeElements } from '@react-three/fiber';
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useJolt } from '../hooks';
 import { Raw } from '../raw';
 import { createMeshFloor, createMeshFromShape } from '../utils/meshTools';
 
-export const MeshFloor = ({ size = 20, position = [0, 0, 0], ...rest }) => {
+/**
+ * `<MeshFloor>`'s own props. Everything else (`Omit`'d below) is a `<mesh>` prop, spread
+ * straight through - issue #148 gave this a real interface instead of an untyped destructure.
+ */
+export interface MeshFloorProps extends Omit<ThreeElements['mesh'], 'ref'> {
+    /** Width/depth of the visual floor mesh. The generated Jolt body's own size is fixed. */
+    size?: number;
+}
+
+export function MeshFloor({ size = 20, ...rest }: MeshFloorProps) {
     const meshRef = useRef<THREE.Mesh>(null);
     const { bodySystem } = useJolt();
 
@@ -27,14 +37,18 @@ export const MeshFloor = ({ size = 20, position = [0, 0, 0], ...rest }) => {
         Raw.module.destroy(floorBodySettings);
         //now we can make a mesh using the body with the helper
         const floorMesh = createMeshFromShape(rawBody.GetShape());
-        if (meshRef.current) {
-            meshRef.current.geometry = floorMesh;
-            // push the body onto the system
-            bodySystem.addExistingBody(meshRef.current, rawBody, {
-                bodyType: 'static'
-            });
-        }
-    }, []);
+        if (!meshRef.current) return;
+        meshRef.current.geometry = floorMesh;
+        // push the body onto the system
+        const handle = bodySystem.addExistingBody(meshRef.current, rawBody, {
+            bodyType: 'static'
+        });
+        // #148: this body was never removed on unmount, so it (and its shape) outlived the
+        // component for the life of the world.
+        return () => {
+            bodySystem.removeBody(handle);
+        };
+    }, [bodySystem]);
 
     return (
         <mesh ref={meshRef} position-y={0.1} {...rest}>
@@ -42,4 +56,4 @@ export const MeshFloor = ({ size = 20, position = [0, 0, 0], ...rest }) => {
             <meshStandardMaterial color="grey" />
         </mesh>
     );
-};
+}

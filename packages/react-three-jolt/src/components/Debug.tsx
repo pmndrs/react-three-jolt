@@ -5,7 +5,7 @@
 // own - e.g. `<Debug showContacts />` inside a `<Physics>` that is otherwise not in debug mode.
 
 import { useFrame } from '@react-three/fiber';
-import React, { type FC, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useJolt } from '../hooks';
 import { DebugRenderer, type DebugRendererOptions } from '../systems/debug-renderer';
 
@@ -27,7 +27,7 @@ export interface DebugProps extends DebugRendererOptions {
  * It is render-only: it reads body poses and shapes and writes three.js matrices, never the
  * other way round, so having it mounted cannot change the simulation.
  */
-export const Debug: FC<DebugProps> = ({
+export function Debug({
     updatePriority = 0,
     colors,
     showConstraints,
@@ -35,7 +35,7 @@ export const Debug: FC<DebugProps> = ({
     contactNormalLength,
     maxContacts,
     depthTest
-}) => {
+}: DebugProps) {
     const { physicsSystem } = useJolt();
     // Created in an effect rather than a `useMemo`, so StrictMode's mount/unmount/mount does not
     // leave a disposed renderer behind - and so the overlay's subscriptions are made and unmade
@@ -79,4 +79,4 @@ export const Debug: FC<DebugProps> = ({
 
     if (!renderer) return null;
     return <primitive object={renderer.object} />;
-};
+}

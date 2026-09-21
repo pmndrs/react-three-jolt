@@ -51,6 +51,15 @@ export function useConst<T>(initialValue: T | (() => T)): T {
 }
 
 // also from fluentui
+/**
+ * @deprecated Issue #57: every component in this library has been converted to a plain
+ * `useEffect(() => { ... }, [])` (`RigidBody`, `Physics`, `InstancedRigidBodyMesh` - the
+ * conversion the FluentUI-style split into `useMount`/`useUnmount` used to make easier is now
+ * done). Kept, unexported from nowhere it wasn't already, for one release for anything external
+ * that imported it directly; it will be removed in a future major version. Prefer a plain
+ * `useEffect` with an empty dependency array - it is exactly this hook's body, without the extra
+ * ref indirection.
+ */
 export const useMount = (callback: () => void) => {
     const mountRef = useRef(callback);
     mountRef.current = callback;
@@ -62,6 +71,8 @@ export const useMount = (callback: () => void) => {
  * Hook which synchronously executes a callback when the component is about to unmount.
  *
  * @param callback - Function to call during unmount.
+ * @deprecated Issue #57: prefer `useEffect(() => () => { ... }, [])` - a plain effect whose only
+ * job is its cleanup. See {@link useMount}.
  */
 export const useUnmount = (callback: () => void) => {
     const unmountRef = useRef(callback);

@@ -263,12 +263,12 @@ controls that per body:
 ```tsx
 const crate = useRef<BodyState>(null);
 
-useMount(() => {
+useEffect(() => {
     // repositioning sleeping scenery shouldn't wake it just to move it and let it fall back
     // asleep a moment later
     crate.current!.activateOnChange = false;
     crate.current!.position = new THREE.Vector3(3, 0.5, -2);
-});
+}, []);
 ```
 
 - Default `true` — every setter's behavior before this flag existed. Nothing changes for
@@ -404,11 +404,11 @@ objects.
 ```tsx
 const conveyor = useRef<BodyState>(null);
 
-useMount(() => {
+useEffect(() => {
     // local-space vector: rotate the pad and the push rotates with it
     conveyor.current?.activateMotionSource(new THREE.Vector3(-2.4, 0, 0));
     conveyor.current!.motionAsSurfaceVelocity = true; // belt-like, instead of an impulse
-});
+}, []);
 ```
 
 | member | |

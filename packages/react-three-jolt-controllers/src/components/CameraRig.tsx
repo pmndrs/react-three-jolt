@@ -1,9 +1,9 @@
 import type { BodyState } from '@react-three/jolt';
 import { useCommand, useLookCommand } from '@react-three/jolt-addons';
 //import * as THREE from 'three';
-import React, { forwardRef, useContext, useEffect, useImperativeHandle } from 'react';
+import React, { useContext, useEffect, useImperativeHandle } from 'react';
 import { useCameraRig } from '../hooks';
-import type { CameraRigOptions } from '../systems/camera-rig/camera-rig-system';
+import type { CameraRigManager, CameraRigOptions } from '../systems/camera-rig/camera-rig-system';
 //import { useJolt } from "@react-three/jolt";
 
 //lets try importing the character context
@@ -33,10 +33,14 @@ import { CharacterControllerContext } from './CharacterController';
  */
 interface CameraRigProps extends CameraRigOptions {
     anchor?: BodyState;
+    /** Hands back the underlying {@link CameraRigManager} once it exists. */
+    ref?: React.Ref<CameraRigManager>;
 }
 
-export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, ref) {
-    const { anchor, ...options } = props;
+// React 19 native convention (#49): `ref` is a plain prop, so this is a plain function component
+// - no `forwardRef` wrapper.
+export function CameraRig(props: CameraRigProps) {
+    const { anchor, ref, ...options } = props;
 
     const cameraRig = useCameraRig(options);
     //const { physicsSystem } = useJolt();
@@ -93,4 +97,4 @@ export const CameraRig = forwardRef(function CameraRig(props: CameraRigProps, re
     useImperativeHandle(ref, () => cameraRig, [cameraRig]);
 
     return <></>;
-});
+}

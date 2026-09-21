@@ -3,8 +3,7 @@
 import type Jolt from 'jolt-physics';
 // to clear weird TS error
 import React, {
-    FC,
-    ReactNode,
+    type ReactNode,
     //  ReactNode,
     useCallback,
     useEffect,
@@ -17,7 +16,7 @@ import React, {
 import { suspend } from 'suspend-react';
 import * as THREE from 'three';
 import { JoltContext, joltContext } from '../context';
-import { useMount, useSystemEvent, useUnmount } from '../hooks';
+import { useSystemEvent } from '../hooks';
 import { initJolt, Raw } from '../raw';
 import type { DefaultBodySettings } from '../systems/body-system';
 import type { WorldEventMap } from '../systems/events';
@@ -175,7 +174,8 @@ export type PhysicsProps = {
     onActivityChange?: WorldEventMap['activityChange'];
 };
 
-export const Physics: FC<PhysicsProps> = (props) => {
+// React 19 native convention (#49): a plain function component, no `React.FC` annotation.
+export function Physics(props: PhysicsProps) {
     const {
         children,
         gravity = DEFAULT_GRAVITY,
@@ -224,7 +224,9 @@ export const Physics: FC<PhysicsProps> = (props) => {
     // one the closure that registered the cleanup was rendered with.
     const liveSystem = useRef<PhysicsSystem | undefined>(undefined);
 
-    useMount(() => {
+    // #57: was `useMount` - a plain `useEffect` with `[]` deps runs exactly once per mount, same
+    // as the old hook, without the extra indirection.
+    useEffect(() => {
         if (debug) console.log('** Physics Component: ' + pid + ' Mounted **');
         const ps = new PhysicsSystem(pid);
         // these have to be set here to catch bodies created on the very first render
@@ -239,7 +241,10 @@ export const Physics: FC<PhysicsProps> = (props) => {
         ps.maxSubSteps = maxSubSteps;
         liveSystem.current = ps;
         setPhysicsSystem(ps);
-    });
+        // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only, deliberately not
+        // reactive - every prop read here is applied once, at construction; later prop changes
+        // are each their own effect below.
+    }, []);
 
     // setup the step
     const step = useCallback(
@@ -263,18 +268,22 @@ export const Physics: FC<PhysicsProps> = (props) => {
     // second mount builds a fresh `PhysicsSystem`), which is exactly right: the captured world
     // really is orphaned and really should be freed. The check is what stops a future change
     // that *reuses* the world across a remount from killing the live one.
-    useUnmount(() => {
-        const dying = liveSystem.current;
-        if (!dying) return;
-        if (debug) console.log('** Physics Component: ' + pid + ' Unmounted **');
-        // clear it first: a remount inside the deferral window puts its own world back here,
-        // and that - not this one - is the world that must survive.
-        liveSystem.current = undefined;
-        deferWorldDestroy(() => {
-            if (liveSystem.current === dying) return;
-            dying.destroy();
-        });
-    });
+    useEffect(() => {
+        return () => {
+            const dying = liveSystem.current;
+            if (!dying) return;
+            if (debug) console.log('** Physics Component: ' + pid + ' Unmounted **');
+            // clear it first: a remount inside the deferral window puts its own world back here,
+            // and that - not this one - is the world that must survive.
+            liveSystem.current = undefined;
+            deferWorldDestroy(() => {
+                if (liveSystem.current === dying) return;
+                dying.destroy();
+            });
+        };
+        // biome-ignore lint/correctness/useExhaustiveDependencies: unmount-only teardown - see
+        // the comment above.
+    }, []);
 
     // These will be effects for props to send to the correct systems
 
@@ -361,4 +370,4 @@ export const Physics: FC<PhysicsProps> = (props) => {
             {debug && <Debug />}
         </joltContext.Provider>
     );
-};
+}

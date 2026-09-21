@@ -8,7 +8,7 @@
 // rendered frame is frame rate dependent, because a frame may run zero, one or five physics
 // substeps. Per substep is the only place a force means a fixed amount of momentum.
 
-import React, { type FC, type ReactNode, type RefObject, useEffect, useRef } from 'react';
+import React, { type ReactNode, type RefObject, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useBeforePhysicsStep, useJolt } from '../hooks';
 import type { BodyState } from '../systems/body-state';
@@ -233,7 +233,7 @@ export interface AttractorProps extends Omit<AttractorOptions, 'target' | 'posit
  * | `filter` | - | `(body) => boolean`, called per body per substep |
  * | `activate` | `true` | wake sleeping bodies in range |
  */
-export const Attractor: FC<AttractorProps> = ({ position, children, ...options }) => {
+export function Attractor({ position, children, ...options }: AttractorProps) {
     const ref = useRef<THREE.Group>(null);
     useAttractor({ ...options, target: ref });
     return (
@@ -241,4 +241,4 @@ export const Attractor: FC<AttractorProps> = ({ position, children, ...options }
             {children}
         </group>
     );
-};
+}

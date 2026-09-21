@@ -34,4 +34,8 @@ export interface ShapeContext {
     isSoleShape?: (index: number | undefined) => boolean;
 }
 
-export const ShapeContext = createContext<ShapeContext | undefined>(undefined!);
+// Named `shapeContext` (lowercase), distinct from the `ShapeContext` *type* above (#148): the
+// two used to share one identifier, a type and a value with the same name, which `Shape.tsx`
+// worked around by re-exporting the type under a different name (`ShapeContextValue`) rather
+// than fixing the collision itself.
+export const shapeContext = createContext<ShapeContext | undefined>(undefined!);
