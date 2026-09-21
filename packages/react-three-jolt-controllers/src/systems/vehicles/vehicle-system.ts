@@ -105,7 +105,6 @@ export class VehicleSystem {
     addVehicle(name: string, settings?: any) {
         settings = this.createVehicleSettings(settings);
         let vehicle;
-        console.log('adding vehicle', name, settings.type);
         switch (settings.type) {
             case 'twoWheel':
                 vehicle = new VehicleManagerTwoWheels(this.physicsSystem, settings);
@@ -115,7 +114,6 @@ export class VehicleSystem {
                 break;
         }
         this.vehicles.set(name, vehicle);
-        console.log('vehicle added, current list:', this.vehicles);
         return vehicle;
     }
 

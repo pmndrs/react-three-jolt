@@ -23,7 +23,7 @@ import {
     generateCompoundShapeSettings,
     generateShapeSettings
 } from '../../systems';
-import { quat, vec3 } from '../../utils';
+import { devWarn, quat, vec3 } from '../../utils';
 import { RigidBodyContext } from '../RigidBody';
 
 // creates a Jolt Shape from three.js meshes.
@@ -139,7 +139,7 @@ export const Shape: React.FC<ShapeProps> = memo(
         };
         // sets or updates the shape with scale
         const updateScaleShape = () => {
-            console.warn('dont call this right now, will use in the future for compound shapes');
+            devWarn('dont call this right now, will use in the future for compound shapes');
             return; /*
 			if (!isScaled || !baseShape.current) return;
 			// because we can have no scale set and be dynamic have a scale fallback

@@ -437,11 +437,15 @@ export class ShapecastHit {
         this.bodyHandle = bodyID
             ? bodyID.GetIndexAndSequenceNumber()
             : mHit.mBodyID2.GetIndexAndSequenceNumber();
+        // GetPointOnRay returns its Vec3/RVec3 BY VALUE through jolt-physics' WebIDL binder,
+        // which hands back a pointer to ONE STATIC TEMPORARY per bound function (overwritten on
+        // the next call, shared across every shapecast). Destroying it - as this did - frees
+        // memory the binder still owns and immediately reuses, corrupting the next reader.
+        // `vec3.three()` copies the components straight out, so there is nothing to free here.
+        // Same fix as RaycastHit in raycasters.ts; this sibling was missed.
         //@ts-ignore this function was added to jolt.js #155
         const joltPosition = shapecast.GetPointOnRay(mHit.mFraction);
         this.position = vec3.three(joltPosition);
-        // destroy things
-        Raw.module.destroy(joltPosition);
     }
     //* the more complex  values we set as getters and arent stored on the object
     get distance(): number {
@@ -458,19 +462,26 @@ export class ShapecastHit {
     get impactNormal(): THREE.Vector3 {
         const bodyID = new Raw.module.BodyID(this.bodyHandle);
         const shapeID = new Raw.module.SubShapeID();
+        // `vec3.rjolt` always allocates a vector we own (issue #76), so it has to be released
+        // here - this getter is read per hit, per frame, by the camera rig.
         const position = vec3.rjolt(this.position);
         let toReturn = new THREE.Vector3();
         shapeID.SetValue(this.shapeIdValue);
         const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
         if (body) {
+            // `GetWorldSpaceSurfaceNormal` returns "by value", which in the WebIDL binder
+            // means a pointer to a static temporary the binder owns - read it out immediately
+            // and never destroy it.
             const joltNormal = body.GetWorldSpaceSurfaceNormal(shapeID, position);
             toReturn = vec3.three(joltNormal);
-            //Raw.module.destroy(joltNormal);
         }
-        // destroy remaining jolt items
-        //Raw.module.destroy(shapeID);
-        // Raw.module.destroy(bodyID);
-        //Raw.module.destroy(position);
+        // bodyID/shapeID/position ARE fresh allocations we made above with `new Raw.module.X()`,
+        // so - unlike joltNormal - these three are genuinely ours and must be freed: this getter
+        // leaked all three of them on every single call. Mirrors the RaycastHit fix in
+        // raycasters.ts.
+        Raw.module.destroy(shapeID);
+        Raw.module.destroy(bodyID);
+        Raw.module.destroy(position);
         return toReturn;
     }
     //TODO Fix this to work with the bodyID Handle after removing BodyID

@@ -6,12 +6,12 @@ import {
     //MathUtils,
     Matrix4,
     Object3D,
-    // Quaternion,
+    Quaternion,
     Vector3
 } from 'three';
 import { Raw } from '../raw';
 
-import { anyVec3, quat, vec3 } from '../utils';
+import { anyVec3, joltScratch, quat, vec3 } from '../utils';
 import { type BodySystem, getThreeObjectForBody } from './body-system';
 
 // Initital body object copied from r3/rapier's state object
@@ -138,6 +138,64 @@ export class BodyState {
     isContacting(handle: number) {
         return this.contacts.get(handle) || 0;
     }
+    //* Interpolation pose cache ==============================
+    /*
+    These hold the two most recent *world space* physics poses of this body so the render frame
+    can interpolate between them (see PhysicsSystem.onUpdate). Everything here is preallocated
+    and written in place: the frame loop touches every awake body every frame, so it is not
+    allowed to allocate. Do not replace these objects, copy into them.
+    */
+    /** World space pose produced by the physics step before the most recent one. */
+    readonly previousPosition = new Vector3();
+    readonly previousRotation = new Quaternion();
+    /** World space pose produced by the most recent physics step. */
+    readonly currentPosition = new Vector3();
+    readonly currentRotation = new Quaternion();
+    /** False until `capturePose` has run at least once; until then there is nothing to lerp. */
+    poseCacheValid = false;
+    // scratch matrix for instanced writes, reused so `update` never allocates
+    private instanceMatrix = new Matrix4();
+
+    /**
+     * Snapshot the body's pose at the end of a physics step. Shifts the previous snapshot down
+     * so `previous*` / `current*` always bracket the last step. Allocation free.
+     */
+    capturePose() {
+        if (this.poseCacheValid) {
+            this.previousPosition.copy(this.currentPosition);
+            this.previousRotation.copy(this.currentRotation);
+        }
+        vec3.joltToThree(this.body.GetPosition(), this.currentPosition);
+        quat.joltToThree(this.body.GetRotation(), this.currentRotation);
+        // the first capture has no history, so start from a standstill instead of lerping in
+        // from the origin
+        if (!this.poseCacheValid) {
+            this.previousPosition.copy(this.currentPosition);
+            this.previousRotation.copy(this.currentRotation);
+            this.poseCacheValid = true;
+        }
+    }
+    /** Drop the pose history, e.g. after a teleport, so the next frame does not lerp across it. */
+    resetPoseCache() {
+        this.poseCacheValid = false;
+    }
+    /**
+     * Write the world pose `alpha` of the way between the last two physics steps into the
+     * supplied objects. Allocation free; the caller owns the output.
+     */
+    getInterpolatedPose(alpha: number, outPosition: Vector3, outRotation: Quaternion) {
+        outPosition.lerpVectors(this.previousPosition, this.currentPosition, alpha);
+        outRotation.copy(this.previousRotation).slerp(this.currentRotation, alpha);
+    }
+    /**
+     * Write the body's live world pose into the supplied objects. Allocation free; this is the
+     * hot loop equivalent of the `position` / `rotation` getters, which allocate.
+     */
+    readPose(outPosition: Vector3, outRotation: Quaternion) {
+        vec3.joltToThree(this.body.GetPosition(), outPosition);
+        quat.joltToThree(this.body.GetRotation(), outRotation);
+    }
+
     //* Updates ===============================================
     //this will be called in loop functions
     update(position: anyVec3, rotation: Jolt.Quat | THREE.Quaternion) {
@@ -148,7 +206,7 @@ export class BodyState {
             return;
         }
         // we are an instance. we have to build a matrix
-        const matrix = new Matrix4();
+        const matrix = this.instanceMatrix;
         matrix.compose(vec3.three(position), quat.three(rotation), vec3.three(this.scale));
         // update the matrix
         this.setMatrix(matrix);
@@ -233,11 +291,18 @@ export class BodyState {
     }
 
     // Set the body position
-    // TODO: NOTE. This is how to correctly cleanup a Jolt Vector
+    // `SetPosition` takes an RVec3Arg and copies it, so the shared scratch vector is safe here
+    // and keeps this setter allocation free - it is driven from useFrame by user code.
     set position(position) {
-        const newPosition = vec3.rjolt(position);
-        this.bodyInterface.SetPosition(this.BodyID, newPosition, Raw.module.EActivation_Activate);
-        Raw.module.destroy(newPosition);
+        this.bodyInterface.SetPosition(
+            this.BodyID,
+            joltScratch.rvec3(position),
+            Raw.module.EActivation_Activate
+        );
+        // A setter is a teleport, not simulation: the cached previous/current poses now bracket
+        // a jump the body never travelled, and interpolating across them would smear the object
+        // from its old place to its new one over the next frame.
+        this.resetPoseCache();
     }
     // get the position of the body and wrap it in a three vector
     getPosition(asJolt?: boolean): THREE.Vector3 | Jolt.RVec3 {
@@ -248,15 +313,15 @@ export class BodyState {
         return this.getPosition() as THREE.Vector3;
     }
     // Set the body rotation
+    // `SetRotation` takes a QuatArg and copies it; shared scratch, no allocation per call.
     set rotation(rotation: THREE.Quaternion) {
-        const newQuat = quat.jolt(rotation);
         this.bodyInterface.SetRotation(
             this.BodyID,
-            // TODO: This is probably leaky
-            newQuat,
+            joltScratch.quat(rotation),
             Raw.module.EActivation_Activate
         );
-        Raw.module.destroy(newQuat);
+        // see the `position` setter: a teleport must not be slerped across.
+        this.resetPoseCache();
     }
     // get the rotation of the body and wrap it in a three quaternion
     get rotation(): THREE.Quaternion {
@@ -266,6 +331,9 @@ export class BodyState {
     setPositionAndRotation(position: THREE.Vector3, rotation: THREE.Quaternion) {
         this.position = position;
         this.rotation = rotation;
+        // the two setters above each drop the cache already; kept explicit so this stays correct
+        // if either of them is ever reimplemented against the body interface directly.
+        this.resetPoseCache();
     }
     get scale() {
         return this.activeScale;
@@ -298,6 +366,8 @@ export class BodyState {
             baseShape = existingShape.GetInnerShape();
         }
         // create the new scaled shape
+        // `vec3.jolt` always allocates, `ScaledShape` copies the scale into the shape, so this
+        // one is destroyed below.
         const joltScale = vec3.jolt(scale);
         const newShape = Raw.module.castObject(
             new Raw.module.ScaledShape(baseShape, joltScale),
@@ -326,10 +396,9 @@ export class BodyState {
         return vec3.three(this.body.GetLinearVelocity());
     }
     // set the velocity of the body
+    // `SetLinearVelocity` takes a Vec3Arg and copies it; shared scratch, no allocation per call.
     set velocity(velocity: Vector3) {
-        const newVec = vec3.jolt(velocity);
-        this.body.SetLinearVelocity(newVec);
-        Raw.module.destroy(newVec);
+        this.body.SetLinearVelocity(joltScratch.vec3(velocity));
     }
     // get the angular velocity of the body
     get angularVelocity() {
@@ -337,9 +406,7 @@ export class BodyState {
     }
     // set the angular velocity of the body
     set angularVelocity(angularVelocity: Vector3) {
-        const newVec = vec3.jolt(angularVelocity);
-        this.body.SetAngularVelocity(newVec);
-        Raw.module.destroy(newVec);
+        this.body.SetAngularVelocity(joltScratch.vec3(angularVelocity));
     }
     get color(): THREE.Color {
         // if we are a mesh, get the material color of the mesh
@@ -465,7 +532,6 @@ export class BodyState {
         rotZ?: boolean;
     }) {
         let newDOF = this.rawDOF;
-        console.log('Setting DOF', dof, 'current DOF', this.dof, 'rawDOF', this.rawDOF);
         const allowedDOFs = [
             { key: 'x', flag: Raw.module.EAllowedDOFs_TranslationX },
             { key: 'y', flag: Raw.module.EAllowedDOFs_TranslationY },
@@ -522,32 +588,29 @@ export class BodyState {
     }
 
     //* Force Manipulation ----------------------------------
+    // Every one of these takes its vector by value and accumulates it into the body, so the
+    // shared scratch objects are safe and these stay allocation free in the frame loop.
     // apply a force to the body
     applyForce(force: Vector3) {
-        const newVec = vec3.jolt(force);
-        this.body.AddForce(newVec);
-        Raw.module.destroy(newVec);
+        this.body.AddForce(joltScratch.vec3(force));
     }
     // apply a torque to the body
     applyTorque(torque: Vector3) {
-        const newVec = vec3.jolt(torque);
-        this.body.AddTorque(newVec);
-        Raw.module.destroy(newVec);
+        this.body.AddTorque(joltScratch.vec3(torque));
     }
     // add impulse to the body
     addImpulse(impulse: Vector3) {
-        const newVec = vec3.jolt(impulse);
-        this.body.AddImpulse(newVec);
-        Raw.module.destroy(newVec);
+        this.body.AddImpulse(joltScratch.vec3(impulse));
     }
     //move kinematic
+    // `rotation` is optional in practice; `joltScratch.quat(undefined)` is the identity rotation.
     moveKinematic(position: Vector3, rotation: THREE.Quaternion, deltaTime = 0) {
-        const newVec = vec3.rjolt(position);
-        const newQuat = rotation ? quat.jolt(rotation) : new Raw.module.Quat(0, 0, 0, 1);
-
-        this.bodyInterface.MoveKinematic(this.BodyID, newVec, newQuat, deltaTime);
-        Raw.module.destroy(newVec);
-        Raw.module.destroy(newQuat);
+        this.bodyInterface.MoveKinematic(
+            this.BodyID,
+            joltScratch.rvec3(position),
+            joltScratch.quat(rotation),
+            deltaTime
+        );
     }
 
     //* Motion Source ----------------------------------

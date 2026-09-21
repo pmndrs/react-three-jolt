@@ -13,7 +13,6 @@ export const free = (value: unknown) => {
 export const initJolt = async (jolt?: typeof Jolt) => {
     if (jolt) {
         // this will let us overrite, however, it spins up new every time we do so
-        console.log('** Setting Raw to local Jolt **');
         if (Raw.module !== null) {
             // how can we destroy the old one?
             //@ts-ignore

@@ -1,12 +1,16 @@
 //various Jolt/Three tools for meshes
 // I HATE we need to import this raw module
 
-import type Jolt from 'jolt-physics';
-import * as THREE from 'three';
 import { Raw } from '../raw';
+import { createShapeFromSettings, releaseShape } from '../systems/shape-system';
+
+// `createMeshFromShape` lives in systems/shape-system.ts now - it used to exist here and there
+// byte for byte. Re-exported so existing imports from utils/meshTools keep working.
+export { createMeshFromShape } from '../systems/shape-system';
 
 // create a heightfeild type floor
 // from the jolt js example
+// NOTE: the returned BodyCreationSettings is the caller's to destroy once the body is created.
 export function createMeshFloor(
     n: number,
     cellSize: number,
@@ -50,53 +54,25 @@ export function createMeshFloor(
             }
         }
     const materials = new jolt.PhysicsMaterialList();
-    const shape = new jolt.MeshShapeSettings(triangles, materials).Create().Get();
+    // createShapeFromSettings destroys the settings and hands back a shape we own a ref on
+    const shape = createShapeFromSettings(new jolt.MeshShapeSettings(triangles, materials));
     jolt.destroy(triangles);
     jolt.destroy(materials);
 
     // Create body
+    const position = new jolt.RVec3(posX, posY, posZ);
+    const rotation = new jolt.Quat(0, 0, 0, 1);
     const creationSettings = new jolt.BodyCreationSettings(
         shape,
-        new jolt.RVec3(posX, posY, posZ),
-        new jolt.Quat(0, 0, 0, 1),
+        position,
+        rotation,
         jolt.EMotionType_Static,
         0
     );
+    // the settings copied the transform and took their own reference on the shape
+    jolt.destroy(position);
+    jolt.destroy(rotation);
+    releaseShape(shape);
+
     return creationSettings;
-}
-
-// Direct from the Jolt JS Example
-// Create a geometry from the RAW verts of a shape
-// The Jolt example has a smoother version that uses shapes, this is more raw which
-// is overkill for simpler/common shapes
-export function createMeshFromShape(shape: Jolt.Shape): THREE.BufferGeometry {
-    const jolt = Raw.module;
-    // Get triangle data
-    const scale = new jolt.Vec3(1, 1, 1);
-    const triContext = new jolt.ShapeGetTriangles(
-        shape,
-        jolt.AABox.prototype.sBiggest(),
-        shape.GetCenterOfMass(),
-        jolt.Quat.prototype.sIdentity(),
-        scale
-    );
-    jolt.destroy(scale);
-
-    // Get a view on the triangle data (does not make a copy)
-    const vertices = new Float32Array(
-        jolt.HEAPF32.buffer,
-        triContext.GetVerticesData(),
-        triContext.GetVerticesSize() / Float32Array.BYTES_PER_ELEMENT
-    );
-
-    // Now move the triangle data to a buffer and clone it so that we can free the memory from the C++ heap (which could be limited in size)
-    const buffer = new THREE.BufferAttribute(vertices, 3).clone();
-    jolt.destroy(triContext);
-
-    // Create a three mesh
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', buffer);
-    geometry.computeVertexNormals();
-
-    return geometry;
 }

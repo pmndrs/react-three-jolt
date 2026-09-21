@@ -11,13 +11,16 @@ import {
 } from 'three';
 import { Layer } from '../constants';
 import { Raw } from '../raw';
-import { quat, vec3 } from '../utils';
+import { devWarn, quat, vec3, withJolt } from '../utils';
 import { BodyState } from './body-state';
+import type { ConstraintSystem } from './constraint-system';
 import {
     AutoShape,
     createMeshForShape,
+    createShapeFromSettings,
     generateHeightfieldShapeFromThree,
     getShapeSettingsFromObject,
+    releaseShape,
     ShapeSystem
 } from './shape-system';
 
@@ -59,9 +62,15 @@ export class BodySystem {
 
     // lets defaults be set at the physics system level
     defaultBodySettings: any = {};
+    // Shape used when a body doesn't ask for one. Undefined keeps the per-geometry autodetect
+    // in getShapeTypeFromGeometry. Settable from `<Physics defaultShape="box">`.
+    defaultShape?: AutoShape;
 
     standardGroupFilter = new Raw.module.GroupFilterJS();
     standardCollisionGroup = new Raw.module.CollisionGroup();
+
+    // wired up by PhysicsSystem so removeBody can tear constraints down first
+    constraintSystem?: ConstraintSystem;
 
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem) {
         // set the interfaces
@@ -108,6 +117,9 @@ export class BodySystem {
     //* Body Management ================================
     // create a body from an object or shape
     createBody(objectOrShape: Object3D | Jolt.Shape, options: GenerateBodyOptions = {}): Jolt.Body {
+        // fall back to the system wide default shape when the caller didn't pick one
+        if (options.shapeType === undefined && this.defaultShape !== undefined)
+            options = { ...options, shapeType: this.defaultShape };
         let settings = generateBodySettings(objectOrShape, options);
         // if there are properties in the default, merge them with settings
         if (Object.keys(this.defaultBodySettings).length > 0)
@@ -185,7 +197,7 @@ export class BodySystem {
         const bodyID = bodyState.body.GetID();
         const body = this.joltPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(bodyID);
         if (!body) {
-            console.warn('body getter failed during delete', bodyHandle);
+            devWarn('body getter failed during delete', bodyHandle);
             return;
         }
 
@@ -193,6 +205,11 @@ export class BodySystem {
             // console.log('body already removed');
             return;
         }
+
+        // Constraints hold raw pointers to both of their bodies and jolt dereferences them
+        // while detaching, so every constraint touching this body has to go first or the
+        // next step reads freed memory. (issue #82)
+        this.constraintSystem?.removeConstraintsForBody(bodyHandle);
 
         // remove the body from the simulation
         this.bodyInterface.RemoveBody(bodyID);
@@ -216,8 +233,6 @@ export class BodySystem {
         const shapeSettings = generateHeightfieldShapeFromThree(planeMesh);
         //const position = new Raw.module.Vec3(0, -20, 0); // The image tends towards 'white', so offset it down closer to zero
         const quaternion = new Raw.module.Quat(0, 0, 0, 1);
-        //@ts-ignore
-        const shape: Jolt.HeightFieldShape = shapeSettings.Create().Get();
         const size = shapeSettings.mSampleCount;
         //@ts-ignore  yes it does exist
         const planeWidth = planeMesh.geometry.parameters.width;
@@ -229,6 +244,8 @@ export class BodySystem {
             planeMesh.position.z + offset
         );
 
+        // this destroys the shapeSettings and hands back a shape we hold a reference on
+        const shape = createShapeFromSettings(shapeSettings);
         const creationSettings = new Raw.module.BodyCreationSettings(
             shape,
             position,
@@ -237,13 +254,12 @@ export class BodySystem {
             Layer.NON_MOVING
         );
         const body = this.bodyInterface.CreateBody(creationSettings);
-        // cleanup before returning
-        this.jolt.destroy(shapeSettings);
+        // cleanup before returning. The body holds its own reference to the shape and the
+        // creation settings copied the transform, so all of this is ours to free.
         this.jolt.destroy(creationSettings);
-        //TODO: One of these causes a crash.
-        // this.jolt.destroy(position);
-        //this.jolt.destroy(quaternion);
-        //this.jolt.destroy(shape);
+        this.jolt.destroy(position);
+        this.jolt.destroy(quaternion);
+        releaseShape(shape);
         return this.addExistingBody(planeMesh, body, { bodyType: 'static' });
     }
     //* Body Modification ===================================
@@ -559,7 +575,10 @@ export function generateBodySettings(
     if (isObject) {
         const shapeSettings = getShapeSettingsFromObject(object, options.shapeType);
         if (!shapeSettings) throw new Error('No shape settings found');
-        shape = shapeSettings.Create().Get();
+        // takes ownership of the settings (and of any sub-settings they reference) and gives us
+        // a shape we hold one reference on - released below, once the BodyCreationSettings has
+        // taken its own.
+        shape = createShapeFromSettings(shapeSettings);
     }
 
     // create position and quaternion from three to jolt
@@ -651,11 +670,17 @@ export function generateBodySettings(
         let size: any = options?.size || new THREE.Vector3(1, 1, 1);
         const mass = options?.mass || 200;
         if (isObject) size = new THREE.Box3().setFromObject(object).getSize(new Vector3());
-        settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(vec3.jolt(size), mass);
+        // `vec3.jolt` always allocates a vector we own; `SetMassAndInertiaOfSolidBox` copies it,
+        // so scope it rather than leaking one Vec3 per dynamic trimesh body.
+        withJolt(size, (v) =>
+            settings.mMassPropertiesOverride.SetMassAndInertiaOfSolidBox(v, mass)
+        );
     }
     // destroy the position and quaternion
     jolt.destroy(position);
     jolt.destroy(quaternion);
+    // the settings hold their own reference to a shape we created here
+    if (isObject) releaseShape(shape);
 
     return settings;
 }

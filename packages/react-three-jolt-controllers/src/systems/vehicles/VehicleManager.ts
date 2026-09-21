@@ -1,4 +1,4 @@
-import { Layer, PhysicsSystem, quat, Raw, vec3 } from '@react-three/jolt';
+import { joltScratch, Layer, PhysicsSystem, quat, Raw, vec3 } from '@react-three/jolt';
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { createWheelSettings, VehicleFourWheelSettings, WheelState } from './wheels';
@@ -178,7 +178,6 @@ export class VehicleManager {
         }
 
         this.constraint = new Raw.module.VehicleConstraint(this.carBody, vehicle);
-        console.log('constraint active', this.constraint.IsActive());
         //NOW we can create the wheelStates
         // TODO this process seems dirty....
         //@ts-ignore
@@ -323,9 +322,11 @@ export class VehicleManager {
         }, extraTime || this.turboTimeLimit);
     }
     setPosition(position: any) {
+        // `vec3.rjolt` always allocates a vector we own (issue #76) and `SetPosition` copies it;
+        // this used to leak one RVec3 per call.
         this.physicsSystem.bodyInterface.SetPosition(
             this.carBody.GetID(),
-            vec3.rjolt(position),
+            joltScratch.rvec3(position),
             Raw.module.EActivation_Activate
         );
     }

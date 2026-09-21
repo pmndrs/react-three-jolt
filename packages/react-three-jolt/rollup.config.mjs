@@ -1,16 +1,20 @@
+import { readFileSync } from 'node:fs';
 import commonjs from '@rollup/plugin-commonjs';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import typescript from '@rollup/plugin-typescript';
 import path from 'path';
 import filesize from 'rollup-plugin-filesize';
 
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'));
+
+// externalize everything this package declares as a dependency or peerDependency,
+// plus subpath imports of three/jolt-physics (e.g. three/addons/*, jolt-physics/wasm-compat),
+// so nothing gets bundled into dist by accident when a new import is added.
 const external = [
-    'jolt-physics',
-    '@react-three/fiber',
-    '@react-three/drei',
-    'three',
-    'react',
-    'react-dom'
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.peerDependencies ?? {}),
+    /^three\//,
+    /^jolt-physics\//
 ];
 
 export default [

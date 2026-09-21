@@ -10,18 +10,25 @@ we'll expose various parts of the system through the physics component and conte
 // This is the core component that manages and stores the simulation
 import { invalidate } from '@react-three/fiber';
 import type Jolt from 'jolt-physics';
-import * as THREE from 'three';
-import { MathUtils, Quaternion, Vector3 } from 'three';
+import { MathUtils } from 'three';
 import { Layer, NUM_OBJECT_LAYERS } from '../constants';
 import { Raw } from '../raw';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
-import { anyVec3, quat, vec3 } from '../utils';
+import { anyVec3, devWarn, joltScratch, vec3 } from '../utils';
 import { BodyState } from './body-state';
 import { BodySystem } from './body-system';
 import { ConstraintSystem } from './constraint-system';
 import { ShapeCollider } from './queries/collider';
 import { AdvancedRaycaster, Multicaster, Raycaster } from './queries/raycasters';
 import { Shapecaster } from './queries/shapecasters';
+
+// Hoisted so the per-step `forEach` does not allocate a fresh closure for every substep.
+const capturePose = (state: BodyState): void => {
+    state.capturePose();
+};
+const resetPoseCache = (state: BodyState): void => {
+    state.resetPoseCache();
+};
 
 export class PhysicsSystem {
     // Step Event Listeners
@@ -37,32 +44,70 @@ export class PhysicsSystem {
     constraintSystem!: ConstraintSystem;
 
     // Public properties ----------------------------
-    public timeStep = 1 / 60;
+    /**
+     * Length of one physics step in seconds, or `"vary"` to step with the render delta
+     * (clamped, 1-2 substeps). Default `1/60`.
+     */
+    public timeStep: number | 'vary' = 1 / 60;
+    /** When true `onUpdate` returns immediately: time stops, rendering carries on. */
     public paused = false;
+    /**
+     * True once `destroy()` has freed the JoltInterface. React tears a parent down before
+     * its children, so `<Physics>` unmounting gets here before the hooks that own bodies and
+     * constraints - everything wasm-facing has to check this before calling into jolt.
+     */
+    public destroyed = false;
     public debug = false;
-    public interpolate = true;
+    private _interpolate = true;
+    /**
+     * Interpolate the three.js objects between the last two fixed steps instead of snapping
+     * them to the latest one. Ignored when `timeStep` is `"vary"`. Default `true`.
+     */
+    get interpolate(): boolean {
+        return this._interpolate;
+    }
+    set interpolate(value: boolean) {
+        if (value === this._interpolate) return;
+        this._interpolate = value;
+        // While interpolation was off nothing kept the pose cache current, so the stored poses
+        // are arbitrarily old. Drop them, or the first interpolated frame lerps across that gap.
+        if (value) this.invalidatePoseCache();
+    }
 
-    // This lets us interpolate between physics steps
-    // TODO: is storing the body in the map better than the handle?
-    private steppingState: {
-        accumulator: number;
-        previousState: Map<
-            number,
-            {
-                position: THREE.Vector3;
-                quaternion: THREE.Quaternion;
-            }
-        >;
-    } = {
-        accumulator: 0,
-        previousState: new Map()
-    };
+    /**
+     * Hard cap on the number of fixed steps a single frame may run. Time beyond
+     * `maxSubSteps * timeStep` is dropped rather than queued, which is what stops a long
+     * frame from snowballing into an ever growing backlog (the "spiral of death").
+     */
+    public maxSubSteps = 5;
+
+    // This lets us interpolate between physics steps. The poses themselves live on each
+    // BodyState (preallocated); all we keep here is the leftover time.
+    private steppingState = { accumulator: 0 };
+
+    /** Simulation time not yet consumed by a fixed step, in seconds. */
+    get accumulator(): number {
+        return this.steppingState.accumulator;
+    }
+
+    /**
+     * Throw away simulation time that hasn't been stepped yet, so the next frame starts from a
+     * clean clock. Worth doing after a long stall the world shouldn't try to catch up on.
+     */
+    resetAccumulator(): void {
+        this.steppingState.accumulator = 0;
+    }
+
+    /** Forget every body's cached poses; frames render live poses until the cache refills. */
+    invalidatePoseCache(): void {
+        this.bodySystem.dynamicBodies.forEach(resetPoseCache);
+        this.bodySystem.kinematicBodies.forEach(resetPoseCache);
+    }
 
     maxInterfaces = 3;
     constructor(pid = '0') {
         const jolt = Raw.module;
 
-        console.log('*** R3/Jolt PhysicsSystem Initialized ***');
         /* setup collisions and broadphase */
         const objectFilter = new jolt.ObjectLayerPairFilterTable(NUM_OBJECT_LAYERS);
         objectFilter.EnableCollision(Layer.NON_MOVING, Layer.MOVING);
@@ -99,8 +144,9 @@ export class PhysicsSystem {
             // we need to check ourselves and limit interfaces for memory reasons
             if (Raw.joltInterfaces.size > this.maxInterfaces - 1) {
                 // throw a warning about excess
-                console.warn('*** WARNING: Excess Jolt Interfaces Attempted ***');
-                console.log('Using first initialized interface');
+                devWarn(
+                    '*** WARNING: Excess Jolt Interfaces Attempted, using first initialized interface ***'
+                );
                 const interfaces = Raw.joltInterfaces.values();
                 this.joltInterface = interfaces.next().value;
             } else {
@@ -121,6 +167,8 @@ export class PhysicsSystem {
         // start the chain of systems/services
         this.constraintSystem = new ConstraintSystem(this);
         this.bodySystem = new BodySystem(this.physicsSystem);
+        // so removing a body also removes the constraints attached to it (issue #82)
+        this.bodySystem.constraintSystem = this.constraintSystem;
     }
 
     destroy(pid = '0'): void {
@@ -131,101 +179,71 @@ export class PhysicsSystem {
             Raw.joltInterfaces.delete(pid);
             // console.log('*** PhysicsSystem:' + pid + ' destroyed ***');
         }
+        // every body, constraint and shape went with the interface
+        this.destroyed = true;
     }
     // TODO: Loops and steps seems messy
     onUpdate(delta: number): void {
         if (this.paused) return;
-        // TODO Fix this TS
-        //@ts-ignore
+        // Frame deltas are not always sane: a clock reset (r3f's scheduler does this when the
+        // loop restarts) can hand us a negative one, and a dropped frame can hand us NaN. Either
+        // would sit in the accumulator and stall the simulation for many frames, so drop them.
+        if (!(delta > 0)) delta = 0;
         const timeStepVariable = this.timeStep === 'vary';
+        // interpolation only means anything when the simulation runs on its own fixed clock;
+        // with a variable step the last step already lands exactly on the current frame
+        const interpolating = this.interpolate && !timeStepVariable;
 
         if (timeStepVariable) {
             this.variableStep(delta);
         } else {
-            this.fixedTimeStep(delta, this.timeStep, this.interpolate);
+            this.fixedTimeStep(delta, this.timeStep as number, interpolating);
         }
 
-        const interpolationAlpha =
-            timeStepVariable || !this.interpolate
-                ? 1
-                : this.steppingState.accumulator / this.timeStep;
-        // Loop over all dynamic bodies
+        // How far the render frame sits past the last completed physics step, 0..1
+        this.frameAlpha = interpolating
+            ? this.steppingState.accumulator / (this.timeStep as number)
+            : 1;
+        this.frameInterpolating = interpolating;
+
+        // Loop over all dynamic and kinematic bodies. Iterating the two maps directly (rather
+        // than spreading them into one array) keeps the frame loop allocation free.
         // NOTE: using "state" to match rapier logic
-        const mergedBodies: BodyState[] = [
-            ...this.bodySystem.dynamicBodies.values(),
-            ...this.bodySystem.kinematicBodies.values()
-        ];
-        mergedBodies.forEach((state: BodyState) => {
-            const body = state.body;
-
-            if (state.isSleeping) return;
-
-            // Get new position and rotation (jolt values)
-            const pos = body.GetPosition();
-            const rot = body.GetRotation();
-            //TODO: Cleanup this looping logic
-
-            /*
-             */
-            if (this.interpolate) {
-                const previousState = this.steppingState.previousState.get(state.handle);
-
-                if (previousState) {
-                    // Get previous simulated world position
-                    _matrix4
-                        .compose(
-                            previousState.position,
-                            previousState.quaternion,
-                            vec3.three(state.scale)
-                        )
-                        .premultiply(state.invertedWorldMatrix)
-                        .decompose(_position, _rotation, _scale);
-
-                    // Apply previous tick position
-                    //original
-                    /*
-                    if (state.meshType == 'mesh') {
-                        //console.log('trying to push onto mesh', state.object);
-                        state.object.position.copy(_position);
-                        state.object.quaternion.copy(_rotation);
-                    }*/
-                    state.update(_position, _rotation);
-                }
-            }
-
-            // Get new position
-            _matrix4
-                .compose(
-                    vec3.joltToThree(pos, _vector3),
-                    quat.joltToThree(rot, _quaternion),
-                    vec3.three(state.scale)
-                )
-                .premultiply(state.invertedWorldMatrix)
-                .decompose(_position, _rotation, _scale);
-
-            if (this.interpolate) {
-                state.position.lerp(_position, interpolationAlpha);
-                state.rotation.slerp(_rotation, interpolationAlpha);
-                state.update(_position, _rotation);
-                /* original
-                    state.object.position.lerp(_position, interpolationAlpha);
-                    state.object.quaternion.slerp(
-                        _rotation,
-                        interpolationAlpha
-                    );
-                    */
-            } else {
-                /* original
-                    state.object.position.copy(_position);
-                    state.object.quaternion.copy(_rotation);
-                    */
-                state.update(_position, _rotation);
-            }
-        });
+        this.bodySystem.dynamicBodies.forEach(this.syncBodyToObject);
+        this.bodySystem.kinematicBodies.forEach(this.syncBodyToObject);
 
         // todo: consider sleeping
         invalidate();
     }
+
+    // alpha/mode for the current frame, read by `syncBodyToObject`. Kept as fields so the sync
+    // callback can be a single long lived function instead of a closure allocated every frame.
+    private frameAlpha = 1;
+    private frameInterpolating = false;
+
+    /**
+     * Push one body's physics pose onto its three.js object. Either the interpolated pose
+     * between the last two fixed steps, or the body's live pose. Allocation free.
+     */
+    private syncBodyToObject = (state: BodyState): void => {
+        if (state.isSleeping) return;
+
+        // World space physics pose for this frame -> _vector3 / _quaternion
+        if (this.frameInterpolating && state.poseCacheValid) {
+            state.getInterpolatedPose(this.frameAlpha, _vector3, _quaternion);
+        } else {
+            state.readPose(_vector3, _quaternion);
+        }
+
+        // Convert that into the object's parent space -> _position / _rotation
+        _matrix4
+            // activeScale rather than the `scale` getter: same value, but typed as a Vector3
+            .compose(_vector3, _quaternion, state.activeScale)
+            .premultiply(state.invertedWorldMatrix)
+            .decompose(_position, _rotation, _scale);
+
+        state.update(_position, _rotation);
+    };
 
     private variableStep(delta: number): void {
         // Max of 0.5 to prevent tunneling / instability
@@ -251,46 +269,33 @@ export class PhysicsSystem {
         // Increase accumulator
         this.steppingState.accumulator += delta;
 
+        // Clamp the backlog. A frame that took much longer than the timestep (a tab coming back
+        // from the background, a debugger pause, a big asset decode) would otherwise queue up
+        // an unbounded number of substeps, each of which makes the next frame longer still.
+        // Dropping the excess simulation time is the standard escape from that spiral.
+        const maxAccumulated = timeStep * this.maxSubSteps;
+        if (this.steppingState.accumulator > maxAccumulated) {
+            const dropped = this.steppingState.accumulator - maxAccumulated;
+            this.steppingState.accumulator = maxAccumulated;
+            if (this.debug)
+                console.warn(
+                    `*** R3/Jolt: dropped ${dropped.toFixed(4)}s of simulation time; a frame ` +
+                        `needed more than maxSubSteps (${this.maxSubSteps}) physics steps ***`
+                );
+        }
+
         while (this.steppingState.accumulator >= timeStep) {
-            // Set up previous state
-            // needed for accurate interpolations if the world steps more than once
-            if (interpolate) {
-                this.steppingState.previousState = new Map();
-                // loop over dynamic bodies
-
-                this.bodySystem.dynamicBodies.forEach((state) => {
-                    let previousState = this.steppingState.previousState.get(state.handle);
-
-                    if (!previousState) {
-                        previousState = {
-                            position: new Vector3(),
-                            quaternion: new Quaternion()
-                        };
-                        this.steppingState.previousState.set(state.handle, previousState);
-                    }
-
-                    vec3.joltToThree(state.body.GetPosition(), previousState.position);
-                    quat.joltToThree(state.body.GetRotation(), previousState.quaternion);
-                });
-                this.bodySystem.kinematicBodies.forEach((state) => {
-                    let previousState = this.steppingState.previousState.get(state.handle);
-
-                    if (!previousState) {
-                        previousState = {
-                            position: new Vector3(),
-                            quaternion: new Quaternion()
-                        };
-                        this.steppingState.previousState.set(state.handle, previousState);
-                    }
-
-                    vec3.joltToThree(state.body.GetPosition(), previousState.position);
-                    quat.joltToThree(state.body.GetRotation(), previousState.quaternion);
-                });
-            }
-
             this.stepSimulation(timeStep, 1);
-
             this.steppingState.accumulator -= timeStep;
+
+            // Snapshot the pose this step produced. capturePose shifts the previous snapshot
+            // down, so afterwards every body holds the two poses the render frame interpolates
+            // between. Needed inside the loop (not once after it) so a frame that runs several
+            // substeps still interpolates across the *last* one only.
+            if (interpolate) {
+                this.bodySystem.dynamicBodies.forEach(capturePose);
+                this.bodySystem.kinematicBodies.forEach(capturePose);
+            }
         }
     }
 
@@ -339,11 +344,16 @@ export class PhysicsSystem {
     }
 
     //* Utility methods ----------------------------
-    // Set Gravity
-    setGravity(gravity: number | THREE.Vector3): void {
-        const newGravity: anyVec3 =
-            typeof gravity === 'number' ? new Raw.module.Vec3(0, -gravity, 0) : gravity;
-        this.physicsSystem.SetGravity(vec3.jolt(newGravity));
+    /**
+     * Set world gravity. A plain number is read as a downward magnitude
+     * (`9.81` -> `[0, -9.81, 0]`); a tuple, THREE.Vector3 or Jolt vector is used as-is.
+     */
+    setGravity(gravity: number | anyVec3): void {
+        // `SetGravity` takes a Vec3Arg and copies it. This used to allocate two WASM vectors per
+        // call (a `new Vec3` and the one `vec3.jolt` made of it) and destroy neither; it runs
+        // from a useEffect on every `gravity` prop change, so use the shared scratch vector.
+        const newGravity: anyVec3 = typeof gravity === 'number' ? [0, -gravity, 0] : gravity;
+        this.physicsSystem.SetGravity(joltScratch.vec3(newGravity));
         if (this.debug) console.log('gravity set', typeof gravity, vec3.three(newGravity));
     }
 }

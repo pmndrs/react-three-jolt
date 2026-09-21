@@ -12,6 +12,7 @@ if You really wanted a body like this, probably use the heigtfield instead
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useJolt } from '../hooks';
+import { Raw } from '../raw';
 import { createMeshFloor, createMeshFromShape } from '../utils/meshTools';
 
 export const MeshFloor = ({ size = 20, position = [0, 0, 0], ...rest }) => {
@@ -22,6 +23,8 @@ export const MeshFloor = ({ size = 20, position = [0, 0, 0], ...rest }) => {
         // generate the jolt body
         const floorBodySettings = createMeshFloor(30, 1, 4, 0, 5, 0);
         const rawBody = bodySystem.bodyInterface.CreateBody(floorBodySettings);
+        // the body holds its own reference to the shape now; the settings are ours to free
+        Raw.module.destroy(floorBodySettings);
         //now we can make a mesh using the body with the helper
         const floorMesh = createMeshFromShape(rawBody.GetShape());
         if (meshRef.current) {
