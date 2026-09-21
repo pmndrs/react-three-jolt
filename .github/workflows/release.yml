@@ -28,8 +28,8 @@ jobs:
         id: changesets
         uses: changesets/action@v1
         with:
-          version: yarn version
-          publish: yarn publish
+          version: yarn changeset:version
+          publish: yarn changeset:publish
           commit: "chore(changeset): publish packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

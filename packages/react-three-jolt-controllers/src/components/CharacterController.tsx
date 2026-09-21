@@ -3,7 +3,7 @@ import { useEventCallback, useForwardedRef, useJolt } from '@react-three/jolt';
 import { type CommandVector, isCommandVector, useCommand } from '@react-three/jolt-addons';
 import React, { forwardRef, memo, type ReactNode, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import type { CharacterEventMap } from '../systems/character-controller';
+import type { CharacterEventMap, HeadHitInfo } from '../systems/character-controller';
 import { CharacterControllerSystem } from '../systems/character-controller';
 /** What `<CharacterController>` puts on its context; `undefined` until the system exists. */
 export interface CharacterControllerContextValue {
@@ -74,6 +74,17 @@ interface CControllerProps extends Omit<ThreeElements['object3D'], 'ref' | 'chil
     moveThreshold?: number;
     /** Speed (m/s) along a steep surface above which it counts as sliding. Default 0.5. */
     slideThreshold?: number;
+    /**
+     * Half-angle (radians) of the cone around straight-down within which a contact counts as a
+     * head/ceiling hit and cancels the character's upward velocity. See
+     * `CharacterControllerSystem.headAngle` (issue #88). Defaults to 30 degrees.
+     */
+    headAngle?: number;
+    /**
+     * Called once per new head/ceiling contact. See `CharacterControllerSystem.onHeadHit`
+     * (issue #88).
+     */
+    onHeadHit?: (info: HeadHitInfo) => void;
 }
 export const CharacterController: React.FC<CControllerProps> = memo(
     forwardRef((props, forwardedRef) => {
@@ -98,6 +109,8 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             onAction,
             moveThreshold,
             slideThreshold,
+            headAngle,
+            onHeadHit,
             ...objectProps
         } = props;
         // pass the body via the ref
@@ -166,6 +179,13 @@ export const CharacterController: React.FC<CControllerProps> = memo(
             if (moveThreshold !== undefined) characterSystem.moveThreshold = moveThreshold;
             if (slideThreshold !== undefined) characterSystem.slideThreshold = slideThreshold;
         }, [characterSystem, moveThreshold, slideThreshold]);
+
+        // wire up head/ceiling collision configuration (issue #88)
+        useEffect(() => {
+            if (!characterSystem) return;
+            if (headAngle !== undefined) characterSystem.headAngle = headAngle;
+            characterSystem.onHeadHit = onHeadHit;
+        }, [characterSystem, headAngle, onHeadHit]);
 
         // trigger commands
         useCommand(

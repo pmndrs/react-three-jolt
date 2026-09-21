@@ -43,6 +43,10 @@ frame rather than rebuilding the world.
 | `defaultBodySettings` | `Jolt.BodyCreationSettings` fields | — | reactive |
 | `module` | Jolt module initializer | `jolt-physics` | mount only |
 
+Plus the world [event props](#world-events): `onCollisionEnter`, `onCollisionPersist`,
+`onCollisionExit`, `onSensorEnter`, `onSensorExit`, `onIntersectionEnter`, `onIntersectionExit`,
+`onSleep`, `onWake`, `onSettled` and `onActivityChange`.
+
 ```tsx
 <Physics
     gravity={20}
@@ -207,8 +211,132 @@ const defaultBodySettings = { mRestitution: 0.5 };
 ### `module`
 
 A `jolt-physics` module initializer to use instead of the bundled default — how you pick a
-different [build variant](/getting-started/installation#choosing-a-jolt-build). Keep its identity
-stable across renders.
+different [build variant](/getting-started/installation#choosing-a-jolt-build), including the
+`debug-wasm-compat` build whose `JoltInterface.sGetTotalMemory()` / `sGetFreeMemory()` let you
+profile the WASM heap.
+
+```tsx
+import InitJolt from 'jolt-physics/wasm';
+
+<Physics module={InitJolt}>{null}</Physics>;
+```
+
+Keep its identity stable across renders — a module-level import like the one above, not an inline
+arrow. Calling it again with the *same* factory reuses the module that is already running.
+Switching to a **different** factory while a `<Physics>` world exists is refused (every live body,
+shape and constraint points into the old module's heap): it warns under
+[`setDebug(true)`](/advanced/memory#debug-output) and keeps the active module. Initialise the
+variant you want before any `<Physics>` mounts.
+
+The prop is a single unconditional `suspend()` keyed on `module ?? 'default'`, so toggling it does
+not change the number of hooks between renders.
+
+## World events
+
+Jolt's contact listener is global, so `<Physics on*>` is the **cheap** path and the per-body
+[`<RigidBody on*>` props](/api/rigid-body#events) are the fan-out. A world handler fires **once per
+pair**, with `target` set to the body with the lower `handle`, so a world-wide counter is right
+without dividing by two.
+
+```tsx
+<Physics
+    onCollisionEnter={(e) => console.log(e.target.handle, e.other.handle)}
+    onSensorEnter={(e) => console.log('entered a sensor')}
+    onSleep={(e) => console.log(e.handle, 'asleep')}
+>
+    {null}
+</Physics>
+```
+
+Every name, payload shape, ordering rule and the "don't retain the payload" contract is the same
+as for a body — see [RigidBody → Events](/api/rigid-body#events). `onIntersectionEnter` /
+`onIntersectionExit` are the rapier-compatible aliases of the sensor props.
+
+### Steady state
+
+```tsx
+<Physics
+    onSettled={() => console.log('everything is asleep')}
+    onActivityChange={(active, total) => console.log(`${active}/${total} awake`)}
+>
+    {null}
+</Physics>
+```
+
+`onSettled` is **edge triggered**: it fires on the step where the last awake body goes to sleep,
+and not again until something wakes up. A world that was never active does not announce itself
+settled, and removing the last awake body settles the world (Jolt's `RemoveBody` deactivates
+synchronously).
+
+Both are driven by a count the activation listener maintains, so they cost one comparison per step
+rather than a per-frame scan of every body. The same numbers are readable at any time:
+
+| member | |
+| --- | --- |
+| `bodySystem.activeBodyCount` | awake bodies |
+| `bodySystem.simulatedBodyCount` | dynamic + kinematic bodies |
+| `bodySystem.isSettled` | `activeBodyCount === 0` |
+
+`activityChange` is emitted after that step's sleep/wake events, so a handler that counts those
+agrees with the totals.
+
+### Subscribing imperatively
+
+```tsx
+import { useJolt, useWorldEvent } from '@react-three/jolt';
+import { useEffect } from 'react';
+
+function Watcher() {
+    const { physicsSystem } = useJolt();
+
+    // either the hook…
+    useWorldEvent('collisionEnter', (e) => console.log(e.other.handle));
+
+    // …or the emitter directly; `on` returns the unsubscribe
+    useEffect(
+        () => physicsSystem.events.on('settled', () => console.log('settled')),
+        [physicsSystem]
+    );
+
+    return null;
+}
+```
+
+`JoltContext` also exposes the world emitter directly as `useJolt().events`.
+
+## Step hooks
+
+The physics step is where a force means a fixed amount of momentum: a rendered frame may run zero,
+one or five substeps, so a force applied from `useFrame` is frame-rate dependent and one applied
+from a step hook is not.
+
+```tsx
+import { useAfterPhysicsStep, useBeforePhysicsStep } from '@react-three/jolt';
+
+function Thruster() {
+    useBeforePhysicsStep((deltaTime, subframe) => {
+        // runs before pending body actions and before Step()
+    });
+    useAfterPhysicsStep((deltaTime) => {
+        // runs after Step() and after that step's contact/sensor/sleep events were dispatched
+    });
+    return null;
+}
+```
+
+Both hold the callback in a ref, so an inline arrow does not resubscribe on every render, and both
+unsubscribe on unmount. The imperative equivalents are `physicsSystem.onBeforeStep(fn)` and
+`physicsSystem.onAfterStep(fn)`, each returning its unsubscribe.
+
+The order, per substep, is:
+
+```
+beforeStep → pending body actions → joltInterface.Step() → queued events → afterStep
+```
+
+> [!NOTE]
+> There are no `onBeforeStep` / `onAfterStep` props on `<Physics>`. The hooks are the React
+> surface; they run per substep, which a prop on the world component would not make obvious.
 
 ## `useJolt()`
 
@@ -218,7 +346,8 @@ Inside `<Physics>`, `useJolt()` gives you the systems behind the components.
 import { useJolt } from '@react-three/jolt';
 
 function Inspector() {
-    const { jolt, physicsSystem, bodySystem, joltInterface, paused, debug, step } = useJolt();
+    const { jolt, physicsSystem, bodySystem, joltInterface, events, paused, debug, step } =
+        useJolt();
     // ...
     return null;
 }
@@ -229,6 +358,7 @@ function Inspector() {
 | `physicsSystem` | the `PhysicsSystem` for this world — gravity, stepping, queries, and every other system hangs off it |
 | `bodySystem` | shortcut for `physicsSystem.bodySystem`: create, look up and remove bodies |
 | `joltInterface` | the live `Jolt.JoltInterface`. Careful. |
+| `events` | the world [`Emitter`](#world-events), same object as `physicsSystem.events` |
 | `jolt` | the raw WASM module (`Raw.module`). **Very** careful — see [Memory & lifecycle](/advanced/memory) |
 | `paused`, `debug` | the world's current flags |
 | `step` | the step function the frame loop calls |
@@ -246,15 +376,18 @@ The object most of the world's behaviour lives on. Beyond the props above:
 | `accumulator` | simulation time not yet consumed by a fixed step, in seconds |
 | `resetAccumulator()` | drop it (e.g. after a long stall you handled yourself) |
 | `invalidatePoseCache()` | forget every body's cached poses; frames render live poses until it refills |
-| `addPreStepListener(fn)` / `addPostStepListener(fn)` / `removeStepListener(fn)` | fired `(deltaTime, currentSubframe)` |
+| `events` | the world [`Emitter`](#world-events) |
+| `onBeforeStep(fn)` / `onAfterStep(fn)` | [step hooks](#step-hooks), called `(deltaTime, subframe)`; each returns its unsubscribe |
+| `addPreStepListener(fn)` / `addPostStepListener(fn)` / `removeStepListener(fn)` | **deprecated** aliases of the above |
 | `getRaycaster()` / `getAdvancedRaycaster()` / `getMulticaster()` / `getShapecaster()` / `getShapeCollider()` | [queries](/api/queries) |
 | `constraintSystem` | [constraints](/api/rigid-body#constraints) |
 | `destroyed` | true once the world has been torn down |
 
-> [!WARNING]
-> Step listeners are currently removed by **function identity**, so an inline arrow function can
-> never be removed. Keep a reference if you intend to unsubscribe. A uniform `on(type, fn) => off`
-> API is coming in the next release.
+> [!NOTE]
+> `addPreStepListener` / `addPostStepListener` now return an unsubscribe too (they used to return
+> `void`, so this is source compatible), and `removeStepListener(fn)` removes *every* subscription
+> made for that function. Both are deprecated because removal by identity cannot work for the
+> inline arrows callers actually pass — keep the handle `onBeforeStep` gives you instead.
 
 ## Stepping and the frame loop
 
@@ -288,7 +421,11 @@ import { Attractor, Physics, RigidBody } from '@react-three/jolt';
             <sphereGeometry args={[0.4]} />
         </mesh>
     </Attractor>
-    <RigidBody position={[8, 4, 0]}>{/* ... */}</RigidBody>
+    <RigidBody position={[8, 4, 0]}>
+        <mesh>
+            <sphereGeometry args={[0.5]} />
+        </mesh>
+    </RigidBody>
 </Physics>;
 ```
 

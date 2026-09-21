@@ -26,9 +26,15 @@ is neither.
 Override per body, or for the whole world:
 
 ```tsx
-<RigidBody shape="sphere">{/* ... */}</RigidBody>
+// one body
+<RigidBody shape="sphere">
+    <mesh>
+        <sphereGeometry args={[1, 32, 32]} />
+    </mesh>
+</RigidBody>
 
-<Physics defaultShape="box">{/* every body that doesn't say otherwise */}</Physics>
+// every body that doesn't say otherwise
+<Physics defaultShape="box">{children}</Physics>
 ```
 
 ### `AutoShape`
@@ -40,11 +46,26 @@ type AutoShape =
     | 'capsule'
     | 'taperedCapsule'
     | 'cylinder'
+    | 'taperedCylinder'
     | 'convex'
     | 'trimesh'
     | 'compound'
     | 'heightfield';
 ```
+
+These are the types that can be inferred from — or forced onto — a geometry. `compound` is an
+alias of `staticCompound`. The [descriptor pipeline](#the-shape-pipeline) has a slightly larger
+set, `ShapeType`, which adds `staticCompound`, `mutableCompound`, `scaled` and
+`offsetCenterOfMass`.
+
+### Scaled meshes
+
+A mesh below a described object contributes its own scale: `<mesh scale={2}>` inside a
+`<RigidBody>` produces a collider twice the size, not a collider at the drawn size. The **root**
+object's scale is deliberately left out, because that belongs to the body
+([`BodyState.scale`](#scaling), which wraps the shape in a `ScaledShape` you can change again
+later) and baking it in as well would apply it twice. Pass `applyObjectScale` to
+[`describeShape`](#the-shape-pipeline) if you want it baked in anyway.
 
 ### Trimeshes
 
@@ -66,7 +87,18 @@ builds a convex hull of the same points instead. Pick a different behaviour with
 | `'error'` | throw, so the mistake is loud |
 | `'decompose'` | reserved for a convex decomposition; throws with an explanation for now |
 
-Static (and kinematic) bodies keep a real mesh shape.
+Static (and kinematic) bodies keep a real mesh shape. The converted body's mass and inertia come
+from the hull's real `GetMassProperties()` rather than a fabricated solid box.
+
+`dynamicMeshStrategy` is a **body option**, not a `<RigidBody>` or `<Physics>` prop — today the
+only way to set it is to create the body yourself:
+
+```ts
+const handle = bodySystem.addBody(mesh, { shapeType: 'trimesh', dynamicMeshStrategy: 'error' });
+```
+
+Note that the `'convex'` warning goes through `devWarn`, so you only see it after
+[`setDebug(true)`](/advanced/memory#debug-output).
 
 ## Compound shapes
 
@@ -116,22 +148,76 @@ A `<RigidBody>` containing a `<Shape>` waits for it before creating the body, an
 
 | prop | type | |
 | --- | --- | --- |
-| `type` | `AutoShape` | default `'box'` |
-| `position` | `number[]` | offset within the parent compound |
-| `rotation` | `[number, number, number]` | |
-| `scale` | `number[]` | |
+| `type` | `AutoShape \| ShapeType` | default `'box'` |
+| `position` | `number[]` | offset within the parent compound. Default `[0, 0, 0]` |
+| `rotation` | `[number, number, number]` | Euler, radians. Default `[0, 0, 0]` |
+| `scale` | `number[] \| number` | wraps the generated shape in a `ScaledShape` |
 | `radius` | `number` | sphere, capsule, cylinder, tapered capsule |
-| `height` | `number` | capsule, cylinder, tapered capsule |
-| `topRadius` | `number` | tapered capsule |
-| `size` | `number[]` | box half-extents |
+| `height` | `number` | capsule, cylinder, tapered capsule, tapered cylinder |
+| `topRadius` | `number` | tapered capsule / tapered cylinder |
+| `bottomRadius` | `number` | tapered capsule / tapered cylinder; falls back to `radius` |
+| `convexRadius` | `number` | box, cylinder, tapered cylinder, convex hull |
+| `size` | `number[] \| number` | box extents; a number means a cube |
 | `geometry` | `THREE.BufferGeometry` | derive a `convex` or `trimesh` shape from geometry |
-| `verts` / `indexes` | `number[]` | raw mesh data |
+| `points` / `vertices` / `verts` | `THREE.Vector3[] \| number[]` | hull points or mesh vertices |
+| `indices` / `indexes` | `number[][] \| number[]` | trimesh indices |
+| `object` / `mesh` | `THREE.Object3D` / `THREE.Mesh` | describe an object instead |
+| `blockSize` | `number` | heightfield block size |
 | `dynamic` | `boolean` | build a mutable compound instead of a static one |
+| `ref` | `Ref<ShapeHandle>` | `{ descriptor, shape }` |
+
+Changing `size`, `radius`, `height`, `scale` or the children now replaces the shape exactly once
+and releases the superseded one; unmounting releases everything the component owns.
 
 > [!WARNING]
-> `dynamic` cannot change after the first render — the component throws if it does. Mutable
-> compound support (`addShape`/`modifyShape` at runtime) is partially implemented; treat compound
-> shapes as static for now.
+> `dynamic` cannot change after the first render — the component throws
+> `Cannot change dynamic prop after initialization`.
+
+### Mutable compounds
+
+`<Shape dynamic>` builds a real Jolt `MutableCompoundShape`, so a child `<Shape>` mounting,
+unmounting or *moving* edits the live compound in place instead of rebuilding it — and the body is
+told, so its mass properties and broadphase bounds follow.
+
+```tsx
+import { RigidBody, Shape } from '@react-three/jolt';
+
+function Growing({ extra }: { extra: boolean }) {
+    return (
+        <RigidBody position={[0, 5, 0]}>
+            <Shape dynamic>
+                <Shape type="box" size={[1, 1, 1]} />
+                {extra && <Shape type="sphere" radius={0.5} position={[0, 1, 0]} />}
+            </Shape>
+            <mesh>
+                <boxGeometry args={[1, 1, 1]} />
+            </mesh>
+        </RigidBody>
+    );
+}
+```
+
+Changing a child's *geometry* (its size, radius, type) still rebuilds the whole compound — only
+position and rotation changes take the in-place path.
+
+The same thing imperatively, on a [`BodyState`](/api/rigid-body#shape):
+
+```ts
+const index = body.addSubShape({ type: 'sphere', radius: 0.5, position: [0, 1, 0] });
+body.modifySubShape(index, { position: [0, 1.5, 0] });
+body.removeSubShape(index);
+```
+
+Each of those calls `AdjustCenterOfMass()` and `BodyInterface.NotifyShapeChanged` for you.
+`removeSubShape` shifts every higher index down by one, so remove from the back if you are
+holding several. Calling them on a body whose shape is a *static* compound throws a message
+telling you to build it from a `{ type: 'mutableCompound' }` descriptor (or a `<Shape dynamic>`)
+instead.
+
+The free functions `addSubShape(compound, descriptor, index?)`, `removeSubShape(compound, index)`
+and `modifySubShape(compound, index, transform)` do the same to a bare shape, without notifying a
+body. `isMutableCompoundShape(shape)`, `asMutableCompoundShape(shape)`, `subShapeCount(shape)` and
+`getSubShapeTransform(compound, index)` round the set out.
 
 ## Heightfields
 
@@ -188,9 +274,113 @@ import { Floor } from '@react-three/jolt-addons';
 `<MeshFloor>` builds a Jolt mesh floor body directly and derives the three.js geometry from the
 resulting shape; it is also a readable example of talking to Jolt by hand.
 
-## Building shapes yourself
+## The shape pipeline
 
-If you need a `Jolt.Shape` outside the component tree:
+Everything above is built on one pipeline. Three overlapping entry points used to each have their
+own idea of how a three.js geometry maps onto a Jolt shape; they are now thin wrappers over
+`describeShape` → `generateShape`.
+
+```ts
+import { describeShape, generateShape, releaseShape } from '@react-three/jolt';
+import * as THREE from 'three';
+
+const geometry = new THREE.CapsuleGeometry(0.5, 2);
+
+// 1. describe: a plain object. Allocates nothing on the WASM heap and survives JSON.stringify.
+const descriptor = describeShape(geometry);
+// { type: 'capsule', radius: 0.5, height: 2, offset: [0, 0, 0] }
+
+// 2. generate: a Jolt.Shape you own, with a reference count of 1
+const shape = generateShape(descriptor);
+
+// 3. release when you're done
+releaseShape(shape);
+```
+
+| function | |
+| --- | --- |
+| `describeShape(objectOrGeometry, options?)` | → `ShapeDescriptor` |
+| `describeGeometry(geometry, options?)` / `describeObject(object, options?)` | the two halves of it |
+| `describeShapeFromOptions(type?, options?)` | build a descriptor from `<Shape>`-style options |
+| `generateShape(descriptor)` | → `Jolt.Shape`, caller owned, released with `releaseShape` |
+| `createShapeSettings(descriptor)` | → `Jolt.ShapeSettings`, for compound children and body creation |
+| `createShapeFromSettings(settings, destroySettings?)` | realise settings you already have |
+| `releaseShape(shape)` | drop your reference |
+| `descriptorKey(descriptor)` / `stableKey(value)` | a stable string identity (long vertex arrays are hashed) |
+| `scaleShape(shape, scale)` | wrap in a `ScaledShape`; `AddRef`s the inner shape and hands back one reference |
+| `validScaleFor(shape, scale)` | the nearest scale Jolt will accept for that shape |
+
+`descriptorKey` is what `<Shape>`'s effects depend on, which is why passing equal props does not
+rebuild anything.
+
+`describeShape` options:
+
+| option | |
+| --- | --- |
+| `type` | force a shape type instead of inferring one |
+| `convexRadius` | for the box/cylinder paths; clamped to what Jolt accepts |
+| `blockSize` | heightfield block size |
+| `applyObjectScale` | bake the **root** object's own scale in too (default `false` — see [Scaled meshes](#scaled-meshes)) |
+
+### `ShapeDescriptor`
+
+A serialisable description: a type tag, its size parameters, an optional local
+`position`/`rotation` (used when it is a compound child; a root descriptor is positioned by the
+body), an informational `offset`, and an optional `userData`.
+
+| tag | fields |
+| --- | --- |
+| `box` | `size` (full extents), `convexRadius?` |
+| `sphere` | `radius` |
+| `capsule` | `radius`, `height` (cylindrical section, excluding the caps) |
+| `taperedCapsule` | `height`, `topRadius`, `bottomRadius` |
+| `cylinder` | `radius`, `height` (full), `convexRadius?` |
+| `taperedCylinder` | `height`, `topRadius`, `bottomRadius`, `convexRadius?` |
+| `convex` | `points` (flat `[x, y, z, …]`), `convexRadius?` |
+| `trimesh` | `vertices`, `indices` (both flat) |
+| `heightfield` | `heights`, `sampleCount`, `scale`, `blockSize?` |
+| `staticCompound` | `children: ShapeDescriptor[]` |
+| `mutableCompound` | `children: ShapeDescriptor[]` — editable at runtime, see [above](#mutable-compounds) |
+| `scaled` | `child`, `scale` |
+| `offsetCenterOfMass` | `child`, `centerOfMass` |
+
+> [!NOTE]
+> The tags are `convex` and `trimesh` — there is no `convexHull` or `mesh`. `compound` exists only
+> in [`AutoShape`](#autoshape), where it is normalised to `staticCompound`.
+
+`offsetCenterOfMass` moves a shape's centre of mass without moving the shape: the classic
+self-righting "weeble", and how you stop a vehicle or a character tipping over.
+
+```ts
+const weeble = generateShape({
+    type: 'offsetCenterOfMass',
+    child: { type: 'sphere', radius: 1 },
+    centerOfMass: [0, -0.7, 0]
+});
+```
+
+An unknown tag throws naming the tag, rather than producing a NaN-sized shape.
+
+### Scaling
+
+`BodyState.scale` takes a `THREE.Vector3`, an array **or a plain number**, and wraps the body's
+shape in a `ScaledShape`:
+
+```ts
+body.scale = 2; // uniform
+body.scale = [2, 1, 2]; // wherever Jolt allows it
+```
+
+Re-scaling replaces the wrapper rather than stacking another one, and setting the scale it already
+has is a no-op. A sphere, capsule or tapered capsule has a single radius and cannot be scaled
+non-uniformly; asking for it falls back to a uniform scale of the largest component with a
+[`devWarn`](/advanced/memory#debug-output). `<RigidBody scale>` goes through the same path, applied
+while the body is created.
+
+### Building shapes yourself
+
+The older entry points still work unchanged and are the shortest route when you already know the
+type:
 
 ```ts
 import { createShapeFromSettings, generateShapeSettings, releaseShape } from '@react-three/jolt';
@@ -207,5 +397,9 @@ throws with Jolt's own error message if creation failed — the manual `settings
 dance leaks, and silently hands back an invalid shape on error. Bodies created through
 `bodySystem` own their shape and release it when the body is removed; a shape you make yourself
 is yours to `releaseShape`.
+
+`getShapeSettingsFromGeometry`, `getShapeSettingsFromObject`, `generateShapeSettings` and
+`generateCompoundShapeSettings` are all wrappers over the pipeline now, and keep their old
+behaviour.
 
 See [Memory & lifecycle](/advanced/memory) for the rules behind that.

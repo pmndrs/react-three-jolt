@@ -11,8 +11,8 @@
 //    lit-up panel is a single static body made of three `<Shape>` children; only the child that
 //    was actually hit hears about it, via `payload.targetSubShape`.
 import { Environment } from '@react-three/drei';
-import { Physics, RigidBody, Shape } from '@react-three/jolt';
-import { useCallback, useRef, useState } from 'react';
+import { Physics, RigidBody, Shape, useJolt } from '@react-three/jolt';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useDemo } from '../App';
 
@@ -112,12 +112,28 @@ function OneWayPlatformInner() {
  */
 function Launcher({ x }: { x: number }) {
     const body = useRef<import('@react-three/jolt').BodyState | undefined>(undefined);
+    const { physicsSystem } = useJolt();
+    // The pending re-launch. Held so it can be cancelled: without this, navigating away left a
+    // timer that fired ~700ms later and wrote `state.position` on a body whose world had already
+    // been destroyed, which traps the wasm module ("memory access out of bounds").
+    const relaunch = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
     const launch = useCallback(() => {
+        relaunch.current = undefined;
         const state = body.current;
-        if (!state) return;
+        // the world can go away between the timer being set and it firing
+        if (!state || physicsSystem.destroyed) return;
         state.position = new THREE.Vector3(x, 1, 0);
         state.velocity = new THREE.Vector3(0, 16, 0);
-    }, [x]);
+    }, [x, physicsSystem]);
+
+    useEffect(
+        () => () => {
+            if (relaunch.current !== undefined) clearTimeout(relaunch.current);
+            relaunch.current = undefined;
+        },
+        []
+    );
 
     return (
         <RigidBody
@@ -125,7 +141,11 @@ function Launcher({ x }: { x: number }) {
             position={[x, 1, 0]}
             // landing back on the floor is the cue to go round again
             onCollisionEnter={(e) => {
-                if (e.other.body && e.other.handle !== undefined) setTimeout(launch, 700);
+                if (!e.other.body || e.other.handle === undefined) return;
+                // one pending launch at a time: the ball can report several contacts as it
+                // settles, and each used to queue its own timer
+                if (relaunch.current !== undefined) clearTimeout(relaunch.current);
+                relaunch.current = setTimeout(launch, 700);
             }}
         >
             <mesh castShadow>

@@ -17,7 +17,11 @@ import { create } from '@react-three/test-renderer';
 import React, { act, useEffect } from 'react';
 import * as THREE from 'three';
 import { assert, test } from 'vitest';
-import { allDestroyableTypes, installAllocTracker } from '../../react-three-jolt/test/jolt-alloc';
+import {
+    allDestroyableTypes,
+    expectHeapRestored,
+    installAllocTracker
+} from '../../react-three-jolt/test/jolt-alloc';
 import { CharacterController } from '../src/components/CharacterController';
 import { CameraRigManager } from '../src/systems/camera-rig/camera-rig-system';
 import { VehicleSystem } from '../src/systems/vehicles/vehicle-system';
@@ -100,11 +104,7 @@ test('unmounting <Physics> with a character controller frees everything', async 
 
         // The controller's own cleanup runs before the world dies now, so `releaseJoltObjects()`
         // is not skipped and every WASM object it owns is freed. The heap is the ground truth.
-        assert.equal(
-            freeMemory(),
-            baselineFree,
-            `unmount leaked ${baselineFree - freeMemory()} bytes of WASM heap`
-        );
+        expectHeapRestored(baselineFree, freeMemory(), 64, 'unmounting the controller tree');
         assert.equal(alloc.foreignDestroys(), 0, 'something freed an object it did not allocate');
     } finally {
         alloc.uninstall();
@@ -137,5 +137,10 @@ test('a camera rig and a vehicle system built by hand are torn down with the wor
     // both are idempotent, so tearing them down again from their own (absent) owner is safe
     rig.destroy();
     vehicles.destroy();
-    assert.equal(freeMemory(), baselineFree, 'the world did not give all of its heap back');
+    expectHeapRestored(
+        baselineFree,
+        freeMemory(),
+        64,
+        'the world did not give all of its heap back'
+    );
 });

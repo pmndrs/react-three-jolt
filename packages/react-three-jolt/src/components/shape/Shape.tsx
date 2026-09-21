@@ -14,7 +14,6 @@
 // different shape rather than a different placement.
 import type Jolt from 'jolt-physics';
 import React, {
-    createContext,
     forwardRef,
     memo,
     type ReactNode,
@@ -47,8 +46,9 @@ import {
     stableKey
 } from '../../systems';
 import type { BodyEventMap, CollisionPayload } from '../../systems/events';
-import { vec3 } from '../../utils';
+import { devWarn, vec3 } from '../../utils';
 import { RigidBodyContext } from '../RigidBody';
+import { ShapeContext } from './context';
 
 // creates a Jolt Shape from three.js meshes.
 //NOTE by default doesn't render them
@@ -81,6 +81,22 @@ export interface ShapeProps extends Omit<ShapeOptions, 'children'> {
     userData?: number;
     /** A label carried on the descriptor, readable from `payload.targetSubShape.descriptor`. */
     name?: string;
+
+    //* Body level props a collider is allowed to ask for (issue #155) ----
+    /**
+     * Make the **body** a sensor. Jolt has no per-sub-shape sensors - `SetIsSensor` is a body
+     * flag - so this is only honoured when *every* collider on the body asks for it; a body with
+     * a mix of sensor and solid colliders throws. See the colliders docs.
+     */
+    sensor?: boolean;
+    /**
+     * Friction for the **body**. Jolt only carries a `PhysicsMaterial` per shape for heightfield
+     * and mesh shapes, so there is no per-sub-shape friction for a box or a sphere: setting this
+     * warns and writes `BodyState.friction`. `<RigidBody friction>` wins when both are set.
+     */
+    friction?: number;
+    /** Restitution for the **body**, with the same caveat as {@link friction}. */
+    restitution?: number;
 
     //* Events, scoped to this sub shape ------------------
     // Subscribed on the parent body and filtered by sub shape, so they only fire for contacts on
@@ -120,16 +136,9 @@ export type ShapeHandle = {
     shape: Jolt.Shape | undefined;
 };
 
-export interface ShapeContext {
-    shape: Jolt.Shape | undefined;
-    /** register a child descriptor with this compound; returns the child's index */
-    addShape: (descriptor: ShapeDescriptor) => number;
-    /** replace the descriptor at `index` and rebuild */
-    modifyShape: (index: number, descriptor: ShapeDescriptor) => void;
-    /** drop the child at `index` and rebuild */
-    removeShape: (index: number) => void;
-}
-export const ShapeContext = createContext<ShapeContext | undefined>(undefined!);
+export type { ShapeContext as ShapeContextValue } from './context';
+// Re-exported from its own module so <RigidBody> can provide it without an import cycle.
+export { ShapeContext } from './context';
 
 /**
  * Subscribe one of the body's contact events but only let through the ones whose sub shape
@@ -178,7 +187,7 @@ const shapePropsKey = (type: string, options: ShapeOptions) =>
         mesh: options.mesh?.uuid
     });
 
-export const Shape: React.FC<ShapeProps> = memo(
+export const Shape: React.FC<ShapeProps & { ref?: React.Ref<ShapeHandle> }> = memo(
     forwardRef<ShapeHandle, ShapeProps>((props, forwardedRef) => {
         const {
             children,
@@ -189,6 +198,9 @@ export const Shape: React.FC<ShapeProps> = memo(
             scale,
             userData,
             name,
+            sensor,
+            friction,
+            restitution,
             onCollisionEnter,
             onCollisionPersist,
             onCollisionExit,
@@ -474,6 +486,16 @@ export const Shape: React.FC<ShapeProps> = memo(
             if (parentShape) {
                 const descriptor = resolveDescriptor();
                 const key = descriptorKey(descriptor);
+                // a shape that started out owning the body's shape and has since gained a
+                // compound parent (its siblings changed) must let go of what it built
+                if (baseShape.current || scaledShape.current) {
+                    releaseShape(scaledShape.current);
+                    releaseShape(baseShape.current);
+                    scaledShape.current = undefined;
+                    baseShape.current = undefined;
+                    builtDescriptorKey.current = undefined;
+                    appliedScaleKey.current = undefined;
+                }
                 ref.current = { descriptor, shape: undefined };
                 if (indexInParent.current === undefined)
                     indexInParent.current = parentShape.addShape(descriptor);
@@ -524,14 +546,46 @@ export const Shape: React.FC<ShapeProps> = memo(
             body.shapeDescriptor = resolveDescriptor();
         }, [parentShape, body, resolveDescriptor]);
 
+        //* Body level props (issue #155) ---------------------
+        // A collider's `sensor` is a request the *body* arbitrates: Jolt's sensor flag is per
+        // body, so `<RigidBody>` collects every collider's answer and either flips the body or
+        // throws. Declaring costs one map entry and happens for solid colliders too, because the
+        // policy is "all of them or none".
+        const declareCollider = rigidBody?.declareCollider;
+        const colliderToken = useRef({});
+        useEffect(() => {
+            if (!declareCollider) return;
+            return declareCollider(colliderToken.current, { sensor });
+        }, [declareCollider, sensor]);
+
+        // Friction/restitution have nowhere per-sub-shape to live for a convex shape, so they
+        // are the body's. Warned rather than silently dropped (or silently global).
+        useEffect(() => {
+            if (!body || (friction === undefined && restitution === undefined)) return;
+            devWarn(
+                'react-three-jolt: jolt has no per-sub-shape material for convex shapes, so a ' +
+                    "collider's `friction`/`restitution` is applied to the whole body. Set it on " +
+                    '<RigidBody> instead to make that explicit (it wins when both are set).'
+            );
+            if (friction !== undefined) body.friction = friction;
+            if (restitution !== undefined) body.restitution = restitution;
+        }, [body, friction, restitution]);
+
         //* Scoped events -------------------------------------
         // A root <Shape> that is itself the compound cannot be matched by user data (Jolt
         // resolves a contact down to the leaf), but it *is* the whole body, so its handlers
         // simply are the body's. Read through a callback so this stays right as children mount.
-        const isScoped = useCallback(
-            () => parentShapeRef.current !== undefined || !subShapes.current.some(Boolean),
-            []
-        );
+        // #155: `<RigidBody>` is itself a compound host now, so "has a parent context" no longer
+        // means "is a sub shape". A shape registered with the *body root* that ends up being the
+        // body's whole shape (no compound wrapper) is still the body, and its handlers are the
+        // body's.
+        const isScoped = useCallback(() => {
+            const parent = parentShapeRef.current;
+            const isLeaf = !subShapes.current.some(Boolean);
+            if (!parent) return isLeaf;
+            if (parent.isBodyRoot && parent.isSoleShape?.(indexInParent.current)) return isLeaf;
+            return true;
+        }, []);
         useSubShapeEvent(body, 'collisionEnter', onCollisionEnter, shapeUserData, isScoped);
         useSubShapeEvent(body, 'collisionPersist', onCollisionPersist, shapeUserData, isScoped);
         useSubShapeEvent(body, 'collisionExit', onCollisionExit, shapeUserData, isScoped);
@@ -550,3 +604,6 @@ export const Shape: React.FC<ShapeProps> = memo(
     })
 );
 Shape.displayName = 'Shape';
+// #155: the marker <RigidBody> looks for when deciding whether it has to wait for child shapes.
+// A displayName string match only ever worked for <Shape> itself.
+(Shape as { isJoltShape?: boolean }).isJoltShape = true;

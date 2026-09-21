@@ -520,13 +520,23 @@ export class PhysicsSystem {
             state.readPose(_vector3, _quaternion);
         }
 
-        // Convert that into the object's parent space -> _position / _rotation
+        // Convert that into the object's parent space -> _matrix4
         _matrix4
             // activeScale rather than the `scale` getter: same value, but typed as a Vector3
             .compose(_vector3, _quaternion, state.activeScale)
-            .premultiply(state.invertedWorldMatrix)
-            .decompose(_position, _rotation, _scale);
+            .premultiply(state.invertedWorldMatrix);
 
+        // #168: with `matrixAutoUpdate` off, `_matrix4` above already *is* the object's local
+        // matrix - write it straight through and skip decomposing it into position/quaternion/
+        // scale only for `update()` to recompose them right back into a matrix a moment later.
+        // Only meaningful for a non-instance object (an instance's transform is never driven by
+        // position/quaternion in the first place).
+        if (state.matrixAutoUpdate === false && !state.isInstance) {
+            state.setLocalMatrix(_matrix4);
+            return;
+        }
+
+        _matrix4.decompose(_position, _rotation, _scale);
         state.update(_position, _rotation);
     };
 
