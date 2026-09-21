@@ -22,9 +22,8 @@ Nothing here is bundled — every one of these has to exist in your app, at thes
 
 | package | range | why |
 | --- | --- | --- |
-| `react`, `react-dom` | `>=19.0 <19.3` | the range `@react-three/fiber` 10 accepts. `react@19.3` is **outside** it; use `19.2.x`. |
+| `react`, `react-dom` | `>=19.0.0` | `@react-three/fiber` 10 is currently tested against `19.2.x`; that is the safest choice today. |
 | `@react-three/fiber` | `>=10.0.0-0` | currently `10.0.0-alpha.5` |
-| `@react-three/drei` | `>=11.0.0-0` | currently `11.0.0-alpha.7`; used by [`<Heightfield>`](/api/shapes#heightfields) |
 | `three` | `>=0.185` | |
 | `jolt-physics` | `>=1.1.0` | the engine itself |
 
@@ -32,7 +31,6 @@ Nothing here is bundled — every one of these has to exist in your app, at thes
 npm install react@19.2.8 react-dom@19.2.8 \
   three@^0.186.0 \
   @react-three/fiber@10.0.0-alpha.5 \
-  @react-three/drei@11.0.0-alpha.7 \
   jolt-physics@^1.1.0 \
   @react-three/jolt
 ```

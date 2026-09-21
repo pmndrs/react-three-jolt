@@ -1,7 +1,7 @@
 // Regression coverage for #152: <Heightfield>'s image-loading effect used to be a bare async
 // function with no cancellation, so a superseded (or post-unmount) load could still win the race
 // and create/leak a jolt body. We mock the actual heightmap loader (`applyHeightmapToPlane`) so
-// we can resolve loads in an arbitrary order deterministically, and drei's `useTexture` so the
+// we can resolve loads in an arbitrary order deterministically, and r3f's `useTexture` so the
 // display-texture path never needs a real network/image load in this environment. Everything
 // downstream of the mock -- the cancellation guard and the real `BodySystem.addHeightfield` /
 // `removeBody` calls -- runs for real against the real jolt-physics wasm module.
@@ -17,7 +17,10 @@ import { initJolt } from '../src/raw';
 import type { BodySystem } from '../src/systems/body-system';
 import { setDebug } from '../src/utils';
 
-vi.mock('@react-three/drei', () => ({
+// Only `useTexture` is stubbed; the rest of r3f is the real module, since the renderer and the
+// component tree under test both need it.
+vi.mock('@react-three/fiber', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@react-three/fiber')>()),
     useTexture: vi.fn(() => ({}))
 }));
 

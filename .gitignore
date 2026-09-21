@@ -10,3 +10,6 @@ coverage
 
 # @pmndrs/docs local build output (yarn docs / yarn docs:build)
 docs/out
+
+# Claude Code agent worktrees and local session state
+.claude

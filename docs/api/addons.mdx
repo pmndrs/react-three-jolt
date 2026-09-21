@@ -254,6 +254,10 @@ function Rig({ controls }: { controls: CameraControls }) {
 }
 ```
 
+drei is not a dependency of this package. The `controls` parameter is typed as
+`CameraControlsLike` — anything with a `rotate(azimuth, polar)` method satisfies it, and drei's
+`CameraControls` does so without a cast.
+
 ## `<Floor>`
 
 A static box floor, because every scene needs one:

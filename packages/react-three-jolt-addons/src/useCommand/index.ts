@@ -1,7 +1,6 @@
 /* use command is a hook to handle user inputs and map them
 to commands rather than specifically to keystrokes or gamepad inputs */
 
-import type { CameraControls } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Command, CommandOptions } from './Command';
@@ -92,9 +91,19 @@ export function useCommand(
     return command;
 }
 
+/**
+ * The slice of a camera-controls instance this hook actually drives. Structural, so drei's
+ * `CameraControls` satisfies it as-is -- and so does anything else exposing the same `rotate`.
+ * Typed here rather than imported so that `@react-three/drei` isn't a peer dependency of this
+ * package for the sake of one method signature.
+ */
+export type CameraControlsLike = {
+    rotate(azimuthAngle: number, polarAngle: number, enableTransition?: boolean): unknown;
+};
+
 export function useGamepadForCameraControls(
     commandString: string,
-    controls: CameraControls,
+    controls: CameraControlsLike,
     options?: CommandOptions
 ) {
     // lets be 100% the command exists

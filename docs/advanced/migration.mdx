@@ -19,20 +19,17 @@ All three packages now require:
 
 | package | before | now |
 | --- | --- | --- |
-| `react` / `react-dom` | 18.2 | `>=19.0 <19.3` (use `19.2.x`; `19.3` is outside r3f 10's range) |
+| `react` / `react-dom` | 18.2 | `>=19.0.0` (r3f 10 is tested against `19.2.x`) |
 | `@react-three/fiber` | 8.16 | `>=10.0.0-0` |
 | `three` | 0.163, undeclared | `>=0.185`, now a declared peer |
-| `@react-three/drei` | undeclared | `>=11.0.0-0`, now a **required** peer |
 | `jolt-physics` | `^0.22.0`, a dependency | `>=1.1.0`, now a **peer** |
 | node | — | `>=22` |
 
-Two of those need action even if your code doesn't change:
+One of those needs action even if your code doesn't change:
 
 - **`jolt-physics` is a peer now.** It is no longer installed for you — add it to your app. In
   exchange you get to pick the [build variant](/getting-started/installation#choosing-a-jolt-build),
   and you can no longer end up with two copies of the WASM module in one bundle.
-- **`drei` is a peer now** (it was always imported by `<Heightfield>`, just never declared).
-  Install it, or `@react-three/jolt` won't resolve.
 
 React 19 and r3f 10 have their own migration notes; if you are coming from r3f 8 you are making
 two major jumps at once.
@@ -73,7 +70,6 @@ Everything that can break a compiling app, by package.
 | **`Raw.joltInterfaces` / `PhysicsSystem.maxInterfaces`** | a fixed three-world cache keyed by React's `useId()` | **gone.** [`JoltModule.registerInterface`/`getInterface`/`releaseInterface`/`interfaceCount`](/advanced/memory#reaching-the-module) replace it, with no fixed cap — see [Destroying a world](/api/physics#destroying-a-world) |
 | **`PhysicsSystem`'s constructor argument** | the interface cache key | a debug label only. `destroy(pid)`'s argument is likewise ignored. Both still compile |
 | **`jolt-physics`** | a dependency | a peer — add it to your app |
-| **`@react-three/drei`** | undeclared | a required peer |
 | **Console output** | ~17 unconditional `console.log`s | off unless you call `setDebug(true)` |
 
 `<RigidBody>`'s `onContactAdded` / `onContactRemoved` / `onContactPersisted` props still work as
