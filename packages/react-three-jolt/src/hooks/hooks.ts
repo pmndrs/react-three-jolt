@@ -53,7 +53,7 @@ export function useConst<T>(initialValue: T | (() => T)): T {
 // also from fluentui
 /**
  * @deprecated Issue #57: every component in this library has been converted to a plain
- * `useEffect(() => { ... }, [])` (`RigidBody`, `Physics`, `InstancedRigidBodyMesh` - the
+ * `useEffect(() => { ... }, [])` (`RigidBody`, `Physics`, `InstancedRigidBodies` - the
  * conversion the FluentUI-style split into `useMount`/`useUnmount` used to make easier is now
  * done). Kept, unexported from nowhere it wasn't already, for one release for anything external
  * that imported it directly; it will be removed in a future major version. Prefer a plain

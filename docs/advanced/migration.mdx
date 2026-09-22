@@ -140,7 +140,7 @@ from only the first channel.
 - **[Events](/api/rigid-body#events).** `onCollisionEnter` / `onCollisionPersist` /
   `onCollisionExit` / `onSensorEnter` / `onSensorExit` / `onIntersectionEnter` /
   `onIntersectionExit` / `onSleep` / `onWake` / `onContactValidate` on `<RigidBody>` and
-  `<InstancedRigidBodyMesh>`; the same names plus `onSettled` and `onActivityChange` on
+  `<InstancedRigidBodies>`; the same names plus `onSettled` and `onActivityChange` on
   [`<Physics>`](/api/physics#world-events); `bodyState.on(type, fn)`, `physicsSystem.events`, and
   the `useBodyEvent` / `useWorldEvent` hooks. New exported types: `CollisionTarget`,
   `CollisionPayload`, `CollisionEnterPayload`, `CollisionExitPayload`, `SensorPayload`,
@@ -308,7 +308,7 @@ from only the first channel.
   `rigidBodyRef.current`, a mutable ref, which is not reactive — on the render that created the
   body the effect had already run with `undefined`. If you concluded that contact props didn't
   work, they do now.
-- **`<InstancedRigidBodyMesh>` never destroyed its bodies or its `InstancedMesh`.** Both are
+- **`<InstancedRigidBodies>` never destroyed its bodies or its `InstancedMesh`.** Both are
   released on unmount now, `count` changes add and remove bodies incrementally, and shrinking
   `count` no longer copies the old, larger buffer over the new one.
 - **`BodyState.color` on a non-instanced body** fell through into `setColorAt`, a method only
@@ -325,7 +325,7 @@ from only the first channel.
   inertia tensor with the mass and leaves the body's degrees of freedom alone, where the old path
   pushed a fresh `MassProperties` through `SetMassProperties` and quietly unlocked every axis you
   had locked. See [Material and mass](/api/rigid-body#material-and-mass).
-- **`<InstancedRigidBodyMesh count={0}>` mounts and grows to N**, instead of starting broken.
+- **`<InstancedRigidBodies count={0}>` mounts and grows to N**, instead of starting broken.
 - Setting a static body's `position`/`rotation` used to do nothing visible — it moved the Jolt body
   but never synced the three.js object. `BodySystem.movedStatics` fixes that; see [Moving a static
   body](/api/rigid-body#moving-a-static-body).
