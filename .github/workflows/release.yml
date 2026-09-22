@@ -12,17 +12,25 @@ jobs:
     name: Release
     if: github.repository_owner == 'pmndrs'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # changesets pushes the version branch
+      pull-requests: write # ...and opens the "Version Packages" PR
+      id-token: write # npm provenance / trusted publishing (OIDC)
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
 
       - name: Setup Node.js 22.x
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
+          cache: yarn
 
       - name: Install Dependencies
-        run: yarn
+        run: yarn install --immutable
 
       - name: Create Release Pull Request or Publish to npm
         id: changesets
@@ -33,4 +41,13 @@ jobs:
           commit: "chore(changeset): publish packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This is a Yarn Berry workspace, so changesets publishes with `yarn npm publish`,
+          # not `npm publish`. Yarn does not read NPM_TOKEN - it reads npmAuthToken, which
+          # YARN_NPM_AUTH_TOKEN sets. NPM_TOKEN is kept because changesets/action uses it to
+          # write the .npmrc it checks registry state with.
+          #
+          # If a trusted publisher is configured for these packages on npmjs.com, Yarn 4.18
+          # prefers OIDC and ignores the token entirely (it needs the `id-token: write`
+          # permission above, and nothing else).
+          YARN_NPM_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
