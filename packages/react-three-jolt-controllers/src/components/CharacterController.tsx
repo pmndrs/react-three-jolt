@@ -3,7 +3,11 @@ import { useEventCallback, useForwardedRef, useJolt } from '@react-three/jolt';
 import { type CommandVector, isCommandVector, useCommand } from '@react-three/jolt-addons';
 import React, { memo, type ReactNode, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import type { CharacterEventMap, HeadHitInfo } from '../systems/character-controller';
+import type {
+    CharacterEventMap,
+    CharacterInnerBodyOptions,
+    HeadHitInfo
+} from '../systems/character-controller';
 import { CharacterControllerSystem } from '../systems/character-controller';
 /** What `<CharacterController>` puts on its context; `undefined` until the system exists. */
 export interface CharacterControllerContextValue {
@@ -40,6 +44,25 @@ export function useCharacterEvent<K extends keyof CharacterEventMap>(
 
 export interface CControllerProps extends Omit<ThreeElements['object3D'], 'ref' | 'children'> {
     children?: ReactNode;
+    /**
+     * Give the character a real rigid body in the simulation, so other bodies collide with it
+     * instead of passing through it (issue #73). See
+     * {@link CharacterInnerBodyOptions.innerBody}.
+     *
+     * Read once, when the controller is created - Jolt builds the inner body inside the
+     * `CharacterVirtual` constructor and has no API to add or remove one later. Changing this
+     * prop afterwards has no effect; remount the component (a `key` change) to switch it.
+     *
+     * @default false
+     */
+    innerBody?: boolean;
+    /**
+     * Object layer for the inner body. Ignored unless `innerBody` is set. Read once, like
+     * `innerBody`. See {@link CharacterInnerBodyOptions.innerBodyLayer}.
+     *
+     * @default Layer.MOVING
+     */
+    innerBodyLayer?: number;
     /** Capsule radius, in metres. Wired to `setCapsule` at creation and on every change. @default 1 */
     radius?: number;
     /** Capsule height, in metres. Wired to `setCapsule` at creation and on every change. @default 2 */
@@ -106,6 +129,8 @@ export const CharacterController = memo(function CharacterController(props: CCon
     const {
         ref: forwardedRef,
         children,
+        innerBody = false,
+        innerBodyLayer,
         radius = 1,
         height = 2,
         position,
@@ -147,7 +172,7 @@ export const CharacterController = memo(function CharacterController(props: CCon
     const cameraRotation = new THREE.Quaternion();
     // set values and initializers for characterSystem
     useEffect(() => {
-        const newCCS = new CharacterControllerSystem(physicsSystem);
+        const newCCS = new CharacterControllerSystem(physicsSystem, { innerBody, innerBodyLayer });
         if (objectRef.current) newCCS.add(objectRef.current);
         newCCS.addToScene(scene);
         // expose the controller through the forwarded ref (this is what the ref was always
@@ -166,7 +191,7 @@ export const CharacterController = memo(function CharacterController(props: CCon
             characterRef.current = null;
             setCharacterSystem(undefined);
         };
-    }, [physicsSystem, scene]);
+    }, [physicsSystem, scene, innerBody, innerBodyLayer]);
 
     // set debugging
     useEffect(() => {

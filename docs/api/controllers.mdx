@@ -44,19 +44,54 @@ export function Player() {
 
 | prop | type | default | |
 | --- | --- | --- | --- |
-| `radius` | `number` | `1` | **not applied yet** — the capsule is rebuilt from the system |
-| `height` | `number` | `2` | same |
+| `radius` | `number` | `1` | capsule radius, applied at creation and on every change |
+| `height` | `number` | `2` | capsule height, same |
 | `debug` | `boolean` | `true` | draws the capsule. Note the default is *on* |
-| `position` | — | | accepted, not yet applied |
-| `anchor` | — | | accepted, not yet applied |
+| `position` | `Vector3` \| tuple | | the character's real position — sets it at creation, teleports on change |
+| `innerBody` | `boolean` | `false` | give the character a body the world collides with — see below |
+| `innerBodyLayer` | `number` | `Layer.MOVING` | object layer for that body |
+| `ref` | `Ref<CharacterControllerSystem>` | | hands back the system itself |
 
 Default bindings (from the [commander](/api/addons)): `WASD`/left stick to move, `Space` to
 jump, `Shift` to run, `C` to crouch. The move direction is rotated by the camera's horizontal
 rotation, so "forward" means forward on screen.
 
+### Being collided with
+
+A `CharacterVirtual` is not part of the simulation. It collides *against* the world — it walks on
+floors, it is stopped by walls — but the world does not collide against it. Push a crate into an
+NPC built this way and the crate goes straight through.
+
+`innerBody` fixes that. Jolt gives the character a real kinematic body, keeps it glued to the
+capsule, and everything else in the world collides with that:
+
+```tsx
+<CharacterController innerBody radius={0.5} height={2}>
+    <mesh>
+        <capsuleGeometry args={[0.5, 1]} />
+        <meshStandardMaterial color="white" />
+    </mesh>
+</CharacterController>
+```
+
+This is what Jolt's standard (non-virtual) `Character` class is usually reached for. That class
+isn't exposed by `jolt-physics`, and its author considers it inferior to `CharacterVirtual` — an
+inner body gets you the property it was wanted for without giving up stair walking, crouching or
+any of the rest.
+
+It costs one extra body and the narrowphase work that implies, so it is off by default. Turn it
+on for characters other things bump into (NPCs, other players) and leave it off for a
+first-person player that nothing ever collides with.
+
 > [!NOTE]
-> `<CharacterController>` does **not** accept a `ref` in its prop types today (it is typed as a
-> plain FC). To reach the system, read it from the context it provides.
+> `innerBody` and `innerBodyLayer` are read **once**, when the controller is built: Jolt creates
+> the inner body inside the `CharacterVirtual` constructor and has no API to add, remove or
+> re-layer one afterwards. Changing either prop remounts the controller. `setCapsule` does keep
+> the inner body's *shape* in step, so resizing works normally.
+
+`CharacterControllerSystem` exposes `hasInnerBody` and `innerBodyId` (the Jolt `BodyID`, or
+`undefined`). The body belongs to the character — don't remove it through `BodySystem`, and
+don't hold the id past `destroy()`.
 
 ### `CharacterControllerSystem`
 
