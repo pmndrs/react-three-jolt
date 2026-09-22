@@ -1,6 +1,12 @@
 import { useFrame } from '@react-three/fiber';
-import { Physics, Raycaster, RaycastHit, RigidBody, useRaycaster } from '@react-three/jolt';
-import { useCommand } from '@react-three/jolt-addons';
+import {
+    Physics,
+    type Raycaster,
+    type RaycastHit,
+    RigidBody,
+    useRaycaster
+} from '@react-three/jolt';
+import { useCommand } from '@react-three/jolt/addons';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 

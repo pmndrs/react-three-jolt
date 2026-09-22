@@ -23,8 +23,8 @@ yarn build
 | path | |
 | --- | --- |
 | `packages/react-three-jolt` | `@react-three/jolt` — components, hooks, systems |
-| `packages/react-three-jolt-addons` | `@react-three/jolt-addons` — [input commands](/api/addons), helper components |
-| `packages/react-three-jolt-controllers` | `@react-three/jolt-controllers` — [character, camera rig, vehicles](/api/controllers) |
+| `packages/react-three-jolt/src/addons` | `@react-three/jolt/addons` — [input commands](/api/addons), helper components |
+| `packages/react-three-jolt/src/controllers` | `@react-three/jolt/controllers` — [character, camera rig, vehicles](/api/controllers) |
 | `apps/examples` | the Vite demo app |
 | `docs/` | this site (MDX) |
 
@@ -159,4 +159,4 @@ jolt-physics 1.1.0, a `CharacterVirtual` stepping against bodies invokes six of
 `CharacterVsCharacterCollision` is installed. Emscripten's `hasOwnProperty` check is lazy — one
 per call site — so the unused ones need no stubs. If you are about to add a no-op callback
 "because the IDL says so", write a test that fails when Jolt starts calling it instead
-(`packages/react-three-jolt-controllers/test/character-contact-listener.test.ts` is the pattern).
+(`packages/react-three-jolt/test/controllers/character-contact-listener.test.ts` is the pattern).

@@ -41,11 +41,35 @@
             },
             "default": "./dist/index.mjs"
         },
+        "./addons": {
+            "import": {
+                "types": "./dist/addons.d.mts",
+                "default": "./dist/addons.mjs"
+            },
+            "require": {
+                "types": "./dist/addons.d.cts",
+                "default": "./dist/addons.cjs"
+            },
+            "default": "./dist/addons.mjs"
+        },
+        "./controllers": {
+            "import": {
+                "types": "./dist/controllers.d.mts",
+                "default": "./dist/controllers.mjs"
+            },
+            "require": {
+                "types": "./dist/controllers.d.cts",
+                "default": "./dist/controllers.cjs"
+            },
+            "default": "./dist/controllers.mjs"
+        },
         "./package.json": "./package.json"
     },
     "sideEffects": false,
     "files": [
         "dist/index.*",
+        "dist/addons.*",
+        "dist/controllers.*",
         "README.md",
         "LICENSE",
         "CHANGELOG.md"
@@ -96,5 +120,15 @@
         "typescript": "^7.0.2",
         "vite": "^8.3.0",
         "vitest": "^5.0.1"
+    },
+    "typesVersions": {
+        "*": {
+            "addons": [
+                "./dist/addons.d.ts"
+            ],
+            "controllers": [
+                "./dist/controllers.d.ts"
+            ]
+        }
     }
 }

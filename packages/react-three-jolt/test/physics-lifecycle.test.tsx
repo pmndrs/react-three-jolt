@@ -248,7 +248,7 @@ function ConstrainedPair() {
 
 /**
  * Stands in for a character controller / camera rig in the core package (the real ones live in
- * @react-three/jolt-controllers, which cannot be imported from here). Same shape: it owns real
+ * @react-three/jolt/controllers, which cannot be imported from here). Same shape: it owns real
  * WASM objects and a body, registers itself with the world, and unregisters in its own destroy.
  */
 class FakeController {

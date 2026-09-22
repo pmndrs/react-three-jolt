@@ -1,13 +1,13 @@
 import { Environment } from '@react-three/drei';
 import { Heightfield, Physics, RigidBody } from '@react-three/jolt';
-import { Floor } from '@react-three/jolt-addons';
+import { Floor } from '@react-three/jolt/addons';
 //import { CameraRig } from './lib/components/CameraRig';
 import {
     Vehicle,
     type VehicleEngineState,
     type VehicleSettings,
     type VehicleSkidEvent
-} from '@react-three/jolt-controllers';
+} from '@react-three/jolt/controllers';
 import { folder, useControls } from 'leva';
 import { useCallback, useMemo, useRef } from 'react';
 import * as THREE from 'three';

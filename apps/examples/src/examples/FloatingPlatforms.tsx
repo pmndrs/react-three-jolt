@@ -5,7 +5,7 @@
 import { Environment } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { type BodyState, InstancedRigidBodies, Physics, RigidBody } from '@react-three/jolt';
-import { Floor } from '@react-three/jolt-addons';
+import { Floor } from '@react-three/jolt/addons';
 import { button, useControls } from 'leva';
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';

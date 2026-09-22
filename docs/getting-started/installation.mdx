@@ -8,13 +8,24 @@ nav: 1
 npm install @react-three/jolt jolt-physics
 ```
 
-`@react-three/jolt` ships three packages. The core one is all you need to start; the other two
-are optional:
+That is the whole library. The character controller, camera rig, vehicles and input helpers ship
+in the same package, behind subpath imports — there is nothing extra to install:
 
-```bash
-npm install @react-three/jolt-addons        # input commands, helper components
-npm install @react-three/jolt-controllers   # character controller, camera rig, vehicles
+```ts
+import { Physics, RigidBody } from '@react-three/jolt';
+import { useCommand } from '@react-three/jolt/addons';
+import { CharacterController } from '@react-three/jolt/controllers';
 ```
+
+Each subpath is its own bundle, so importing the root pulls no controller or addon code into
+your build.
+
+> [!NOTE]
+> These used to be the separate packages `@react-three/jolt-addons` and
+> `@react-three/jolt-controllers`. They were always released in lockstep with core, and keeping
+> them apart risked a second copy of core in the dependency tree — which breaks badly, because
+> core owns a single global handle on the WASM module. Both npm packages are deprecated; change
+> the import path and delete them from your `package.json`.
 
 ## Peer dependencies
 

@@ -20,6 +20,6 @@
         "noUnusedParameters": true,
         "noFallthroughCasesInSwitch": true
     },
-    "include": ["src", "../../packages/react-three-jolt-addons/src/components/Floor.tsx"],
+    "include": ["src"],
     "references": [{ "path": "./tsconfig.node.json" }]
 }

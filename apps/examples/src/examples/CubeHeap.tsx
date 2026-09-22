@@ -1,12 +1,12 @@
 import { Environment } from '@react-three/drei';
 import {
-    BodyState,
+    type BodyState,
     InstancedRigidBodies,
     Physics,
     RigidBody,
     useSetInterval
 } from '@react-three/jolt';
-import { Floor } from '@react-three/jolt-addons';
+import { Floor } from '@react-three/jolt/addons';
 import { useControls } from 'leva';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';

@@ -11,13 +11,6 @@ export default defineConfig({
     ssr: { resolve: { mainFields } },
     test: {
         environment: 'happy-dom',
-        setupFiles: ['./test/setup.ts'],
-        server: {
-            deps: {
-                // drei is esm but pulls in cjs-only deps (detect-gpu); node's named-export
-                // detection gives up on those, vite's interop does not.
-                inline: [/@react-three\/drei/]
-            }
-        }
+        setupFiles: ['./test/setup.ts']
     }
 });
