@@ -8,7 +8,7 @@
         "react",
         "three"
     ],
-    "version": "0.0.1",
+    "version": "0.1.0",
     "author": "Dennis Smolek",
     "contributors": [
         "Isaac Mason <isaac@isaacmason.com>"
@@ -63,7 +63,7 @@
         "three": ">=0.185"
     },
     "dependencies": {
-        "@react-three/jolt": "0.0.1"
+        "@react-three/jolt": "0.1.0"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.14",

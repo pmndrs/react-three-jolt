@@ -1467,13 +1467,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@react-three/jolt-addons@npm:0.0.1, @react-three/jolt-addons@workspace:packages/react-three-jolt-addons":
+"@react-three/jolt-addons@npm:0.1.0, @react-three/jolt-addons@workspace:packages/react-three-jolt-addons":
   version: 0.0.0-use.local
   resolution: "@react-three/jolt-addons@workspace:packages/react-three-jolt-addons"
   dependencies:
     "@biomejs/biome": "npm:^2.5.14"
     "@react-three/fiber": "npm:10.0.0-alpha.5"
-    "@react-three/jolt": "npm:0.0.1"
+    "@react-three/jolt": "npm:0.1.0"
     "@react-three/test-renderer": "npm:10.0.0-alpha.5"
     "@rollup/plugin-commonjs": "npm:^29.0.3"
     "@rollup/plugin-node-resolve": "npm:^16.0.3"
@@ -1504,14 +1504,14 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@react-three/jolt-controllers@npm:0.0.1, @react-three/jolt-controllers@workspace:packages/react-three-jolt-controllers":
+"@react-three/jolt-controllers@npm:0.1.0, @react-three/jolt-controllers@workspace:packages/react-three-jolt-controllers":
   version: 0.0.0-use.local
   resolution: "@react-three/jolt-controllers@workspace:packages/react-three-jolt-controllers"
   dependencies:
     "@biomejs/biome": "npm:^2.5.14"
     "@react-three/fiber": "npm:10.0.0-alpha.5"
-    "@react-three/jolt": "npm:0.0.1"
-    "@react-three/jolt-addons": "npm:0.0.1"
+    "@react-three/jolt": "npm:0.1.0"
+    "@react-three/jolt-addons": "npm:0.1.0"
     "@react-three/test-renderer": "npm:10.0.0-alpha.5"
     "@rollup/plugin-commonjs": "npm:^29.0.3"
     "@rollup/plugin-node-resolve": "npm:^16.0.3"
@@ -1546,7 +1546,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@react-three/jolt@npm:0.0.1, @react-three/jolt@workspace:packages/react-three-jolt":
+"@react-three/jolt@npm:0.1.0, @react-three/jolt@workspace:packages/react-three-jolt":
   version: 0.0.0-use.local
   resolution: "@react-three/jolt@workspace:packages/react-three-jolt"
   dependencies:
@@ -3286,9 +3286,9 @@ __metadata:
     "@biomejs/biome": "npm:^2.5.14"
     "@react-three/drei": "npm:11.0.0-alpha.7"
     "@react-three/fiber": "npm:10.0.0-alpha.5"
-    "@react-three/jolt": "npm:0.0.1"
-    "@react-three/jolt-addons": "npm:0.0.1"
-    "@react-three/jolt-controllers": "npm:0.0.1"
+    "@react-three/jolt": "npm:0.1.0"
+    "@react-three/jolt-addons": "npm:0.1.0"
+    "@react-three/jolt-controllers": "npm:0.1.0"
     "@types/react": "npm:~19.2.18"
     "@types/react-dom": "npm:~19.2.7"
     "@types/three": "npm:^0.186.0"
