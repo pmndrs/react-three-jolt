@@ -1,7 +1,7 @@
 ---
-'@react-three/jolt': major
-'@react-three/jolt-addons': major
-'@react-three/jolt-controllers': major
+'@react-three/jolt': minor
+'@react-three/jolt-addons': minor
+'@react-three/jolt-controllers': minor
 ---
 
 First release since April 2024, and a breaking one.
@@ -25,4 +25,6 @@ The headlines:
 - **Every system has a real `destroy()`**, and `Raw.joltInterfaces`/`PhysicsSystem.maxInterfaces`
   are gone along with the three-world cap.
 
-This is published as a `1.0.0-alpha`. The API is still in motion — pin an exact version.
+This ships as **0.1.0**. The `0.x` line is the signal that the API is still in motion — `1.0`
+is reserved for the feature-parity milestone tracked in #51, which is not where this is. Expect
+breaking changes in minor bumps until then, and pin an exact version if you build on it.
