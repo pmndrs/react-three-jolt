@@ -1,4 +1,4 @@
-import { useTexture } from '@react-three/drei';
+import { useTexture } from '@react-three/fiber';
 // React stays a *value* import: this package compiles JSX with the classic runtime, so the
 // emitted `React.createElement` calls need it at runtime (biome's organizeImports will offer to
 // make it `import type` - don't).
@@ -75,7 +75,7 @@ export type HeightfieldProps = {
     color?: THREE.ColorRepresentation;
 };
 
-// drei's `useTexture` must always be called with a string (rules of hooks forbid skipping it
+// `useTexture` must always be called with a string (rules of hooks forbid skipping it
 // conditionally), so when there's no `url` yet we point it at a tiny inert placeholder instead
 // of the real heightmap. It's never assigned to the material -- see the effect below.
 const EMPTY_TEXTURE_URL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
@@ -121,7 +121,7 @@ export function Heightfield({
     const activeBody: React.MutableRefObject<number | null> = useRef(null);
 
     const { bodySystem } = useJolt();
-    // if an image url is passed, use drei's (suspenseful) loader for the display texture
+    // if an image url is passed, use r3f's (suspenseful) loader for the display texture
     const urlTexture = useTexture(url ?? EMPTY_TEXTURE_URL);
 
     const [scaleX, scaleY, scaleZ] = scale ?? [1, 1, 1];

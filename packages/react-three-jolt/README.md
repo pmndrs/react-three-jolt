@@ -44,7 +44,7 @@
 npm install @react-three/jolt jolt-physics
 ```
 
-`jolt-physics`, `@react-three/fiber` (>=10), `@react-three/drei` (>=11), `three` (>=0.185) and `react`/`react-dom` (>=19.0 <19.3) are peer dependencies — see [Installation](https://pmndrs.github.io/react-three-jolt/getting-started/installation).
+`jolt-physics`, `@react-three/fiber` (>=10), `three` (>=0.185) and `react`/`react-dom` (>=19) are peer dependencies — see [Installation](https://pmndrs.github.io/react-three-jolt/getting-started/installation).
 
 ## Example
 
