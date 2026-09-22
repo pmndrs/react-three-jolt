@@ -1,7 +1,7 @@
 import { Environment } from '@react-three/drei';
 import {
     BodyState,
-    InstancedRigidBodyMesh,
+    InstancedRigidBodies,
     Physics,
     RigidBody,
     useSetInterval
@@ -99,7 +99,7 @@ function CubeHeapInner() {
                     <meshStandardMaterial color="#FF0000" />
                 </mesh>
             </RigidBody>
-            <InstancedRigidBodyMesh
+            <InstancedRigidBodies
                 ref={instancedRef}
                 count={count}
                 position={[0, 18, 1]}
@@ -108,7 +108,7 @@ function CubeHeapInner() {
             >
                 <boxGeometry args={[1, 1, 1]} />
                 <meshStandardMaterial color="#F2CC8F" />
-            </InstancedRigidBodyMesh>
+            </InstancedRigidBodies>
 
             <Floor position={[0, 0, 0]} size={100}>
                 <meshStandardMaterial />

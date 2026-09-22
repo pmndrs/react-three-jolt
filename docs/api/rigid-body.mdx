@@ -477,19 +477,19 @@ with `SetTargetAngularVelocity` and friends.
 
 ## Instanced bodies
 
-`<InstancedRigidBodyMesh>` replaces `<instancedMesh>`: the child mesh describes the shape and
+`<InstancedRigidBodies>` replaces `<instancedMesh>`: the child mesh describes the shape and
 material, `count` says how many, and every instance gets its own body. The ref gives you an array
 of `BodyState`.
 
 ```tsx
-import { BodyState, InstancedRigidBodyMesh } from '@react-three/jolt';
+import { BodyState, InstancedRigidBodies } from '@react-three/jolt';
 import { useRef } from 'react';
 
 export function Confetti() {
     const bodies = useRef<BodyState[]>(null);
 
     return (
-        <InstancedRigidBodyMesh
+        <InstancedRigidBodies
             ref={bodies}
             count={200}
             color="#D9594C"
@@ -500,7 +500,7 @@ export function Confetti() {
                 <boxGeometry args={[0.5, 0.5, 0.5]} />
                 <meshStandardMaterial />
             </mesh>
-        </InstancedRigidBodyMesh>
+        </InstancedRigidBodies>
     );
 }
 ```
@@ -518,7 +518,7 @@ It takes the same [event props](#events) as `<RigidBody>` — `onCollisionEnter`
 **`target.index`** says which instance fired:
 
 ```tsx
-<InstancedRigidBodyMesh
+<InstancedRigidBodies
     count={200}
     onCollisionEnter={(e) => console.log('instance', e.target.index, 'hit', e.other.handle)}
 >
@@ -526,7 +526,7 @@ It takes the same [event props](#events) as `<RigidBody>` — `onCollisionEnter`
         <boxGeometry args={[0.5, 0.5, 0.5]} />
         <meshStandardMaterial />
     </mesh>
-</InstancedRigidBodyMesh>
+</InstancedRigidBodies>
 ```
 
 > [!NOTE]
@@ -608,7 +608,7 @@ interface CollisionTarget {
     object: THREE.Object3D | undefined;
     handle: number; // BodyID.GetIndexAndSequenceNumber()
     subShapeId: number; // SubShapeID.GetValue(); -1 for a shape with no sub-shapes
-    index?: number; // instance index, for <InstancedRigidBodyMesh>
+    index?: number; // instance index, for <InstancedRigidBodies>
 }
 interface CollisionPayload {
     target: CollisionTarget; // the body this handler is registered on

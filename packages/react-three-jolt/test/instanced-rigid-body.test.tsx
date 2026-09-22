@@ -2,13 +2,13 @@
 // never released the InstancedMesh - or the geometry/material it owned - it built) and #143
 // (BodyState's `set color` fell through its non-instanced branch into `setColorAt`, a method
 // that only exists on THREE.InstancedMesh). Everything here runs against the real jolt-physics
-// wasm module and the real InstancedRigidBodyMesh component, mounted with @react-three/test-renderer.
+// wasm module and the real InstancedRigidBodies component, mounted with @react-three/test-renderer.
 import { create, waitFor } from '@react-three/test-renderer';
 import React from 'react';
 import { preload } from 'suspend-react';
 import * as THREE from 'three';
 import { assert, beforeAll, expect, test } from 'vitest';
-import { InstancedRigidBodyMesh } from '../src/components/InstancedRigidBody';
+import { InstancedRigidBodies } from '../src/components/InstancedRigidBodies';
 import { Physics } from '../src/components/Physics';
 import { useJolt } from '../src/hooks';
 import { initJolt, Raw } from '../src/raw';
@@ -86,12 +86,12 @@ test('unmount removes every body it created, releases the InstancedMesh, and lea
         await renderer.update(
             <Physics>
                 <BodySystemCapture onReady={capture} />
-                <InstancedRigidBodyMesh count={20}>{box()}</InstancedRigidBodyMesh>
+                <InstancedRigidBodies count={20}>{box()}</InstancedRigidBodies>
             </Physics>
         );
         await waitFor(() => totalBodyCount(bodySystem!) === 20);
 
-        // remove the InstancedRigidBodyMesh from the tree - React runs its unmount cleanup the
+        // remove the InstancedRigidBodies from the tree - React runs its unmount cleanup the
         // same way a full renderer.unmount() would, but <Physics> (and bodySystem) stay alive so
         // there's something left to assert on afterwards.
         await renderer.update(
@@ -122,7 +122,7 @@ test('changing count adds/removes bodies incrementally, growing and shrinking, w
     const renderer = await create(
         <Physics>
             <BodySystemCapture onReady={capture} />
-            <InstancedRigidBodyMesh count={20}>{box()}</InstancedRigidBodyMesh>
+            <InstancedRigidBodies count={20}>{box()}</InstancedRigidBodies>
         </Physics>
     );
     await waitFor(() => !!bodySystem);
@@ -133,7 +133,7 @@ test('changing count adds/removes bodies incrementally, growing and shrinking, w
     await renderer.update(
         <Physics>
             <BodySystemCapture onReady={capture} />
-            <InstancedRigidBodyMesh count={10}>{box()}</InstancedRigidBodyMesh>
+            <InstancedRigidBodies count={10}>{box()}</InstancedRigidBodies>
         </Physics>
     );
     await waitFor(() => totalBodyCount(bodySystem!) === 10);
@@ -141,14 +141,14 @@ test('changing count adds/removes bodies incrementally, growing and shrinking, w
     await renderer.update(
         <Physics>
             <BodySystemCapture onReady={capture} />
-            <InstancedRigidBodyMesh count={30}>{box()}</InstancedRigidBodyMesh>
+            <InstancedRigidBodies count={30}>{box()}</InstancedRigidBodies>
         </Physics>
     );
     await waitFor(() => totalBodyCount(bodySystem!) === 30);
 
     // PhysicsSystem.destroy() (see physics-system.ts) documents that React tears a parent down
     // before its children, so a bare `renderer.unmount()` would destroy the whole joltInterface
-    // before InstancedRigidBodyMesh's own cleanup runs, and its removeBody calls would no-op on
+    // before InstancedRigidBodies's own cleanup runs, and its removeBody calls would no-op on
     // an already-destroyed physics system. Assert teardown the way heightfield.test.tsx does:
     // remove the component via update() while <Physics> (and bodySystem) are still alive.
     await renderer.update(
@@ -171,7 +171,7 @@ test('a StrictMode mount leaves exactly N bodies, and unmount clears them', asyn
         <Physics>
             <BodySystemCapture onReady={capture} />
             <React.StrictMode>
-                <InstancedRigidBodyMesh count={7}>{box()}</InstancedRigidBodyMesh>
+                <InstancedRigidBodies count={7}>{box()}</InstancedRigidBodies>
             </React.StrictMode>
         </Physics>
     );
@@ -208,7 +208,7 @@ test('mounting at count 0 and growing to 20 works (#194)', async () => {
     const renderer = await create(
         <Physics>
             <BodySystemCapture onReady={capture} />
-            <InstancedRigidBodyMesh count={0}>{box()}</InstancedRigidBodyMesh>
+            <InstancedRigidBodies count={0}>{box()}</InstancedRigidBodies>
         </Physics>
     );
     await waitFor(() => !!bodySystem);
@@ -217,7 +217,7 @@ test('mounting at count 0 and growing to 20 works (#194)', async () => {
     await renderer.update(
         <Physics>
             <BodySystemCapture onReady={capture} />
-            <InstancedRigidBodyMesh count={20}>{box()}</InstancedRigidBodyMesh>
+            <InstancedRigidBodies count={20}>{box()}</InstancedRigidBodies>
         </Physics>
     );
     await waitFor(() => totalBodyCount(bodySystem!) === 20);
@@ -226,7 +226,7 @@ test('mounting at count 0 and growing to 20 works (#194)', async () => {
     await renderer.update(
         <Physics>
             <BodySystemCapture onReady={capture} />
-            <InstancedRigidBodyMesh count={0}>{box()}</InstancedRigidBodyMesh>
+            <InstancedRigidBodies count={0}>{box()}</InstancedRigidBodies>
         </Physics>
     );
     await waitFor(() => totalBodyCount(bodySystem!) === 0);
@@ -249,9 +249,9 @@ test('setting color on an instanced body writes into the InstancedMesh color buf
     const renderer = await create(
         <Physics>
             <BodySystemCapture onReady={capture} />
-            <InstancedRigidBodyMesh ref={instances} count={3}>
+            <InstancedRigidBodies ref={instances} count={3}>
                 {box()}
-            </InstancedRigidBodyMesh>
+            </InstancedRigidBodies>
         </Physics>
     );
     await waitFor(() => !!bodySystem);

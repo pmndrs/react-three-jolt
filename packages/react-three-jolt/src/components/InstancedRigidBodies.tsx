@@ -9,7 +9,7 @@ import { BodyState } from '../';
 import { useEventCallback, useForwardedRef, useJolt } from '../hooks';
 import type { BodyEventMap } from '../systems/events';
 
-export interface InstancedRigidBodyMeshProps {
+export interface InstancedRigidBodiesProps {
     children?: ReactNode;
     count?: number;
     ref?: React.Ref<BodyState[]>;
@@ -42,7 +42,7 @@ const destroyInstancedMesh = (mesh: THREE.InstancedMesh) => {
 
 // React 19 native convention (#49): `ref` was already a plain prop here (no `forwardRef` to
 // remove); this just drops the `React.FC` annotation to match the rest of the components.
-export const InstancedRigidBodyMesh = memo(function InstancedRigidBodyMesh({
+export const InstancedRigidBodies = memo(function InstancedRigidBodies({
     children,
     count = 150,
     color = '#D9594C',
@@ -58,13 +58,13 @@ export const InstancedRigidBodyMesh = memo(function InstancedRigidBodyMesh({
     onIntersectionExit,
     onSleep,
     onWake
-}: InstancedRigidBodyMeshProps) {
+}: InstancedRigidBodiesProps) {
     // the "template" mesh, used only to read geometry/material off of - it's detached from
     // the scene graph as soon as it mounts and never actually renders.
     const holderMeshRef = useRef<THREE.Mesh | null>(null);
     const instancedMeshRef = useRef<THREE.InstancedMesh | null>(null);
     const parentRef = useRef<THREE.Object3D | null>(null);
-    // Geometry/material InstancedRigidBodyMesh created itself, because no geometry/material
+    // Geometry/material InstancedRigidBodies created itself, because no geometry/material
     // children were passed. These are the only resources we ever dispose - anything sourced
     // from `children` is owned by three-fiber's own JSX tree (the <mesh> below) and gets
     // disposed by it when this component unmounts.
@@ -296,3 +296,13 @@ const createRapierInstanceArray(instanceMatrix: THREE.instanceMatrix)  {
     return instances;
 }
 */
+
+/**
+ * @deprecated Renamed to {@link InstancedRigidBodies}, to match `@react-three/rapier`'s
+ * component of the same name (issue #37, sibling-library parity). This alias will be removed
+ * before 1.0.
+ */
+export const InstancedRigidBodyMesh = InstancedRigidBodies;
+
+/** @deprecated Renamed to {@link InstancedRigidBodiesProps}. */
+export type InstancedRigidBodyMeshProps = InstancedRigidBodiesProps;

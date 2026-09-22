@@ -15,7 +15,7 @@ import React, { act, useEffect, useRef } from 'react';
 import { preload } from 'suspend-react';
 import * as THREE from 'three';
 import { assert, beforeAll, expect, test } from 'vitest';
-import { InstancedRigidBodyMesh } from '../src/components/InstancedRigidBody';
+import { InstancedRigidBodies } from '../src/components/InstancedRigidBodies';
 import { Physics } from '../src/components/Physics';
 import { RigidBody } from '../src/components/RigidBody';
 import { useConstraint, useJolt, useUnmount } from '../src/hooks';
@@ -358,10 +358,10 @@ test('unmounting a whole <Physics> tree returns the allocation tracker to baseli
                 <Box x={2} />
                 <ConstrainedPair />
                 <FakeControllerComponent onReady={(c) => (controller = c)} />
-                <InstancedRigidBodyMesh count={12}>
+                <InstancedRigidBodies count={12}>
                     <boxGeometry args={[1, 1, 1]} />
                     <meshStandardMaterial />
-                </InstancedRigidBodyMesh>
+                </InstancedRigidBodies>
                 <UnmountWitness report={(info) => (witness = info)} />
             </Physics>
         );

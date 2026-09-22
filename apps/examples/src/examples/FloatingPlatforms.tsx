@@ -4,7 +4,7 @@
 // riders can be picked up, carried, and dropped off.
 import { Environment } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
-import { type BodyState, InstancedRigidBodyMesh, Physics, RigidBody } from '@react-three/jolt';
+import { type BodyState, InstancedRigidBodies, Physics, RigidBody } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt-addons';
 import { button, useControls } from 'leva';
 import { useEffect, useRef, useState } from 'react';
@@ -72,7 +72,7 @@ function FloatingPlatformsInner() {
     // dynamic box pile
     const boxesRef = useRef<BodyState[]>(null);
 
-    // ball spawner - grows an InstancedRigidBodyMesh count and repositions only the new
+    // ball spawner - grows an InstancedRigidBodies count and repositions only the new
     // instances, same pattern CubeHeap.tsx uses for its fountain
     const ballsRef = useRef<BodyState[]>(null);
     const previousBallCount = useRef(0);
@@ -166,7 +166,7 @@ function FloatingPlatformsInner() {
             </RigidBody>
 
             {/* Pile of dynamic boxes, dropped above the platforms */}
-            <InstancedRigidBodyMesh
+            <InstancedRigidBodies
                 ref={boxesRef}
                 count={40}
                 position={[0, 24, 0]}
@@ -175,12 +175,12 @@ function FloatingPlatformsInner() {
             >
                 <boxGeometry args={[1, 1, 1]} />
                 <meshStandardMaterial color="#F2CC8F" />
-            </InstancedRigidBodyMesh>
+            </InstancedRigidBodies>
 
             {/* Ball spawner, grown 20 at a time from the leva panel. Mounted at count 0 and
                 grown in place (#194) - it used to be held back until the first click, because
-                InstancedRigidBodyMesh threw with no instances. */}
-            <InstancedRigidBodyMesh
+                InstancedRigidBodies threw with no instances. */}
+            <InstancedRigidBodies
                 ref={ballsRef}
                 count={ballCount}
                 position={[0, 24, 0]}
@@ -189,7 +189,7 @@ function FloatingPlatformsInner() {
             >
                 <sphereGeometry args={[0.6, 16, 16]} />
                 <meshStandardMaterial color="#FF0000" />
-            </InstancedRigidBodyMesh>
+            </InstancedRigidBodies>
 
             <Floor position={[0, -1, 0]} size={90}>
                 <meshStandardMaterial />
