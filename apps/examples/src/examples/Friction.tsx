@@ -1,19 +1,36 @@
 import { Environment, Html } from '@react-three/drei';
 import { Physics, RigidBody } from '@react-three/jolt';
-import { Floor } from '@react-three/jolt/addons';
 import { useDemo } from '../App';
 import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 
 // Demonstrates friction and restitution:
-// - Left side: boxes sliding down a ramp with friction 0 → 1
-// - Right side: balls bouncing with restitution 0 → 1
+// - Left side: boxes in separate lanes sliding down a ramp, friction 0 → 1
+// - Right side: balls dropping and bouncing, restitution 0 → 1
 // See RigidBody props: friction, restitution
 
 export function Friction() {
     const { debug, paused, interpolate, physicsKey, module } = useDemo();
 
     const frictionValues = [0, 0.25, 0.5, 0.75, 1];
-    const rampRotation = [Math.PI / 6, 0, 0]; // 30 degrees
+    const rampRotation = -0.4; // rad, ~23°
+    const rampPos = [-8, 4, 0];
+
+    // Ramp dimensions: 12 wide × 0.5 high × 16 long
+    const rampWidth = 12;
+    const rampHeight = 0.5;
+    const rampLength = 16;
+
+    // Compute box start position ON ramp surface.
+    // For local z = -6 on ramp top:
+    // world y = 4 + cos(0.4)*0.25 + sin(0.4)*6 ≈ 6.6
+    // world z = -6*cos(0.4) ≈ -5.5
+    const localZ = -6;
+    const boxStartY =
+        rampPos[1] +
+        Math.cos(rampRotation) * (rampHeight / 2) +
+        Math.sin(rampRotation) * Math.abs(localZ) +
+        0.5; // +0.5 clearance
+    const boxStartZ = rampPos[2] + localZ * Math.cos(rampRotation);
 
     return (
         <Physics
@@ -26,65 +43,91 @@ export function Friction() {
         >
             <JoltMemoryRegistrar />
 
-            <Floor position={[0, -2, 0]} size={100}>
-                <meshStandardMaterial />
-            </Floor>
+            {/* Floor at y=0. Restitution=0 so ball restitution dominates (max(r1,r2)). */}
+            <RigidBody type="static" position={[0, 0, 0]} restitution={0}>
+                <mesh receiveShadow scale-y={1}>
+                    <boxGeometry args={[100, 0.5, 100]} />
+                    <meshStandardMaterial />
+                </mesh>
+            </RigidBody>
 
-            {/* Ramp for friction demo */}
-            <RigidBody type="static" rotation={rampRotation} position={[-10, 0, 0]}>
+            {/* Ramp: 12 wide × 0.5 high × 16 long, rotated -0.4 rad about X (slopes down toward +z). */}
+            {/* Friction=1 so Jolt's sqrt(1*f) = sqrt(f) makes box friction dominant. */}
+            <RigidBody
+                type="static"
+                position={rampPos}
+                rotation={[rampRotation, 0, 0]}
+                friction={1}
+            >
                 <mesh>
-                    <boxGeometry args={[2, 0.2, 8]} />
+                    <boxGeometry args={[rampWidth, rampHeight, rampLength]} />
                     <meshStandardMaterial color="#888" />
                 </mesh>
             </RigidBody>
 
-            {/* Boxes with increasing friction sliding down ramp */}
-            {frictionValues.map((friction, i) => (
-                <group key={`friction-${i}`}>
-                    <RigidBody position={[-10, 3 - i * 0.5, -3 + i * 1.5]} friction={friction}>
-                        <mesh>
-                            <boxGeometry args={[0.6, 0.6, 0.6]} />
-                            <meshStandardMaterial color="#00ff88" />
-                        </mesh>
-                    </RigidBody>
-                    <Html position={[-10, 4.2 - i * 0.5, -3 + i * 1.5]} center distanceFactor={20}>
-                        <div
-                            style={{
-                                color: '#ffffff',
-                                fontSize: 12,
-                                fontWeight: 'bold',
-                                textShadow: '0 0 4px black'
-                            }}
+            {/* Boxes with increasing friction in separate lanes */}
+            {frictionValues.map((friction, i) => {
+                const boxX = rampPos[0] + (i - 2) * 2.2;
+                return (
+                    <group key={`friction-${i}`}>
+                        <RigidBody
+                            position={[boxX, boxStartY, boxStartZ]}
+                            rotation={[rampRotation, 0, 0]}
+                            friction={friction}
                         >
-                            {friction.toFixed(2)}
-                        </div>
-                    </Html>
-                </group>
-            ))}
+                            <mesh castShadow>
+                                <boxGeometry args={[0.6, 0.6, 0.6]} />
+                                <meshStandardMaterial color="#00ff88" />
+                            </mesh>
+                        </RigidBody>
+                        {/* Label on ramp at top of lane */}
+                        <Html
+                            position={[boxX, boxStartY + 0.8, boxStartZ - 0.5]}
+                            center
+                            distanceFactor={30}
+                        >
+                            <div
+                                style={{
+                                    color: '#ffffff',
+                                    fontSize: 12,
+                                    fontWeight: 'bold',
+                                    textShadow: '0 0 4px black'
+                                }}
+                            >
+                                {friction.toFixed(2)}
+                            </div>
+                        </Html>
+                    </group>
+                );
+            })}
 
-            {/* Balls with increasing restitution bouncing */}
-            {frictionValues.map((restitution, i) => (
-                <group key={`restitution-${i}`}>
-                    <RigidBody position={[10, 5 - i * 0.5, -3 + i * 1.5]} restitution={restitution}>
-                        <mesh>
-                            <sphereGeometry args={[0.4, 16, 16]} />
-                            <meshStandardMaterial color="#ff88ff" />
-                        </mesh>
-                    </RigidBody>
-                    <Html position={[10, 6.2 - i * 0.5, -3 + i * 1.5]} center distanceFactor={20}>
-                        <div
-                            style={{
-                                color: '#ffffff',
-                                fontSize: 12,
-                                fontWeight: 'bold',
-                                textShadow: '0 0 4px black'
-                            }}
-                        >
-                            {restitution.toFixed(2)}
-                        </div>
-                    </Html>
-                </group>
-            ))}
+            {/* Balls with increasing restitution, all drop from y=8 */}
+            {frictionValues.map((restitution, i) => {
+                const ballX = 8 + (i - 2) * 1.5;
+                return (
+                    <group key={`restitution-${i}`}>
+                        <RigidBody position={[ballX, 8, 0]} restitution={restitution}>
+                            <mesh castShadow>
+                                <sphereGeometry args={[0.4, 16, 16]} />
+                                <meshStandardMaterial color="#ff88ff" />
+                            </mesh>
+                        </RigidBody>
+                        {/* Label at floor level in front of lane */}
+                        <Html position={[ballX, 0.1, 1.5]} center distanceFactor={30}>
+                            <div
+                                style={{
+                                    color: '#ffffff',
+                                    fontSize: 12,
+                                    fontWeight: 'bold',
+                                    textShadow: '0 0 4px black'
+                                }}
+                            >
+                                {restitution.toFixed(2)}
+                            </div>
+                        </Html>
+                    </group>
+                );
+            })}
 
             <directionalLight
                 castShadow

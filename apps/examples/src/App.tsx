@@ -247,8 +247,8 @@ const routes: RouteMap = {
         element: <FooterFunnel />
     },
     Friction: {
-        position: [0, 5, 15],
-        target: [0, 0, 0],
+        position: [0, 10, 22],
+        target: [0, 3, 0],
         background: '#2a4d3a',
         element: <Friction />
     }
