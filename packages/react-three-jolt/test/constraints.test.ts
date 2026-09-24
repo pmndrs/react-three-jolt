@@ -38,8 +38,11 @@ const box = (position: [number, number, number], size = 1) => {
     return mesh;
 };
 
-const addBody = (position: [number, number, number], type?: 'static'): BodyState => {
-    const handle = ps.bodySystem.addBody(box(position), type ? { bodyType: type } : undefined);
+const addBody = (position: [number, number, number], type?: 'static', size = 1): BodyState => {
+    const handle = ps.bodySystem.addBody(
+        box(position, size),
+        type ? { bodyType: type } : undefined
+    );
     return ps.bodySystem.getBody(handle)!;
 };
 
@@ -67,7 +70,10 @@ const TRACKED = [
     'SliderConstraintSettings',
     'ConeConstraintSettings',
     'SwingTwistConstraintSettings',
-    'SixDOFConstraintSettings'
+    'SixDOFConstraintSettings',
+    'PulleyConstraintSettings',
+    'GearConstraintSettings',
+    'RackAndPinionConstraintSettings'
 ];
 
 const installAllocationSpy = () => {
@@ -254,6 +260,309 @@ test('addConstraint rejects an unknown type without leaking', () => {
         expect(() => ps.constraintSystem.addConstraint('nope' as any, a, b)).toThrow(
             /unknown constraint type/
         );
+        assert.deepEqual(spy.outstanding(), []);
+    } finally {
+        spy.restore();
+    }
+    assert.equal(ps.constraintSystem.constraints.size, 0);
+});
+
+//* pulley/gear/rackAndPinion (issue #241) ----------------------------
+
+test('a pulley keeps the total rope length constant while one side pays out', () => {
+    // two bodies hung from their own overhead pulley wheel (fixedPoint1/2); body1 is
+    // heavier, so it descends and pays its side of the rope out while body2's side is
+    // reeled in - the *sum* of the two segments (times ratio) is what stays constant, not
+    // either segment on its own
+    const fixedPoint1: THREE.Vector3Tuple = [120, 30, 0];
+    const fixedPoint2: THREE.Vector3Tuple = [120, 30, 6];
+    const spy = installAllocationSpy();
+    let constraint: ReturnType<typeof ps.constraintSystem.addConstraint<'pulley'>>;
+    try {
+        const heavy = addBody([120, 20, 0], undefined, 1.3);
+        const light = addBody([120, 20, 6], undefined, 0.8);
+
+        constraint = ps.constraintSystem.addConstraint('pulley', heavy, light, {
+            fixedPoint1,
+            fixedPoint2,
+            ratio: 1
+            // min/max left unset: jolt defaults mMinLength to 0 and auto-computes mMaxLength
+            // from the bodies' starting positions (here 6 + 6 = 12... actually the fixed
+            // points sit 10m above each body, so the initial length is 20)
+        });
+        assert.deepEqual(spy.outstanding(), [], 'addConstraint leaked wasm objects');
+        assert.equal(ps.constraintSystem.constraints.size, 1);
+
+        const initialLength = constraint.GetCurrentLength();
+        assert.closeTo(initialLength, 20, 0.01);
+        assert.closeTo(constraint.GetMaxLength(), 20, 0.01, 'mMaxLength was not auto-computed');
+        assert.equal(constraint.GetMinLength(), 0);
+
+        step(90);
+
+        // the rope stays taut against its (auto-computed) max length the whole time, so the
+        // total is conserved even though each side moved a lot
+        assert.closeTo(constraint.GetCurrentLength(), initialLength, 0.05, 'rope length drifted');
+        assert.isBelow(heavy.position.y, 20 - 1, 'the heavier body did not descend');
+        assert.isAbove(light.position.y, 20 + 1, 'the lighter body was not pulled up');
+
+        assert.isTrue(ps.constraintSystem.removeConstraint(constraint));
+        assert.deepEqual(spy.outstanding(), [], 'removeConstraint leaked wasm objects');
+    } finally {
+        spy.restore();
+    }
+    assert.equal(ps.constraintSystem.constraints.size, 0);
+});
+
+test('a rigid pulley (min === max) locks both sides when the bodies balance', () => {
+    // equal masses on both sides of a rigid rope is a stable equilibrium: neither body can
+    // move without the other compensating exactly, so with equal weight nothing moves at all
+    const fixedPoint1: THREE.Vector3Tuple = [126, 30, 0];
+    const fixedPoint2: THREE.Vector3Tuple = [126, 30, 6];
+    const a = addBody([126, 20, 0]);
+    const b = addBody([126, 20, 6]);
+
+    const constraint = ps.constraintSystem.addConstraint('pulley', a, b, {
+        fixedPoint1,
+        fixedPoint2,
+        ratio: 1,
+        min: 20,
+        max: 20
+    });
+
+    step(90);
+
+    assert.closeTo(a.position.y, 20, 0.05);
+    assert.closeTo(b.position.y, 20, 0.05);
+    assert.closeTo(constraint.GetCurrentLength(), 20, 0.05);
+    assert.isTrue(ps.constraintSystem.removeConstraint(constraint));
+});
+
+test('addConstraint rejects a pulley without fixed points, before allocating anything', () => {
+    const a = addBody([132, 20, 0]);
+    const b = addBody([132, 20, 6]);
+    const spy = installAllocationSpy();
+    try {
+        expect(() => ps.constraintSystem.addConstraint('pulley', a, b, { ratio: 1 })).toThrow(
+            /fixedPoint1/
+        );
+        assert.deepEqual(spy.outstanding(), []);
+    } finally {
+        spy.restore();
+    }
+    assert.equal(ps.constraintSystem.constraints.size, 0);
+});
+
+test('a gear turns its second body at -ratio (external gear) and cleans up', () => {
+    // each "gear" is a hinge-mounted arm spinning about its own static pivot; gear1's hinge
+    // is motorised, gear2's is left free and only moves because the gear constraint
+    // synchronizes it to gear1 at `ratio`
+    const pivot1: THREE.Vector3Tuple = [140, 10, 0];
+    const pivot2: THREE.Vector3Tuple = [148, 10, 0];
+    const anchor1 = addBody(pivot1, 'static');
+    const anchor2 = addBody(pivot2, 'static');
+
+    const spy = installAllocationSpy();
+    let gear: ReturnType<typeof ps.constraintSystem.addConstraint<'gear'>>;
+    try {
+        // an offset arm (rather than a wheel centered exactly on the pivot) gives the solver
+        // enough rotational inertia to converge the gear's velocity constraint cleanly
+        const wheel1 = addBody([143, 10, 0]);
+        const wheel2 = addBody([151, 10, 0]);
+
+        const hinge1 = ps.constraintSystem.addConstraint('hinge', anchor1, wheel1, {
+            point1: pivot1,
+            axis: [0, 0, 1],
+            motor: { type: 'velocity', velocity: 2 }
+        });
+        const hinge2 = ps.constraintSystem.addConstraint('hinge', anchor2, wheel2, {
+            point1: pivot2,
+            axis: [0, 0, 1]
+        });
+
+        gear = ps.constraintSystem.addConstraint('gear', wheel1, wheel2, {
+            hinge1,
+            hinge2,
+            ratio: 2,
+            axis: [0, 0, 1]
+        });
+        assert.deepEqual(spy.outstanding(), [], 'addConstraint leaked wasm objects');
+        assert.equal(ps.constraintSystem.constraints.size, 3);
+
+        // stop well short of a full rotation - `GetCurrentAngle` wraps at +-pi, which would
+        // make the ratio check below meaningless
+        step(60);
+
+        const a1 = hinge1.GetCurrentAngle();
+        const a2 = hinge2.GetCurrentAngle();
+        assert.isAbove(Math.abs(a1), 0.1, 'the motorised hinge did not turn');
+        // gear2 turns the opposite way at `ratio` times gear1's angle
+        assert.closeTo(a1 / a2, -2, 0.15, 'gear2 did not track gear1 at the requested ratio');
+
+        assert.isTrue(ps.constraintSystem.removeConstraint(gear));
+        assert.isTrue(ps.constraintSystem.removeConstraint(hinge1));
+        assert.isTrue(ps.constraintSystem.removeConstraint(hinge2));
+        assert.deepEqual(spy.outstanding(), [], 'removeConstraint leaked wasm objects');
+    } finally {
+        spy.restore();
+    }
+    assert.equal(ps.constraintSystem.constraints.size, 0);
+});
+
+test('numTeeth1/numTeeth2 compute the same ratio SetRatio would', () => {
+    // GearConstraintSettings::SetRatio(teeth1, teeth2) sets mRatio = teeth2 / teeth1
+    const pivot1: THREE.Vector3Tuple = [156, 10, 0];
+    const pivot2: THREE.Vector3Tuple = [164, 10, 0];
+    const anchor1 = addBody(pivot1, 'static');
+    const anchor2 = addBody(pivot2, 'static');
+    const wheel1 = addBody([159, 10, 0]);
+    const wheel2 = addBody([167, 10, 0]);
+
+    const hinge1 = ps.constraintSystem.addConstraint('hinge', anchor1, wheel1, {
+        point1: pivot1,
+        axis: [0, 0, 1],
+        motor: { type: 'velocity', velocity: 2 }
+    });
+    const hinge2 = ps.constraintSystem.addConstraint('hinge', anchor2, wheel2, {
+        point1: pivot2,
+        axis: [0, 0, 1]
+    });
+    const gear = ps.constraintSystem.addConstraint('gear', wheel1, wheel2, {
+        hinge1,
+        hinge2,
+        numTeeth1: 10,
+        numTeeth2: 20,
+        axis: [0, 0, 1]
+    });
+
+    step(60);
+    const a1 = hinge1.GetCurrentAngle();
+    const a2 = hinge2.GetCurrentAngle();
+    // 20 teeth / 10 teeth -> ratio 2, same as the explicit-ratio test above
+    assert.closeTo(a1 / a2, -2, 0.15);
+
+    assert.isTrue(ps.constraintSystem.removeConstraint(gear));
+    assert.isTrue(ps.constraintSystem.removeConstraint(hinge1));
+    assert.isTrue(ps.constraintSystem.removeConstraint(hinge2));
+});
+
+test('addConstraint rejects a gear missing hinge1/hinge2, before allocating anything', () => {
+    const a = addBody([170, 10, 0]);
+    const b = addBody([174, 10, 0]);
+    const spy = installAllocationSpy();
+    try {
+        expect(() => ps.constraintSystem.addConstraint('gear', a, b, { ratio: 2 })).toThrow(
+            /hinge1/
+        );
+        assert.deepEqual(spy.outstanding(), []);
+    } finally {
+        spy.restore();
+    }
+    assert.equal(ps.constraintSystem.constraints.size, 0);
+});
+
+test('a rackAndPinion moves its rack at ratio*pinionAngle and cleans up', () => {
+    const pinionPivot: THREE.Vector3Tuple = [180, 10, 0];
+    const pinionAnchor = addBody(pinionPivot, 'static');
+    const rackAnchor = addBody([188, 10, 0], 'static');
+
+    const spy = installAllocationSpy();
+    let rackAndPinion: ReturnType<typeof ps.constraintSystem.addConstraint<'rackAndPinion'>>;
+    try {
+        const pinionWheel = addBody([183, 10, 0]);
+        const rackBody = addBody([188, 10, 0]);
+
+        const hinge = ps.constraintSystem.addConstraint('hinge', pinionAnchor, pinionWheel, {
+            point1: pinionPivot,
+            axis: [0, 0, 1],
+            motor: { type: 'velocity', velocity: 2 }
+        });
+        const slider = ps.constraintSystem.addConstraint('slider', rackAnchor, rackBody, {
+            axis: [0, 1, 0],
+            min: -10,
+            max: 10
+        });
+
+        rackAndPinion = ps.constraintSystem.addConstraint('rackAndPinion', pinionWheel, rackBody, {
+            hinge,
+            slider,
+            ratio: 1,
+            axis: [0, 0, 1],
+            sliderAxis: [0, 1, 0]
+        });
+        assert.deepEqual(spy.outstanding(), [], 'addConstraint leaked wasm objects');
+        assert.equal(ps.constraintSystem.constraints.size, 3);
+
+        step(60);
+
+        const angle = hinge.GetCurrentAngle();
+        const position = slider.GetCurrentPosition();
+        assert.isAbove(Math.abs(angle), 0.1, 'the motorised pinion did not turn');
+        assert.closeTo(position / angle, 1, 0.1, 'the rack did not track the pinion at ratio 1');
+
+        assert.isTrue(ps.constraintSystem.removeConstraint(rackAndPinion));
+        assert.isTrue(ps.constraintSystem.removeConstraint(hinge));
+        assert.isTrue(ps.constraintSystem.removeConstraint(slider));
+        assert.deepEqual(spy.outstanding(), [], 'removeConstraint leaked wasm objects');
+    } finally {
+        spy.restore();
+    }
+    assert.equal(ps.constraintSystem.constraints.size, 0);
+});
+
+test('numTeethRack/rackLength/numTeethPinion compute the same ratio SetRatio would', () => {
+    // RackAndPinionConstraintSettings::SetRatio(rackTeeth, rackLength, pinionTeeth) sets
+    // mRatio = 2*pi*rackTeeth / (rackLength*pinionTeeth) - with 40/2/10 that is 2*pi*2
+    const pinionPivot: THREE.Vector3Tuple = [196, 10, 0];
+    const pinionAnchor = addBody(pinionPivot, 'static');
+    const rackAnchor = addBody([204, 10, 0], 'static');
+    const pinionWheel = addBody([199, 10, 0]);
+    const rackBody = addBody([204, 10, 0]);
+
+    const hinge = ps.constraintSystem.addConstraint('hinge', pinionAnchor, pinionWheel, {
+        point1: pinionPivot,
+        axis: [0, 0, 1],
+        motor: { type: 'velocity', velocity: 0.5 }
+    });
+    const slider = ps.constraintSystem.addConstraint('slider', rackAnchor, rackBody, {
+        axis: [0, 1, 0],
+        min: -10,
+        max: 10
+    });
+    const rackAndPinion = ps.constraintSystem.addConstraint(
+        'rackAndPinion',
+        pinionWheel,
+        rackBody,
+        {
+            hinge,
+            slider,
+            numTeethRack: 40,
+            rackLength: 2,
+            numTeethPinion: 10,
+            axis: [0, 0, 1],
+            sliderAxis: [0, 1, 0]
+        }
+    );
+
+    step(60);
+    const angle = hinge.GetCurrentAngle();
+    const position = slider.GetCurrentPosition();
+    assert.isAbove(Math.abs(angle), 0.02, 'the motorised pinion did not turn');
+    assert.closeTo(angle / position, 2 * Math.PI * 2, 0.5);
+
+    assert.isTrue(ps.constraintSystem.removeConstraint(rackAndPinion));
+    assert.isTrue(ps.constraintSystem.removeConstraint(hinge));
+    assert.isTrue(ps.constraintSystem.removeConstraint(slider));
+});
+
+test('addConstraint rejects a rackAndPinion missing hinge/slider, before allocating anything', () => {
+    const a = addBody([210, 10, 0]);
+    const b = addBody([214, 10, 0]);
+    const spy = installAllocationSpy();
+    try {
+        expect(() =>
+            ps.constraintSystem.addConstraint('rackAndPinion', a, b, { ratio: 1 })
+        ).toThrow(/hinge/);
         assert.deepEqual(spy.outstanding(), []);
     } finally {
         spy.restore();

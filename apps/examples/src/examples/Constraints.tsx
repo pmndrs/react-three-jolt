@@ -2,14 +2,17 @@
 // Closes #91.
 import { Environment, Html } from '@react-three/drei';
 import {
+    type BodyState,
     type BodyStateRef,
     type ConstraintOptions,
     type ConstraintType,
     Physics,
     RigidBody,
-    useConstraint
+    useConstraint,
+    useJolt
 } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt/addons';
+import type Jolt from 'jolt-physics';
 import { button, folder, useControls } from 'leva';
 import { useEffect, useRef, useState } from 'react';
 import { useDemo } from '../App';
@@ -575,6 +578,185 @@ function SliderDoor({ enabled, target }: { enabled: boolean; target: number }) {
     );
 }
 
+const PULLEY_WHEEL1: [number, number, number] = [-40, 30, -18];
+const PULLEY_WHEEL2: [number, number, number] = [-40, 30, -10];
+const PULLEY_DROP = 10;
+
+/** Two boxes hanging from their own fixed overhead pulley wheel - decorative dark spheres,
+ * not physics bodies, since `fixedPoint1`/`fixedPoint2` are just world-space anchors. The
+ * heavier box descends while the lighter one is pulled up, and (left with the default
+ * `min`/`max`, i.e. jolt auto-computing `mMaxLength` from the bodies' starting positions) the
+ * summed rope length stays constant the whole time - issue #241's "pulley" scope. */
+function Pulley({ enabled }: { enabled: boolean }) {
+    const heavyRef = useRef(null);
+    const lightRef = useRef(null);
+    const heavyPos: [number, number, number] = [
+        PULLEY_WHEEL1[0],
+        PULLEY_WHEEL1[1] - PULLEY_DROP,
+        PULLEY_WHEEL1[2]
+    ];
+    const lightPos: [number, number, number] = [
+        PULLEY_WHEEL2[0],
+        PULLEY_WHEEL2[1] - PULLEY_DROP,
+        PULLEY_WHEEL2[2]
+    ];
+    return (
+        <>
+            <Label
+                position={[
+                    PULLEY_WHEEL1[0],
+                    PULLEY_WHEEL1[1] + 3,
+                    (PULLEY_WHEEL1[2] + PULLEY_WHEEL2[2]) / 2
+                ]}
+            >
+                pulley
+            </Label>
+            <mesh position={PULLEY_WHEEL1}>
+                <sphereGeometry args={[0.4, 12, 12]} />
+                <meshStandardMaterial color="#222222" />
+            </mesh>
+            <mesh position={PULLEY_WHEEL2}>
+                <sphereGeometry args={[0.4, 12, 12]} />
+                <meshStandardMaterial color="#222222" />
+            </mesh>
+            <RigidBody ref={heavyRef} position={heavyPos} mass={3}>
+                <mesh>
+                    <boxGeometry args={[1.6, 1.6, 1.6]} />
+                    <meshStandardMaterial color="#e07a5f" />
+                </mesh>
+            </RigidBody>
+            <RigidBody ref={lightRef} position={lightPos} mass={1}>
+                <mesh>
+                    <boxGeometry args={[1, 1, 1]} />
+                    <meshStandardMaterial color="#81b29a" />
+                </mesh>
+            </RigidBody>
+            {enabled && (
+                <JointEffect
+                    type="pulley"
+                    body1={heavyRef}
+                    body2={lightRef}
+                    options={{
+                        fixedPoint1: PULLEY_WHEEL1,
+                        fixedPoint2: PULLEY_WHEEL2,
+                        ratio: 1
+                        // min/max left unset: jolt defaults mMinLength to 0 and auto-computes
+                        // mMaxLength from the bodies' starting positions
+                    }}
+                />
+            )}
+        </>
+    );
+}
+
+const GEAR_HUB1: [number, number, number] = [50, 14, -14];
+const GEAR_HUB2: [number, number, number] = [56, 14, -14];
+
+/**
+ * Two hinge-mounted bars sharing their own static hub, coupled by a `gear` constraint at a 2:1
+ * ratio: a motor drives the (longer) first bar continuously, and the (shorter) second bar -
+ * whose own hinge has no motor at all - spins at half the speed, in the opposite direction,
+ * purely because the gear constraint keeps the two hinge angles locked together. Issue #241's
+ * "gear" scope.
+ *
+ * `gear` doesn't work through `useConstraint` composed with a sibling: it needs the *already
+ * created* `Jolt.HingeConstraint` instances, and `useConstraint`'s `options` argument is read
+ * once, during render - so a `hinge1Ref.current` captured into an options object at render time
+ * is always the value from *before* the hinge's own creation effect has run, even on a later
+ * render. There is no ordering of `useConstraint` calls that fixes this. Building the hinges and
+ * the gear together, imperatively, through `constraintSystem.addConstraint` directly - reading
+ * each body's ref lazily, inside the effect, the same way `useConstraint` itself does - sidesteps
+ * the problem entirely: it is plain synchronous code, not React scheduling.
+ */
+function Gear({ enabled, velocity }: { enabled: boolean; velocity: number }) {
+    const { physicsSystem } = useJolt();
+    const hub1Ref = useRef<BodyState | null>(null);
+    const hub2Ref = useRef<BodyState | null>(null);
+    const bar1Ref = useRef<BodyState | null>(null);
+    const bar2Ref = useRef<BodyState | null>(null);
+    const hinge1Ref = useRef<Jolt.HingeConstraint | null>(null);
+
+    // driven imperatively (like `MotorHinge`) so dragging the leva slider doesn't tear the
+    // whole gear set down and recreate it every frame
+    useEffect(() => {
+        hinge1Ref.current?.SetTargetAngularVelocity(velocity);
+    }, [velocity]);
+
+    useEffect(() => {
+        if (!enabled) return;
+        const hub1 = hub1Ref.current;
+        const hub2 = hub2Ref.current;
+        const bar1 = bar1Ref.current;
+        const bar2 = bar2Ref.current;
+        // the RigidBody refs above are this effect's siblings, declared earlier, so their own
+        // creation effects have already run and populated these by the time this fires
+        if (!hub1 || !hub2 || !bar1 || !bar2) return;
+
+        const { constraintSystem } = physicsSystem;
+        const hinge1 = constraintSystem.addConstraint('hinge', hub1, bar1, {
+            point1: GEAR_HUB1,
+            axis: [0, 0, 1],
+            motor: { type: 'velocity' }
+        });
+        hinge1Ref.current = hinge1;
+        hinge1.SetTargetAngularVelocity(velocity);
+
+        const hinge2 = constraintSystem.addConstraint('hinge', hub2, bar2, {
+            point1: GEAR_HUB2,
+            axis: [0, 0, 1]
+        });
+        const gear = constraintSystem.addConstraint('gear', bar1, bar2, {
+            hinge1,
+            hinge2,
+            ratio: 2,
+            axis: [0, 0, 1]
+        });
+
+        return () => {
+            // remove the gear before the hinges it references
+            constraintSystem.removeConstraint(gear);
+            constraintSystem.removeConstraint(hinge2);
+            constraintSystem.removeConstraint(hinge1);
+            hinge1Ref.current = null;
+        };
+        // `velocity` is applied to the already-created hinge by the effect above instead of
+        // being a dependency here, so dragging the leva slider doesn't rebuild the gear set
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [enabled, physicsSystem]);
+
+    return (
+        <>
+            <Label position={[(GEAR_HUB1[0] + GEAR_HUB2[0]) / 2, GEAR_HUB1[1] + 4, GEAR_HUB1[2]]}>
+                gear (2:1)
+            </Label>
+            <RigidBody ref={hub1Ref} type="static" position={GEAR_HUB1}>
+                <mesh>
+                    <sphereGeometry args={[0.4, 12, 12]} />
+                    <meshStandardMaterial color="#222222" />
+                </mesh>
+            </RigidBody>
+            <RigidBody ref={hub2Ref} type="static" position={GEAR_HUB2}>
+                <mesh>
+                    <sphereGeometry args={[0.4, 12, 12]} />
+                    <meshStandardMaterial color="#222222" />
+                </mesh>
+            </RigidBody>
+            <RigidBody ref={bar1Ref} position={GEAR_HUB1} mass={1}>
+                <mesh>
+                    <boxGeometry args={[4, 0.4, 0.4]} />
+                    <meshStandardMaterial color="#f0544f" />
+                </mesh>
+            </RigidBody>
+            <RigidBody ref={bar2Ref} position={GEAR_HUB2} mass={1}>
+                <mesh>
+                    <boxGeometry args={[2, 0.4, 0.4]} />
+                    <meshStandardMaterial color="#3d5a80" />
+                </mesh>
+            </RigidBody>
+        </>
+    );
+}
+
 // * Scene + controls ========================================================
 
 interface EnabledMap {
@@ -590,6 +772,8 @@ interface EnabledMap {
     chain: boolean;
     windmill: boolean;
     door: boolean;
+    pulley: boolean;
+    gear: boolean;
 }
 
 interface ConstraintsSceneProps {
@@ -614,6 +798,8 @@ function ConstraintsScene({ enabled, motorVelocity, doorTarget }: ConstraintsSce
             <Chain enabled={enabled.chain} />
             <Windmill enabled={enabled.windmill} velocity={motorVelocity} />
             <SliderDoor enabled={enabled.door} target={doorTarget} />
+            <Pulley enabled={enabled.pulley} />
+            <Gear enabled={enabled.gear} velocity={motorVelocity} />
 
             <Floor position={[0, 0, -10]} size={200}>
                 <meshStandardMaterial />
@@ -646,7 +832,9 @@ export function Constraints() {
         setPieces: folder({
             chain: { value: true },
             windmill: { value: true },
-            door: { value: true, label: 'door' }
+            door: { value: true, label: 'door' },
+            pulley: { value: true },
+            gear: { value: true, label: 'gear (2:1)' }
         })
     });
 
