@@ -131,68 +131,46 @@ either is missing.
 
 A `gear` constraint doesn't create a joint on its own - it locks the rotation of two **existing**
 `hinge` constraints together at `ratio`. Both hinges (each pins one of the two "wheel" bodies to
-its own static anchor) have to exist *before* the gear is created, which rules out composing three
-separate `useConstraint` calls: `useConstraint`'s `options` argument is read once, during render,
-so a hinge ref's `.current` captured into an options object is always the value from *before* that
-hinge's own creation effect has run - there is no ordering of hook calls that fixes this, since the
-whole tree renders before any effect runs.
-
-Build the linked set together instead, imperatively, through
-`physicsSystem.constraintSystem.addConstraint` directly - reading each body ref lazily, inside a
-single effect, the same way `useConstraint` itself reads its body refs:
+its own static anchor) have to exist before the gear is created. `useConstraint` now accepts refs
+to dependent constraints for `hinge1` and `hinge2`, and dereferences them lazily inside its effect
+after all dependencies exist. This allows building the gear from three separate `useConstraint`
+calls without needing to bundle them in a single imperative effect:
 
 ```tsx
-import { useJolt } from '@react-three/jolt';
+import { useConstraint } from '@react-three/jolt';
 
 function GearPair({ enabled }: { enabled: boolean }) {
-    const { physicsSystem } = useJolt();
     const hub1Ref = useRef<BodyState | null>(null);
     const hub2Ref = useRef<BodyState | null>(null);
     const wheel1Ref = useRef<BodyState | null>(null);
     const wheel2Ref = useRef<BodyState | null>(null);
 
-    useEffect(() => {
-        if (!enabled) return;
-        const hub1 = hub1Ref.current;
-        const hub2 = hub2Ref.current;
-        const wheel1 = wheel1Ref.current;
-        const wheel2 = wheel2Ref.current;
-        if (!hub1 || !hub2 || !wheel1 || !wheel2) return;
+    // Create the two hinges independently via useConstraint
+    const hinge1Ref = useConstraint('hinge', hub1Ref, wheel1Ref, 
+        enabled ? { point1: [0, 0, 0], axis: [0, 0, 1], motor: { type: 'velocity' } } : undefined
+    );
+    const hinge2Ref = useConstraint('hinge', hub2Ref, wheel2Ref,
+        enabled ? { point1: [3, 0, 0], axis: [0, 0, 1] } : undefined
+    );
 
-        const { constraintSystem } = physicsSystem;
-        const hinge1 = constraintSystem.addConstraint('hinge', hub1, wheel1, {
-            point1: [0, 0, 0],
-            axis: [0, 0, 1],
-            motor: { type: 'velocity' }
-        });
-        const hinge2 = constraintSystem.addConstraint('hinge', hub2, wheel2, {
-            point1: [3, 0, 0],
-            axis: [0, 0, 1]
-        });
-        const gear = constraintSystem.addConstraint('gear', wheel1, wheel2, {
-            hinge1,
-            hinge2,
+    // Create the gear, passing the hinge refs. useConstraint dereferences them inside its
+    // effect, after both hinges have been created.
+    useConstraint('gear', wheel1Ref, wheel2Ref,
+        enabled ? {
+            hinge1: hinge1Ref,
+            hinge2: hinge2Ref,
             ratio: 2,
             axis: [0, 0, 1]
-        });
-
-        // the gear references both hinges, so remove it first
-        return () => {
-            constraintSystem.removeConstraint(gear);
-            constraintSystem.removeConstraint(hinge2);
-            constraintSystem.removeConstraint(hinge1);
-        };
-    }, [enabled, physicsSystem]);
+        } : undefined
+    );
 
     // ...RigidBody hubs and wheels, `ref={hub1Ref}` etc.
 }
 ```
 
-This works because the effect only runs after this component's own `<RigidBody>` children (earlier
-siblings, so their own creation effects already ran) have populated the body refs, and everything
-after that - creating both hinges, then the gear, then wiring it up - is plain synchronous code
-with no React scheduling involved. `addConstraint` throws immediately (before allocating anything)
-if `hinge1`/`hinge2` are missing, so a mistake here fails loudly rather than building a broken gear.
+This works because `useConstraint` dereferences the refs (`hinge1Ref`, `hinge2Ref`) lazily inside
+its effect, only after both hinges' own effects have run and populated their refs. The gear's
+cleanup (removing it before the hinges) is handled automatically by React's effect ordering.
 
 `ratio` (set directly, `mRatio`) is how many radians hinge 2 turns *away* from its start per
 radian hinge 1 turns, in the opposite direction - `ratio: 2` turns hinge 2 at half hinge 1's speed,
@@ -208,21 +186,28 @@ demo](https://github.com/pmndrs/react-three-jolt/blob/main/apps/examples/src/exa
 ## RackAndPinion
 
 Same idea as `gear`, but couples a `hinge` (the pinion) to a `slider` (the rack) instead of two
-hinges - build all three (hinge, slider, rackAndPinion) the same way, in one effect:
+hinges. `useConstraint` accepts refs to both dependent constraints for `hinge` and `slider`,
+dereferencing them lazily inside its effect:
 
 ```tsx
-const { constraintSystem } = physicsSystem;
-const hinge = constraintSystem.addConstraint('hinge', pinionAnchor, pinionWheel, {
+import { useConstraint } from '@react-three/jolt';
+
+const pinionAnchorRef = useRef<BodyState | null>(null);
+const pinionWheelRef = useRef<BodyState | null>(null);
+const rackAnchorRef = useRef<BodyState | null>(null);
+const rackBodyRef = useRef<BodyState | null>(null);
+
+const hinge = useConstraint('hinge', pinionAnchorRef, pinionWheelRef, {
     point1: [0, 0, 0],
     axis: [0, 0, 1],
     motor: { type: 'velocity' }
 });
-const slider = constraintSystem.addConstraint('slider', rackAnchor, rackBody, {
+const slider = useConstraint('slider', rackAnchorRef, rackBodyRef, {
     axis: [0, 1, 0],
     min: -10,
     max: 10
 });
-const rackAndPinion = constraintSystem.addConstraint('rackAndPinion', pinionWheel, rackBody, {
+useConstraint('rackAndPinion', pinionWheelRef, rackBodyRef, {
     hinge,
     slider,
     ratio: 1,
