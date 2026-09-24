@@ -29,6 +29,7 @@ import { CubeHeap } from './examples/CubeHeap';
 import { FloatingPlatforms } from './examples/FloatingPlatforms';
 import { FooterFunnel } from './examples/FooterFunnel';
 import { FourWheelDemo } from './examples/FourWheelsWithHeightmap';
+import { Friction } from './examples/Friction';
 import { HeightfieldDemo } from './examples/Heightfield';
 import { Impulses } from './examples/Impulses';
 import { JustBoxes } from './examples/JustBoxes';
@@ -244,6 +245,12 @@ const routes: RouteMap = {
         transition: false,
         background: '#141622',
         element: <FooterFunnel />
+    },
+    Friction: {
+        position: [0, 5, 15],
+        target: [0, 0, 0],
+        background: '#2a4d3a',
+        element: <Friction />
     }
 };
 
