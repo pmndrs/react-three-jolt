@@ -35,6 +35,7 @@ import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
+import { SoftBodyEvents } from './examples/SoftBodyEvents';
 import { JoltMemoryReadout } from './JoltMemoryReadout';
 import {
     getJoltFactory,
@@ -213,6 +214,13 @@ const routes: RouteMap = {
         transition: false,
         background: '#141622',
         element: <FooterFunnel />
+    },
+    SoftBodyEvents: {
+        label: 'Soft Body Events',
+        position: [0, 9, 16],
+        target: [0, 4, 0],
+        background: '#1b4332',
+        element: <SoftBodyEvents />
     }
 };
 
