@@ -23,6 +23,7 @@ import { NavLink, type NavLinkProps, Route, Routes, useLocation } from 'react-ro
 import { AddRemoveBodies } from './examples/AddRemoveBodies';
 import { BallBox } from './examples/BallBox';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
+import { CollisionFiltering } from './examples/CollisionFiltering';
 import { Constraints } from './examples/Constraints';
 import { ContactEvents } from './examples/ContactEvents';
 import { CubeHeap } from './examples/CubeHeap';
@@ -206,6 +207,13 @@ const routes: RouteMap = {
         target: [0, 1, 10],
         background: '#3d405b',
         element: <CharacterVirtualDemo />
+    },
+    CollisionFiltering: {
+        label: 'Collision Filtering',
+        position: [13, 12, 13],
+        target: [0, 6, 0],
+        background: '#22223b',
+        element: <CollisionFiltering />
     },
     // just for current dev purposes
     Boxes: {
