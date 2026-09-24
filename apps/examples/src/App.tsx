@@ -30,6 +30,7 @@ import { FourWheelDemo } from './examples/FourWheelsWithHeightmap';
 import { HeightfieldDemo } from './examples/Heightfield';
 import { Impulses } from './examples/Impulses';
 import { JustBoxes } from './examples/JustBoxes';
+import { Motors } from './examples/Motors';
 import { MotionSources } from './examples/motionSources';
 import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
@@ -205,6 +206,13 @@ const routes: RouteMap = {
         target: [0, 8, -8],
         background: '#3d405b',
         element: <Constraints />
+    },
+    Motors: {
+        label: 'Motors',
+        position: [0, 10, 28],
+        target: [0, 6, 0],
+        background: '#22223b',
+        element: <Motors />
     },
     FooterFunnel: {
         label: 'Footer Funnel',
