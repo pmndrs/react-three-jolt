@@ -1,8 +1,9 @@
 // Sensor volumes: kinematic zone slides over resting bodies, tint while inside.
-// Demonstrates: RigidBody isSensor, onSensorEnter / onSensorExit events, kinematic move.
+// Demonstrates: RigidBody isSensor, onSensorEnter / onSensorExit events.
+// Kinematic sensors detect sleeping bodies, so count updates persistently.
 import { Environment, Html } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
-import type { SensorPayload } from '@react-three/jolt';
+import type { BodyState, SensorPayload } from '@react-three/jolt';
 import { Physics, RigidBody } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt/addons';
 import { useRef, useState } from 'react';
@@ -16,29 +17,28 @@ const DEFAULT_TINT = new Color('#4ecdc4');
 function FallingBox({
     x,
     i,
-    sensorCount,
-    setSensorCount
+    onEnter,
+    onExit
 }: {
     x: number;
     i: number;
-    sensorCount: number;
-    setSensorCount: (count: number) => void;
+    onEnter: () => void;
+    onExit: () => void;
 }) {
     const [inside, setInside] = useState(false);
 
     const handleSensorEnter = (_payload: SensorPayload) => {
         setInside(true);
-        setSensorCount(sensorCount + 1);
+        onEnter();
     };
 
     const handleSensorExit = (_payload: SensorPayload) => {
         setInside(false);
-        setSensorCount(Math.max(0, sensorCount - 1));
+        onExit();
     };
 
     return (
         <RigidBody
-            key={i}
             position={[x, 15 + i * 2, 0]}
             type="dynamic"
             mass={1}
@@ -54,16 +54,16 @@ function FallingBox({
 }
 
 function SensorZone() {
-    const sensorRef = useRef<any>(null);
+    const sensorRef = useRef<BodyState>(null);
     const [sensorCount, setSensorCount] = useState(0);
     const timeRef = useRef(0);
 
-    useFrame((_, deltaTime) => {
+    useFrame((_state, deltaTime) => {
         timeRef.current += deltaTime;
         const body = sensorRef.current;
         if (body) {
             const x = Math.sin(timeRef.current) * 6;
-            body.moveKinematic([x, 1, 0], deltaTime);
+            body.setKinematicTarget([x, 1, 0]);
         }
     });
 
@@ -107,8 +107,8 @@ function SensorZone() {
                     key={i}
                     x={x}
                     i={i}
-                    sensorCount={sensorCount}
-                    setSensorCount={setSensorCount}
+                    onEnter={() => setSensorCount((c) => c + 1)}
+                    onExit={() => setSensorCount((c) => Math.max(0, c - 1))}
                 />
             ))}
         </>
