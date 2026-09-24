@@ -36,6 +36,7 @@ import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
+import { SleepWake } from './examples/SleepWake';
 import { JoltMemoryReadout } from './JoltMemoryReadout';
 import {
     getJoltFactory,
@@ -161,6 +162,13 @@ const routes: RouteMap = {
         target: [0, 5, 0],
         background: '#1d3557',
         element: <OneWayPlatform />
+    },
+    SleepWake: {
+        label: 'Sleep and Wake',
+        position: [0, 12, 8],
+        target: [0, 3, 0],
+        background: '#3d405b',
+        element: <SleepWake />
     },
     Vehicle: {
         position: [2, 25, 51],
