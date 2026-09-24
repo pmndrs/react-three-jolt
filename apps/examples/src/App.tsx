@@ -40,6 +40,7 @@ import { OneWayPlatform } from './examples/OneWayPlatform';
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
 import { SleepWake } from './examples/SleepWake';
+import { Shapecast } from './examples/Shapecast';
 import { JoltMemoryReadout } from './JoltMemoryReadout';
 import {
     getJoltFactory,
@@ -146,6 +147,12 @@ const routes: RouteMap = {
         target: [0, 0, 0],
         background: '#3d405b',
         element: <RaycastManyDemo />
+    },
+    Shapecast: {
+        position: [0, 6, 20],
+        target: [0, 2, 0],
+        background: '#22223b',
+        element: <Shapecast />
     },
     Heightfield: {
         position: [150, 110, 150],
