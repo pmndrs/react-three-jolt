@@ -12,7 +12,7 @@ export function Friction() {
     const { debug, paused, interpolate, physicsKey, module } = useDemo();
 
     const frictionValues = [0, 0.25, 0.5, 0.75, 1];
-    const rampRotation = -0.4; // rad, ~23°
+    const rampRotation = 0.4; // rad, ~23°: far end (-z) is high, slopes down toward camera
     const rampPos = [-8, 4, 0];
 
     // Ramp dimensions: 12 wide × 0.5 high × 16 long
@@ -20,17 +20,13 @@ export function Friction() {
     const rampHeight = 0.5;
     const rampLength = 16;
 
-    // Compute box start position ON ramp surface.
-    // For local z = -6 on ramp top:
-    // world y = 4 + cos(0.4)*0.25 + sin(0.4)*6 ≈ 6.6
-    // world z = -6*cos(0.4) ≈ -5.5
+    // Point on ramp top at local z, rotated about X by rampRotation.
+    // Rotation: y' = y cos(θ) - z sin(θ), z' = y sin(θ) + z cos(θ)
+    // For local z = -6: y ≈ 6.8, z ≈ -5.4
     const localZ = -6;
-    const boxStartY =
-        rampPos[1] +
-        Math.cos(rampRotation) * (rampHeight / 2) +
-        Math.sin(rampRotation) * Math.abs(localZ) +
-        0.5; // +0.5 clearance
-    const boxStartZ = rampPos[2] + localZ * Math.cos(rampRotation);
+    const top = rampHeight / 2 + 0.35; // +half box (0.3) +clearance (0.05)
+    const boxStartY = rampPos[1] + top * Math.cos(rampRotation) - localZ * Math.sin(rampRotation);
+    const boxStartZ = rampPos[2] + top * Math.sin(rampRotation) + localZ * Math.cos(rampRotation);
 
     return (
         <Physics
@@ -51,7 +47,7 @@ export function Friction() {
                 </mesh>
             </RigidBody>
 
-            {/* Ramp: 12 wide × 0.5 high × 16 long, rotated -0.4 rad about X (slopes down toward +z). */}
+            {/* Ramp: 12 wide × 0.5 high × 16 long, rotated 0.4 rad about X (slopes down toward camera). */}
             {/* Friction=1 so Jolt's sqrt(1*f) = sqrt(f) makes box friction dominant. */}
             <RigidBody
                 type="static"
@@ -68,6 +64,9 @@ export function Friction() {
             {/* Boxes with increasing friction in separate lanes */}
             {frictionValues.map((friction, i) => {
                 const boxX = rampPos[0] + (i - 2) * 2.2;
+                const labelTop = rampHeight / 2 + 1.2;
+                const labelY = rampPos[1] + labelTop * Math.cos(rampRotation) - localZ * Math.sin(rampRotation);
+                const labelZ = rampPos[2] + labelTop * Math.sin(rampRotation) + localZ * Math.cos(rampRotation);
                 return (
                     <group key={`friction-${i}`}>
                         <RigidBody
@@ -81,11 +80,7 @@ export function Friction() {
                             </mesh>
                         </RigidBody>
                         {/* Label on ramp at top of lane */}
-                        <Html
-                            position={[boxX, boxStartY + 0.8, boxStartZ - 0.5]}
-                            center
-                            distanceFactor={30}
-                        >
+                        <Html position={[boxX, labelY, labelZ]} center distanceFactor={30}>
                             <div
                                 style={{
                                     color: '#ffffff',
