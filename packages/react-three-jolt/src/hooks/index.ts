@@ -5,3 +5,4 @@ export * from './use-forwarded-ref';
 export * from './use-imperative-instance';
 export * from './use-physics-step';
 export * from './use-raycasters';
+export * from './use-rewind';

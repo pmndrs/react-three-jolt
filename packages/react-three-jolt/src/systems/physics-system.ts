@@ -13,7 +13,7 @@ import type Jolt from 'jolt-physics';
 import { MathUtils } from 'three';
 import { Layer, NUM_BROAD_PHASE_LAYERS, NUM_OBJECT_LAYERS } from '../constants';
 import { Raw } from '../raw';
-import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
+import { _quaternion, _vector3 } from '../tmp';
 import { anyVec3, devWarn, joltScratch, vec3 } from '../utils';
 import { BodyState } from './body-state';
 import { BodySystem } from './body-system';
@@ -23,6 +23,7 @@ import { type StepCallback, WORLD_EVENT_BITS, type WorldEventMap } from './event
 import { ShapeCollider } from './queries/collider';
 import { AdvancedRaycaster, Multicaster, Raycaster } from './queries/raycasters';
 import { Shapecaster } from './queries/shapecasters';
+import { PhysicsSnapshot } from './state-recorder';
 
 /**
  * Any callable, used only as the identity key of the deprecated `removeStepListener(fn)`.
@@ -542,24 +543,11 @@ export class PhysicsSystem {
             state.readPose(_vector3, _quaternion);
         }
 
-        // Convert that into the object's parent space -> _matrix4
-        _matrix4
-            // activeScale rather than the `scale` getter: same value, but typed as a Vector3
-            .compose(_vector3, _quaternion, state.activeScale)
-            .premultiply(state.invertedWorldMatrix);
-
-        // #168: with `matrixAutoUpdate` off, `_matrix4` above already *is* the object's local
-        // matrix - write it straight through and skip decomposing it into position/quaternion/
-        // scale only for `update()` to recompose them right back into a matrix a moment later.
-        // Only meaningful for a non-instance object (an instance's transform is never driven by
-        // position/quaternion in the first place).
-        if (state.matrixAutoUpdate === false && !state.isInstance) {
-            state.setLocalMatrix(_matrix4);
-            return;
-        }
-
-        _matrix4.decompose(_position, _rotation, _scale);
-        state.update(_position, _rotation);
+        // Parent-space conversion, `matrixAutoUpdate === false`'s fast path (#168) included -
+        // shared with `BodyState.syncFromPhysics()`, which `restoreState()` uses to push a
+        // restored pose onto the object immediately instead of waiting for a frame this loop
+        // would skip (a sleeping body, in particular).
+        state.applyWorldPose(_vector3, _quaternion);
     };
 
     private variableStep(delta: number): void {
@@ -722,6 +710,75 @@ export class PhysicsSystem {
     getShapeCollider() {
         this.assertAlive('getShapeCollider()');
         return this.trackQuery(new ShapeCollider(this.joltPhysicsSystem, this.joltInterface));
+    }
+
+    //* State snapshots (issue #247) ===================================
+    /**
+     * Snapshot this world's physics state into a {@link PhysicsSnapshot} - bodies, contacts and
+     * constraints by default (Jolt's own default, `EStateRecorderState::All`). Pass `state` to
+     * save less (e.g. `Raw.module.EStateRecorderState_Bodies` to skip contacts/constraints, which
+     * are reconstructed by the next step anyway) and `filter` to exclude specific bodies,
+     * constraints or contacts from the save.
+     *
+     * The snapshot owns real WASM heap until you call `snapshot.destroy()` - `restoreState()`
+     * does not consume it, so the same snapshot can be restored any number of times. A rewind
+     * ring buffer (see `useRewind`) keeps one snapshot per recorded frame and destroys the
+     * oldest as it falls out of the window.
+     */
+    saveState(
+        state?: Jolt.EStateRecorderState,
+        filter?: Jolt.StateRecorderFilter
+    ): PhysicsSnapshot {
+        this.assertAlive('saveState()');
+        const recorder = new Raw.module.StateRecorderImpl();
+        this.joltPhysicsSystem.SaveState(recorder, state, filter);
+        return new PhysicsSnapshot(recorder);
+    }
+
+    /**
+     * Restore a snapshot taken by {@link saveState}. Rewinds the snapshot's read cursor first, so
+     * the same snapshot can be restored more than once (a rewind buffer scrubbing back and forth
+     * over the same recorded frame, for instance).
+     *
+     * Jolt's `PhysicsSystem::RestoreState` puts every saved body back exactly as it was - pose,
+     * velocity and activation state included - but nothing repaints the three.js side on its own,
+     * and the per-frame sync loop only visits bodies that are awake (plus the rare moved static),
+     * which is exactly backwards right after a restore: a body a restore just put to sleep still
+     * needs one more sync to *show* the pose it stopped at, and its interpolation cache still
+     * holds the pre-restore pose pair, which would otherwise get lerped across on the next frame.
+     * This resyncs every registered body's object and interpolation cache immediately, so the
+     * very next render is correct with no transient frame in between.
+     *
+     * @returns Jolt's own success flag from `RestoreState`.
+     */
+    restoreState(snapshot: PhysicsSnapshot, filter?: Jolt.StateRecorderFilter): boolean {
+        this.assertAlive('restoreState()');
+        if (!snapshot || snapshot.destroyed) {
+            devWarn(
+                'r3/jolt: PhysicsSystem.restoreState() called with a missing or already-destroyed snapshot'
+            );
+            return false;
+        }
+        snapshot.rewind();
+        const restored = this.joltPhysicsSystem.RestoreState(snapshot.recorder, filter);
+        this.resyncAfterRestore();
+        return restored;
+    }
+
+    /**
+     * Push every registered body's restored pose onto its three.js object right now, and reseed
+     * its interpolation cache from that pose (no history, so the next frame does not lerp across
+     * the restore). Walks the full body registry rather than the frame loop's dynamic/kinematic
+     * maps: a restore can wake or sleep any body, and can move a static one just as a `position`
+     * setter can (issue #61) - `movedStatics` is cleared here since this already covers it.
+     */
+    private resyncAfterRestore(): void {
+        for (const state of this.bodySystem.bodies.values()) {
+            state.resetPoseCache();
+            state.capturePose();
+            state.syncFromPhysics();
+        }
+        this.bodySystem.movedStatics.clear();
     }
 
     //* Utility methods ----------------------------

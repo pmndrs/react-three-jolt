@@ -398,6 +398,101 @@ The object most of the world's behaviour lives on. Beyond the props above:
 > made for that function. Both are deprecated because removal by identity cannot work for the
 > inline arrows callers actually pass — keep the handle `onBeforeStep` gives you instead.
 
+## World snapshots (save / restore)
+
+`saveState()` / `restoreState()` wrap Jolt's own `PhysicsSystem::SaveState` / `RestoreState`, so
+you can snapshot the whole world — every body's pose, velocity and activation state, plus contacts
+and constraints — and jump back to it later. This is what a rewind, a checkpoint system, or a
+"replay this collision" tool is built on.
+
+```ts
+const { physicsSystem } = useJolt();
+
+const snapshot = physicsSystem.saveState();
+// ...simulate forward, let things collide and settle...
+physicsSystem.restoreState(snapshot); // back to exactly how it was
+snapshot.destroy(); // free it once you're done — see below
+```
+
+| member | |
+| --- | --- |
+| `saveState(state?, filter?)` | returns a `PhysicsSnapshot`. `state` narrows what's saved (`Raw.module.EStateRecorderState_Bodies` to skip contacts/constraints); `filter` is a `Jolt.StateRecorderFilter` to exclude specific bodies/constraints/contacts |
+| `restoreState(snapshot, filter?)` | restores a snapshot and resyncs the three.js side (see below); returns Jolt's own success flag |
+
+`restoreState()` does more than call into Jolt: the per-frame render loop only visits bodies that
+are awake (plus the rare moved static), which is exactly backwards right after a restore — a body
+the restore just put to sleep still needs one more sync to *show* the pose it stopped at, and every
+body's interpolation cache still holds its pre-restore pose pair, which would otherwise get lerped
+across on the next frame. `restoreState()` pushes every registered body's restored pose onto its
+three.js object immediately and reseeds its interpolation cache, so the very next render is
+correct with no transient frame in between — sleeping bodies included.
+
+### `PhysicsSnapshot`
+
+What `saveState()` returns: an opaque handle around a Jolt `StateRecorderImpl` byte buffer. It owns
+real WASM heap until you free it, and restoring it does **not** consume it — the same snapshot can
+be restored any number of times, which is what a rewind ring buffer relies on.
+
+| member | |
+| --- | --- |
+| `destroy()` | free the WASM-side buffer; idempotent |
+| `destroyed` | true once `destroy()` has run |
+| `rewind()` | reset the read cursor to the start; `restoreState()` calls this for you |
+| `isEqual(other)` | byte-for-byte comparison via Jolt's own `StateRecorderImpl.IsEqual` — handy for a determinism check (save, step forward, restore, step forward the same way again, save, compare) |
+
+> [!WARNING]
+> A `PhysicsSnapshot` is heap, not a lightweight value — treat it like any other Jolt handle in
+> [Memory & lifecycle](/advanced/memory): destroy what you're done with, and never destroy it
+> twice.
+
+### Per-body snapshots
+
+`BodyState` has the same pair for a single body — see
+[`BodyState` → Pose](/api/rigid-body#pose) — useful for resetting one knocked-over prop without
+touching the rest of the scene:
+
+```ts
+const snapshot = crate.current!.saveState();
+// ...crate gets knocked around...
+crate.current!.restoreState(snapshot);
+snapshot!.destroy();
+```
+
+### `useRewind()`
+
+A ring buffer of `saveState()` snapshots recorded from `onAfterStep`, with `rewind(n)` restoring
+`n` recorded frames back.
+
+```tsx
+import { useRewind } from '@react-three/jolt';
+
+function RewindControls() {
+    const { rewind, clear, getFrameCount } = useRewind({ frames: 300, interval: 1 });
+
+    return (
+        <button onClick={() => rewind(60)}>
+            Rewind 1s ({getFrameCount()} frames buffered)
+        </button>
+    );
+}
+```
+
+| option | default | |
+| --- | --- | --- |
+| `frames` | `300` | ring buffer capacity — how many snapshots to keep before the oldest is dropped (and freed) |
+| `interval` | `1` | record a snapshot every `interval` physics substeps, not every one |
+| `state` | Jolt's default | passed straight through to `saveState()` |
+
+| return | |
+| --- | --- |
+| `rewind(n)` | restore `n` recorded frames back (`1` = the last one taken) and drop (freeing) everything recorded after it — once you resume stepping, that discarded future never happened. Returns `false` if there's nothing that far back yet |
+| `clear()` | free every buffered snapshot and empty the buffer |
+| `getFrameCount()` | how many snapshots are currently buffered, `0..frames` — **not reactive**, call it from your own render loop rather than expecting a re-render |
+
+The whole buffer is freed on unmount, so nothing here leaks WASM heap on its own — but a large
+`frames` trades heap for history depth, since each entry is a full world save. See the `Rewind`
+example in `apps/examples` for a working scrub-back UI.
+
 ## Stepping and the frame loop
 
 One `<Physics>` per world; multiple worlds in one app are supported, each with its own Jolt
