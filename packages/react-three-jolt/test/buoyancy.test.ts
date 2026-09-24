@@ -247,6 +247,29 @@ test('different densities: two overlapping volumes float one group and sink anot
     assert.isBelow(rock.position.y, rockStart - 1, 'the rock did not sink');
 });
 
+test('per-body buoyancy overrides: one body with override sinks while the other floats (issue #260)', () => {
+    // different densities in one volume - no need for stacking volumes and groups
+    addPool({ buoyancy: 1.5 });
+    const floater = addBody([0, -3, 0]);
+    const sinker = addBody([3, -3, 0]);
+    sinker.buoyancy = 0.5; // overrides pool's 1.5, so it sinks
+    const floatStart = floater.position.y;
+    const sinkStart = sinker.position.y;
+
+    step(180);
+
+    assert.isAbove(
+        floater.position.y,
+        floatStart + 1,
+        'the floater with default buoyancy did not float'
+    );
+    assert.isBelow(
+        sinker.position.y,
+        sinkStart - 3,
+        'the sinker with overridden buoyancy did not sink'
+    );
+});
+
 //* leak -------------------------------------------------------------
 
 test('the per-substep path allocates nothing on the Jolt heap', () => {

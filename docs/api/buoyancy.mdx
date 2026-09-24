@@ -29,18 +29,26 @@ jolt-physics 1.1 (it ships as wasm only, there is no source to read against):
 - `buoyancy < 1` sinks.
 - A 1kg and a 50,000kg box of the same shape, in the same volume, settle at the **same height**.
 
-So there is no per-body density knob to reach for. To drop "a cork and a rock in the same pool",
-give the cork and the rock **different volumes** at the same footprint, and use `group` (or
-`filter`) to pick who each one affects - which is exactly what the Buoyancy demo
-(`apps/examples/src/examples/Buoyancy.tsx`) does:
+### Per-body overrides (issue #260)
+
+When a `<RigidBody>` specifies `buoyancy`, `linearDrag`, or `angularDrag`, those values override
+the water volume's defaults for that body **only** - meaning you can drop a cork and a rock in
+the same pool without stacking volumes and groups:
 
 ```tsx
-<Water position={[0, 0, 0]} size={[24, 12, 24]} surfaceHeight={2} buoyancy={1.8} group={1} visible />
-<Water position={[0, 0, 0]} size={[24, 12, 24]} surfaceHeight={2} buoyancy={0.35} group={2} />
+<Water position={[0, 0, 0]} size={[24, 12, 24]} surfaceHeight={2} buoyancy={1.5} visible />
 
-<RigidBody group={1} /* the cork: floats */ />
-<RigidBody group={2} /* the rock: sinks */ />
+<RigidBody buoyancy={1.8} /* the cork: floats */>
+  <mesh>...</mesh>
+</RigidBody>
+<RigidBody buoyancy={0.35} /* the rock: sinks */>
+  <mesh>...</mesh>
+</RigidBody>
 ```
+
+The old approach (stacking volumes with `group`/`filter`) still works and is better when you have
+many bodies with distinct densities - use it for large groups, and per-body overrides for one or
+two exceptional bodies in the same pool.
 
 ## `<Water>`
 

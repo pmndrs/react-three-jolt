@@ -182,6 +182,24 @@ interface RigidBodyProps
      * `bodyState.matrixAutoUpdate`. Default `true` (three's normal behavior, unchanged).
      */
     matrixAutoUpdate?: boolean;
+
+    //* Buoyancy overrides (issue #260) ======================
+    /**
+     * When this body overlaps a water volume, use this buoyancy value instead of the volume's
+     * default. Allows different densities (cork vs rock) in the same pool without stacking
+     * volumes.
+     */
+    buoyancy?: number;
+    /**
+     * When this body overlaps a water volume, use this linear drag value instead of the volume's
+     * default.
+     */
+    linearDrag?: number;
+    /**
+     * When this body overlaps a water volume, use this angular drag value instead of the volume's
+     * default.
+     */
+    angularDrag?: number;
 }
 export interface RigidBodyContext {
     body: BodyState | undefined;
@@ -333,6 +351,11 @@ export const RigidBody = memo(function RigidBody(props: RigidBodyProps) {
         dof,
 
         debug: propDebug,
+
+        // buoyancy overrides (issue #260)
+        buoyancy,
+        linearDrag,
+        angularDrag,
 
         onCollisionEnter,
         onCollisionPersist,
@@ -674,6 +697,11 @@ export const RigidBody = memo(function RigidBody(props: RigidBodyProps) {
         if (restitution !== undefined) body.restitution = restitution;
         if (gravityFactor !== undefined) body.gravityFactor = gravityFactor;
 
+        // buoyancy overrides (issue #260) - stored on body for BuoyancySystem to read
+        if (buoyancy !== undefined) body.buoyancy = buoyancy;
+        if (linearDrag !== undefined) body.linearDrag = linearDrag;
+        if (angularDrag !== undefined) body.angularDrag = angularDrag;
+
         // check if the body is allowing obstruction
         const isAllowing = body.allowObstruction;
         if (allowObstruction !== undefined) {
@@ -698,7 +726,10 @@ export const RigidBody = memo(function RigidBody(props: RigidBodyProps) {
         friction,
         restitution,
         gravityFactor,
-        isSensor
+        isSensor,
+        buoyancy,
+        linearDrag,
+        angularDrag
     ]);
 
     //* Sensor colliders (issue #155) ---------------------
