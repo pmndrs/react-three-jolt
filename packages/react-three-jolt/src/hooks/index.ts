@@ -1,5 +1,6 @@
 export * from './hooks';
 export * from './use-body-events';
+export * from './use-buoyancy';
 export * from './use-constraint';
 export * from './use-forwarded-ref';
 export * from './use-imperative-instance';

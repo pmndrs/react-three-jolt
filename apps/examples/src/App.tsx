@@ -21,6 +21,7 @@ import {
 } from 'react';
 import { NavLink, type NavLinkProps, Route, Routes, useLocation } from 'react-router';
 import { BallBox } from './examples/BallBox';
+import { Buoyancy } from './examples/Buoyancy';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
 import { Constraints } from './examples/Constraints';
 import { CubeHeap } from './examples/CubeHeap';
@@ -213,6 +214,12 @@ const routes: RouteMap = {
         transition: false,
         background: '#141622',
         element: <FooterFunnel />
+    },
+    Buoyancy: {
+        position: [0, 14, 34],
+        target: [0, 0, 0],
+        background: '#1b4965',
+        element: <Buoyancy />
     }
 };
 

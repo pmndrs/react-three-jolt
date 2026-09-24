@@ -17,6 +17,7 @@ import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '.
 import { anyVec3, devWarn, joltScratch, vec3 } from '../utils';
 import { BodyState } from './body-state';
 import { BodySystem } from './body-system';
+import { BuoyancySystem } from './buoyancy-system';
 import { ConstraintSystem } from './constraint-system';
 import { Emitter, type Unsubscribe } from './emitter';
 import { type StepCallback, WORLD_EVENT_BITS, type WorldEventMap } from './events';
@@ -173,6 +174,8 @@ export class PhysicsSystem {
     bodyInterface!: Jolt.BodyInterface;
     bodySystem!: BodySystem;
     constraintSystem!: ConstraintSystem;
+    /** Water volumes (issue #240), created lazily by {@link getBuoyancySystem}. */
+    private _buoyancySystem?: BuoyancySystem;
 
     /**
      * This world's slot in `Raw`'s interface registry, from a counter that only ever goes up.
@@ -722,6 +725,19 @@ export class PhysicsSystem {
     getShapeCollider() {
         this.assertAlive('getShapeCollider()');
         return this.trackQuery(new ShapeCollider(this.joltPhysicsSystem, this.joltInterface));
+    }
+
+    //* Buoyancy ===================================
+    /**
+     * This world's {@link BuoyancySystem} registry of water volumes, created the first time
+     * anything asks for it (`useBuoyancy`, `<Water>`) and torn down with the world through
+     * {@link registerDisposable} - most scenes never touch water, so this stays off the
+     * constructor's hot path and off every world's WASM heap budget until it's used.
+     */
+    getBuoyancySystem(): BuoyancySystem {
+        this.assertAlive('getBuoyancySystem()');
+        if (!this._buoyancySystem) this._buoyancySystem = new BuoyancySystem(this);
+        return this._buoyancySystem;
     }
 
     //* Utility methods ----------------------------

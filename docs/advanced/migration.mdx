@@ -178,6 +178,11 @@ from only the first channel.
 - **[`<Attractor>` / `useAttractor()`](/api/physics#<attractor>).** A point that pulls (or pushes)
   every dynamic body within `range`, with rapier's three falloff curves — a
   `@react-three/rapier` scene's attractors port across unchanged.
+- **[`<Water>` / `useBuoyancy()`](/api/buoyancy).** Box shaped water volumes built on
+  `Body.ApplyBuoyancyImpulse` — every dynamic body whose bounds overlap one floats, drags and
+  rides a `flow` current, and a sleeping body is woken so it can float back up. `buoyancy` is a
+  ratio to gravity (`1` neutral, `>1` floats, `<1` sinks), not a per-body density — see the doc for
+  how to simulate different densities with `group`/`filter` instead.
 - **[`<Physics debug>` collider renderer](/api/physics#debug) / `<Debug>`.** One wireframe per
   body built from its real Jolt shape (so it shows what a dynamic trimesh actually fell back to),
   coloured by motion type, plus constraint lines and `showContacts`. Replaces the old per-body
