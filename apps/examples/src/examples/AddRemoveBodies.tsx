@@ -54,7 +54,6 @@ function AddRemoveInner() {
     const [bodies, setBodies] = useState<DynamicBody[]>([]);
     const nextIdRef = useRef(0);
     const intervals = useSetInterval();
-    const spawnIntervalRef = useRef(null);
 
     // Spawn a new body
     const spawnBody = () => {
@@ -78,18 +77,8 @@ function AddRemoveInner() {
 
     // Set up the spawn interval
     useEffect(() => {
-        if (spawnIntervalRef.current) {
-            intervals.clearInterval(spawnIntervalRef.current);
-        }
-        // Spawn a body every 100ms
-        //@ts-expect-error useSetInterval's handle type is not the ref's
-        spawnIntervalRef.current = intervals.setInterval(spawnBody, 100);
-
-        return () => {
-            if (spawnIntervalRef.current) {
-                intervals.clearInterval(spawnIntervalRef.current);
-            }
-        };
+        const id = intervals.setInterval(spawnBody, 100);
+        return () => intervals.clearInterval(id);
     }, [intervals]);
 
     return (
@@ -104,9 +93,9 @@ function AddRemoveInner() {
                 <RigidBody key={body.id} position={body.position}>
                     <mesh>
                         {body.isBox ? (
-                            <boxGeometry args={[0.5, 0.5, 0.5]} />
+                            <boxGeometry args={[0.8, 0.8, 0.8]} />
                         ) : (
-                            <sphereGeometry args={[0.5, 16, 16]} />
+                            <sphereGeometry args={[0.4, 16, 16]} />
                         )}
                         <meshStandardMaterial color={body.color} />
                     </mesh>
