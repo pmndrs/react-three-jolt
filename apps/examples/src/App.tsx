@@ -32,6 +32,8 @@ import { Impulses } from './examples/Impulses';
 import { JustBoxes } from './examples/JustBoxes';
 import { MotionSources } from './examples/motionSources';
 import { OneWayPlatform } from './examples/OneWayPlatform';
+import { PoweredRagdoll } from './examples/PoweredRagdoll';
+import { Ragdolls } from './examples/Ragdolls';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
@@ -213,6 +215,19 @@ const routes: RouteMap = {
         transition: false,
         background: '#141622',
         element: <FooterFunnel />
+    },
+    Ragdolls: {
+        position: [6, 6, 12],
+        target: [0, 2, 0],
+        background: '#2b2138',
+        element: <Ragdolls />
+    },
+    PoweredRagdoll: {
+        label: 'Powered Ragdoll',
+        position: [0, 4, 10],
+        target: [0, 1.5, 0],
+        background: '#2b2138',
+        element: <PoweredRagdoll />
     }
 };
 

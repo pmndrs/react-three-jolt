@@ -1,0 +1,247 @@
+---
+title: Ragdoll
+description: The Ragdoll component, drive modes, template reuse, and the RagdollSystem it's built on.
+nav: 10
+---
+
+`<Ragdoll>` turns a rigged, skinned character into a physical ragdoll: one capsule per bone, one
+constraint per joint, driven by an animation, motors, or nothing at all.
+
+```tsx
+import { Ragdoll } from '@react-three/jolt';
+
+<Physics>
+    <Ragdoll debug>
+        <primitive object={mySkinnedMesh} />
+    </Ragdoll>
+</Physics>;
+```
+
+`<Ragdoll>` looks for the first `<skinnedMesh>` among its children, builds a capsule-per-bone rig
+from its `Skeleton`, spawns it, and syncs the live physics pose back onto the bones every frame —
+so a `THREE.SkinnedMesh` under a `<Ragdoll>` renders correctly with no other wiring.
+
+> [!NOTE]
+> Before reaching for this page, prepare your character's rig — bone naming, scale, and bind pose
+> all affect how good the auto-generated capsules look. See
+> [Preparing a rig](/getting-started/preparing-a-rig).
+
+## Props
+
+| prop | type | notes |
+| --- | --- | --- |
+| `parts` | [`RagdollPartsConfig`](#parts-per-bone-overrides) | per-bone capsule/constraint overrides. Read once, at mount — see [Template lifetime](#template-lifetime) |
+| `defaultConstraint` | `'swingTwist' \| 'hinge' \| 'fixed' \| 'none'` | default joint type for any bone `parts` doesn't override. Default `'swingTwist'`. Mount-time only |
+| `layer` | `number` | Jolt object layer every part is created on. Default `Layer.MOVING`, so the ragdoll collides with the world. Mount-time only — see [the `Layer.RIG` note](#layerrig) |
+| `activate` | `boolean` | whether the ragdoll starts simulated. Default `true` |
+| `debug` | `boolean` | draws a wireframe capsule per part (same overlay `<RigidBody debug>` uses). Reactive |
+| `mode` | `'animated' \| 'powered' \| 'ragdoll'` | how the ragdoll is driven — see [Drive modes](#drive-modes). Default `'ragdoll'`. **Reactive** |
+| `blendTime` | `number` | seconds a mode change blends bones over when leaving `'ragdoll'`. Default `0.2` |
+| `defaultMotorStrength` | `number` | default `swingTwist` motor spring frequency (Hz) for `'powered'` mode. Default `6`. Mount-time only |
+| `defaultMotorDamping` | `number` | default motor spring damping ratio. Default `1`. Mount-time only |
+| `ref` | `Ref<RagdollHandle>` | see [The ref](#the-ref) |
+
+Event props — `onCollisionEnter`, `onCollisionPersist`, `onCollisionExit`, `onSensorEnter`,
+`onSensorExit`, `onSleep`, `onWake` — mirror `<RigidBody>`'s, fanned out to every part. Each
+payload's `target.object` is the part's proxy object, named after its bone, so a handler can tell
+parts apart (`e.target.object?.name === 'LeftHand'`).
+
+`parts` / `defaultConstraint` / `layer` / `defaultMotorStrength` / `defaultMotorDamping` are
+**mount-time only** — changing them after mount does nothing. `mode` is the one reactive prop that
+changes the live rig. See [Template lifetime](#template-lifetime) for why.
+
+## Parts: per-bone overrides
+
+`buildTemplate` puts one capsule on **every** joint, auto-sized from the distance to that bone's
+first child (or inherited from its parent for a leaf bone). That heuristic is a reasonable starting
+point but rarely exactly right — a torso bone's segment length has nothing to do with how wide a
+torso is, a leaf bone (a head, in most rigs) has no "distance to child" to size itself from at all,
+and finger/toe bones usually don't need their own free joint. Override what you need to, per bone
+name:
+
+```tsx
+<Ragdoll
+    parts={{
+        Hips: { radius: 0.14, length: 0.22 },
+        Spine: { radius: 0.12 },
+        Head: { radius: 0.11, length: 0.22 },
+        LeftHandThumb1: { constraint: 'fixed' },
+        LeftArm: { constraint: 'hinge', hingeMin: -1.5, hingeMax: 0 }
+    }}
+>
+    <primitive object={mySkinnedMesh} />
+</Ragdoll>
+```
+
+| `RagdollPartOptions` field | notes |
+| --- | --- |
+| `radius` / `length` | explicit capsule size, overriding the auto heuristic entirely |
+| `radiusFraction` | radius as a fraction of the (auto or explicit) length. Default from `defaultRadiusFraction`, `0.15` |
+| `mass` | kg. Omitted lets Jolt compute it from the capsule's volume |
+| `constraint` | `'swingTwist'` (default, a cone + twist limit — shoulders, hips, neck), `'hinge'` (one axis — elbows, knees), `'fixed'` (welded, still its own body), or `'none'` (a body with no constraint to its parent at all — **not** shape merging, see the type's own doc comment) |
+| `twistAxis` / `planeAxis` / `normalConeAngle` / `planeConeAngle` / `twistMin` / `twistMax` | `swingTwist`-only limits |
+| `hingeAxis` / `hingeNormal` / `hingeMin` / `hingeMax` | `hinge`-only limits |
+| `motorStrength` / `motorDamping` | `swingTwist`-only, baked in at build time — see [Drive modes](#drive-modes)'s `'powered'` section. `motorStrength: 0` means this joint stays limp even while the rest of the ragdoll is powered |
+
+Bone names are exactly what your `THREE.Bone.name` is at load time — **not** necessarily what your
+DCC tool shows you. See [Preparing a rig](/getting-started/preparing-a-rig) for a real example
+(GLTFLoader silently strips characters some rigs use in bone names).
+
+Capsule *placement* (position/orientation) always comes from the bone's actual pose at build time,
+regardless of any override — `parts` only changes size/mass/constraint, never where the capsule
+sits. Build the template with the character posed the way you want the ragdoll to start (usually
+just its bind/rest pose).
+
+## Drive modes
+
+`mode` picks how the live ragdoll's bones drive the bodies (or the other way around):
+
+- **`'ragdoll'`** (default) — bodies are free. Nothing drives them; the usual physics-to-bones sync
+  is all that touches your `SkinnedMesh`. This is "go limp."
+- **`'animated'`** — every physics substep, the ragdoll reads your bones' **current** local
+  transforms and drives the bodies toward that pose kinematically (`DriveToPoseUsingKinematics`).
+  Point a `THREE.AnimationMixer` at the same `SkinnedMesh` and it "just works": the mixer sets the
+  animated pose, the ragdoll drives bodies to match it, then overwrites the bones with the physics
+  result — which very closely tracks the animation, since kinematic driving is velocity-exact per
+  substep. Your mixer's `useFrame` update must run **before** `<Physics>`'s own step in the same
+  rendered frame — use a lower (or negative) `useFrame` priority than the default:
+  ```tsx
+  useFrame((_, delta) => mixer.update(delta), { priority: -1 });
+  ```
+- **`'powered'`** — same target pose, but each `swingTwist` joint's constraint *motor* drives
+  toward it instead of a direct velocity set, so an external hit can still shove a limb off-target
+  before the motor pulls it back. Only `swingTwist` joints are motor-driven; `hinge`/`fixed`/`none`
+  joints don't move in this mode. A joint built with `motorStrength: 0` never turns its motor on —
+  useful for "this hit region stays limp even while the rest is powered."
+
+Switching **into** `'ragdoll'` is instant and un-blended — the bodies already have real physics
+velocity from whatever drove them, so there's nothing to smooth. Switching **away from**
+`'ragdoll'` blends bones from their current free pose to the newly-driven one over `blendTime`
+seconds (`0` for an instant cut) so the character doesn't visually pop.
+
+```tsx
+const ragdoll = useRef<RagdollHandle>(null);
+
+<Ragdoll ref={ragdoll} mode={isHit ? 'ragdoll' : 'powered'} blendTime={0.3}>
+    <primitive object={mySkinnedMesh} />
+</Ragdoll>;
+
+// or imperatively:
+ragdoll.current?.setMode('ragdoll');
+```
+
+> [!NOTE]
+> **A driven multi-body chain doesn't move in lockstep, even in `'animated'` mode.** The root
+> converges tightly to its target; a downstream joint (a spine, an arm) settles to a small but
+> non-zero steady-state offset from its own forward-kinematic target, because the constraint's own
+> positional correction pulls a child toward where its parent *physically is this substep*, not
+> where the parent's *target* is. Fine for "drag a controlled character's ragdoll along with its
+> animation, close enough to collide sensibly" — not for exact IK-style tracking.
+
+### The root bone gap
+
+The pose sync writes every bone's parent-relative local transform from the physics result — except
+the root bone's own **translation**, which always reads back as `(0, 0, 0)`. This falls directly
+out of how Jolt reports a ragdoll's pose (the root's own joint matrix is defined relative to
+itself, so it's always ~identity; the root's real position lives in a separate root-offset value)
+and it is not currently patched for you.
+
+In practice this means a `<Ragdoll mode="animated">` walking forward will have its `SkinnedMesh`'s
+root bone visually reset toward the origin every substep unless you compensate — either:
+
+- give the root bone's parent object a full transform every substep yourself (position **and**
+  rotation — don't just nudge one axis, since an untouched component silently reads back as
+  whatever the last sync zeroed it to, not "hold your last value"), or
+- read the offset back out and reapply it — get the ragdoll's live root world transform from
+  `ragdoll.current.instance.pose.GetRootOffset()` (an `RVec3`, read it into a plain `THREE.Vector3`
+  immediately — it's Jolt's one static temporary for that call) right after `captureStep()` runs,
+  and write it onto the bone yourself.
+
+Since `<Ragdoll>`'s own internal pose sync has no option to do this for you, do it from a
+`useAfterPhysicsStep` in a component that renders `<Ragdoll>` as a **child** — effects commit
+bottom-up on mount, so a parent's subscription registers (and therefore fires) after the child's
+own. The `Ragdolls`/`PoweredRagdoll` examples in `apps/examples` do exactly this — see
+`apps/examples/src/examples/ragdollCharacter.ts`'s `restoreRootBonePosition` for a working
+implementation, and [Preparing a rig](/getting-started/preparing-a-rig) for why a typical
+GLTF-exported character needs a *second*, related fix before `'animated'`/`'powered'` mode can even
+target the right position.
+
+## The ref
+
+`RagdollHandle`:
+
+| member | notes |
+| --- | --- |
+| `parts` | every part's [`BodyState`](/api/rigid-body#bodystate), `parts[i]` matching the skeleton's joint index `i` |
+| `getPart(boneName)` | `BodyState` for the part named `boneName`, or `undefined` |
+| `setVelocity(velocity)` | sets every part's linear velocity to the same value — a coherent "throw" |
+| `addImpulse(boneName, impulse)` | impulse on one named part. Warns (and no-ops) for an unknown name |
+| `getMode()` / `setMode(mode, blendSeconds?)` | read/change the drive mode — see [Drive modes](#drive-modes) |
+| `instance` | the underlying `RagdollInstance`, for anything this handle doesn't wrap |
+
+## Template lifetime
+
+Building the capsule-and-constraint rig (`RagdollSettings`) is comparatively expensive and, per
+Jolt's own binder, **unsafe to redo repeatedly** on the same character — see
+`packages/react-three-jolt/docs/ragdolls.md`'s "RagdollSettings is a reusable template" finding.
+`<Ragdoll>` builds this once on mount and never rebuilds it, which is why `parts`/`layer`/etc. are
+mount-time only: changing them would need a fresh template, and this component doesn't offer that.
+
+If you need to **respawn** a character (reset it after it's gone limp, spawn several from one
+character type — a "pile of ragdolls") without rebuilding the expensive part each time, build the
+template yourself with `RagdollSystem.buildTemplate` and call `RagdollSystem.spawn` directly
+instead of using `<Ragdoll>`:
+
+```tsx
+import { useJolt } from '@react-three/jolt';
+
+const { physicsSystem } = useJolt();
+const template = physicsSystem.ragdollSystem.buildTemplate(mySkeleton, { parts });
+
+// any number of times, in any order relative to destroying previous instances:
+const instance = physicsSystem.ragdollSystem.spawn(template, { mode: 'ragdoll' });
+// ... later ...
+instance.destroy();
+const again = physicsSystem.ragdollSystem.spawn(template, { mode: 'ragdoll' }); // reuses `template`
+```
+
+`spawn`'s `bones` option lets one template drive more than one skinned mesh's bone hierarchy — the
+mechanism a "pile of ragdolls" (many bodies from one character type) uses in practice. See the
+`Ragdolls` demo (`apps/examples/src/examples/Ragdolls.tsx`) for a complete example: one shared
+template, a respawnable hero character, and a pile of passive instances, all built from the same
+`RagdollTemplate`.
+
+> [!IMPORTANT]
+> **`spawn()` has no position/offset option.** Every part's `BodyCreationSettings` (position,
+> rotation, shape) was baked into `template.settings` at `buildTemplate()` time, from wherever the
+> source skeleton's bones physically were *then* — every instance `spawn()` creates from the same
+> template starts at that exact same world pose, piled on top of each other, regardless of where
+> you place the bones/mesh you pass it. To spread a pile out (or respawn somewhere other than the
+> template's own build location), translate every part's `BodyState.position` by the same offset
+> right after spawning — a uniform translation preserves every constraint's relative geometry, so
+> it doesn't fight the physics or need a settling frame:
+> ```ts
+> const instance = physicsSystem.ragdollSystem.spawn(template, { mode: 'ragdoll' });
+> for (const state of instance.bodyStates) {
+>     state.position = state.position.clone().add(offset);
+> }
+> ```
+> `apps/examples/src/examples/Ragdolls.tsx`'s `RagdollActor` does exactly this for every instance
+> it spawns (hero and pile alike) — worth reading if this bites you, since it's easy to spawn a
+> pile that all lands in one stack and assume the `bones`/`position` you passed should have handled
+> it.
+
+`RagdollInstance` (what `spawn`/`<Ragdoll ref>.instance` give you) exposes the same drive-mode/pose
+machinery `<Ragdoll>` wires up for you — `driveStep(delta)` (call before the physics step),
+`captureStep(delta)` (call after it), `applyInterpolated(alpha)`, `setMode`, `bodyStates`,
+`getBodyState(name)`. Reading `<Ragdoll>`'s own source
+(`packages/react-three-jolt/src/components/Ragdoll.tsx`) is the fastest way to see exactly how
+those pieces fit together, since going this route means reimplementing what that component does
+internally.
+
+## `Layer.RIG`
+
+`PhysicsSystem`'s pair filter currently disables `Layer.RIG` against everything, including itself.
+`<Ragdoll>` defaults to `Layer.MOVING` instead, specifically so a ragdoll collides with the world
+out of the box. Pass `layer={Layer.RIG}` deliberately only if you want a non-colliding rig, and
+expect to flip that pair filter on yourself.

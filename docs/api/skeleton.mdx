@@ -1,0 +1,108 @@
+---
+title: Skeleton
+description: SkeletonSystem — mapping a three.js Skeleton onto a Jolt Skeleton and converting poses, the plumbing under <Ragdoll>.
+nav: 11
+---
+
+`SkeletonSystem` (`createJoltSkeleton` / `readPoseFromBones` / `writePoseToBones`) maps a three.js
+`Skeleton`/`Bone` hierarchy onto a Jolt `Skeleton` and converts poses between the two. It's pure
+data plumbing — nothing in it simulates anything — and it's what [`<Ragdoll>`](/api/ragdoll) is
+built on.
+
+Most projects never call these directly; `<Ragdoll>` and `RagdollSystem` already use them
+internally. Reach for this page if you're building something `<Ragdoll>` doesn't cover — driving a
+Jolt skeleton from your own animation system, or a ragdoll-adjacent feature that needs the
+bone-hierarchy plumbing without the rest of `RagdollSystem`.
+
+```tsx
+import { createJoltSkeleton, readPoseFromBones, writePoseToBones } from '@react-three/jolt';
+
+// Once per character TYPE — never rebuild this per instance, see RagdollSystem's own template
+// note on /api/ragdoll#template-lifetime; the same "build once, reuse" rule applies here.
+const { skeleton, joints, parentIndex } = createJoltSkeleton(threeSkeleton); // or a root Bone
+
+// bones' local transforms -> a Jolt pose, ready for SetPose/DriveToPoseUsing*
+readPoseFromBones(joints, pose);
+
+// a live Ragdoll's pose -> bone local transforms, every frame
+ragdoll.GetPose(pose, true); // NOT followed by pose.CalculateJointMatrices() — see below
+writePoseToBones(pose, joints, parentIndex);
+```
+
+## `createJoltSkeleton(source)`
+
+Builds a `Jolt.Skeleton`, preserving bone order and names, from either:
+
+- a `THREE.Skeleton` — joints are `skeleton.bones`, in that exact order, never re-sorted.
+- a root `THREE.Bone` — joints are collected by a pre-order depth-first walk of `Bone` children
+  only (parents always precede children, which is what Jolt's `Skeleton` requires).
+
+Returns `{ skeleton, joints, parentIndex }`. `Jolt.Skeleton` has **no getter** for a joint's parent
+index or name once built — `parentIndex[i]` (`joints[i]`'s parent's index within `joints`, or `-1`
+for a root) is this package's own bookkeeping, kept alongside the Jolt object because
+`writePoseToBones` needs to walk the hierarchy and Jolt won't hand it back.
+
+The returned `skeleton` is a real WASM allocation you own. Typically you hand it straight to
+`RagdollSettings.mSkeleton = skeleton` (ownership transfers on assignment — don't also destroy it
+yourself once assigned), or, if you never turn it into a ragdoll, `Raw.module.destroy(skeleton)`
+it directly.
+
+## `readPoseFromBones(bones, pose)`
+
+Writes each bone's **local** transform (`position`/`quaternion`, parent-relative — the same space a
+`THREE.Bone` already lives in) into `pose`'s per-joint states, then calls
+`pose.CalculateJointMatrices()` so the pose is immediately usable with `Ragdoll.SetPose` /
+`DriveToPoseUsingKinematics` / `DriveToPoseUsingMotors`. A direct 1:1 copy — no hierarchy walk
+needed going this direction. `bone.scale` is ignored (Jolt's joint state has no scale field).
+
+`bones[i]` must correspond to Jolt joint `i` — the `joints` array `createJoltSkeleton` returned, in
+the same order. `pose` must already have `SetSkeleton()` called with a skeleton whose joint
+count/order matches.
+
+## `writePoseToBones(pose, bones, parentIndex, options?)`
+
+The reverse direction: converts `pose`'s per-joint **matrices** (root-relative "model space" — what
+`Ragdoll.GetPose()` writes) into each bone's **local** transform. Unlike `readPoseFromBones`, this
+needs `parentIndex` and a real hierarchy walk:
+
+```
+local(i) = inverse(model(parent(i))) * model(i)     (local(i) = model(i) when parent(i) == -1)
+```
+
+| `WritePoseToBonesOptions` field | notes |
+| --- | --- |
+| `modelMatrixScratch` | reuse a `Matrix4[]` across frames to avoid allocating one per call — pass the same array back every time |
+| `root` | an `Object3D` whose local `position` receives `pose.GetRootOffset()` (the root joint's live world position), converted into `root.parent`'s local space. Left untouched if omitted |
+| `skinnedMesh` | the bones' owning `SkinnedMesh` — when given, the root offset goes through `bindMatrixInverse` first. **Only unit-tested against an identity bind matrix** — treat as a best-effort convenience, not a verified fit for every exported rig's bind pose |
+
+`bone.scale` is left untouched — Jolt joint matrices carry no scale, so writing a decomposed scale
+back would silently reset any authored non-uniform bone scale.
+
+> [!NOTE]
+> `options.root` only fixes the offset for a *separate* object you point at it — it does not touch
+> `bones[0]` itself, whose own local translation this function always writes as `(0, 0, 0)` (see
+> the gotcha below). [`<Ragdoll>`'s root bone gap](/api/ragdoll#the-root-bone-gap) covers the
+> workaround for the common case, driving the `SkinnedMesh`'s own root bone.
+
+## The big gotcha: `GetPose()` vs `CalculateJointMatrices()`
+
+`SkeletonPose` has two internal representations, populated by two different, mutually exclusive
+code paths — calling the wrong follow-up silently zeroes the one you just populated:
+
+- `Ragdoll.GetPose(pose)` writes the pose's **joint matrices** directly. It does **not** touch the
+  per-joint **states**.
+- `SkeletalAnimation.Sample(time, pose)` (or `readPoseFromBones`) writes the per-joint **states**.
+  It does **not** touch the matrices.
+- `pose.CalculateJointMatrices()` derives matrices **from the states**. Calling it right after
+  `GetPose()` overwrites the correct matrices it just wrote with zeros, because the states
+  `GetPose()` left untouched are still empty.
+
+**Rule: after `GetPose()`, read `GetJointMatrix(i)` immediately — no follow-up call.** After
+`Sample()`/`readPoseFromBones`, `CalculateJointMatrices()` is required before the pose is usable
+with `SetPose`/`DriveToPoseUsingMotors`/`DriveToPoseUsingKinematics`. `writePoseToBones` and
+`readPoseFromBones` already do the right thing for you — this matters if you ever call `GetPose()`
+or build a pose's states yourself.
+
+For the full empirical write-up (verified joint-matrix values, root-offset semantics, what's
+*not* yet verified — non-identity bind matrices, a rotated root's full effect) see
+`packages/react-three-jolt/docs/skeletons.md` and `docs/ragdolls.md` in the package source.
