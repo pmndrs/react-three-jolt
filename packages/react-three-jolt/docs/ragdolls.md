@@ -71,6 +71,86 @@ wrapper.
   for a future issue that does). Flagged for the maintainer - this looks like a gap the RIG layer
   was reserved for but never wired up.
 
+## Character -> ragdoll handoff (issue #255)
+
+`CharacterControllerSystem` (`src/controllers/systems/character-controller.ts`) can swap a
+`CharacterVirtual` for a live `RagdollInstance` on demand (death, a big hit) and stand it back up
+later - `toRagdoll()` / `fromRagdoll()`. Drive modes (kinematic/motor, #252) are a separate,
+not-yet-implemented axis; this issue is only the one-shot handoff in and out of a *passive*
+ragdoll, and deliberately does not touch `<Ragdoll>` or add a `mode` prop (that is other issues'
+work - see #252 and the in-progress `mode` prop on `<Ragdoll>`).
+
+```ts
+const character = new CharacterControllerSystem(physicsSystem);
+character.add(mySkinnedMesh); // rendered inside the character, same as any other child
+
+// optional - build the template ahead of time so the first toRagdoll() pays no build cost
+character.prepareRagdoll({ parts: { spine: { radius: 0.18 } } });
+
+// later, on death:
+const ragdoll = character.toRagdoll();
+// ... let it settle, play a death animation, whatever the game wants ...
+character.fromRagdoll(); // stands the character back up at the ragdoll's root/pelvis position
+```
+
+- **Finding the rig**: `toRagdoll()`/`prepareRagdoll()` look for the first `THREE.SkinnedMesh` in
+  `threeObject`'s subtree - the same "first SkinnedMesh among the children" convention `<Ragdoll>`
+  itself uses (`findSkinnedMesh` in `Ragdoll.tsx`), so a `<skinnedMesh>` rendered as a
+  `<CharacterController>` child (or added via `character.add(mesh)` when used as a plain class)
+  is found with no extra wiring. `prepareRagdoll()` returns `undefined` (and warns in dev) if none
+  is found yet.
+- **`prepareRagdoll(options?)`**: builds (once) and caches the `RagdollTemplate` `toRagdoll()`
+  spawns from - `RagdollTemplateOptions` is the exact same shape as `<Ragdoll>`'s
+  `parts`/`defaultConstraint`/`layer` props. Optional to call explicitly; `toRagdoll()` calls it
+  itself, lazily, with no options, the first time it is needed. Cached like `<Ragdoll>`'s own
+  template - "RagdollSettings is a reusable template, rebuilding it repeatedly is unsafe" (above)
+  applies here unchanged, so a second `prepareRagdoll()` call is a no-op that returns the same
+  object.
+- **`toRagdoll(options?)`**: deactivates the character (unsubscribes it from the physics step
+  loop, so it stops reading input/resolving its own collision) and hides every object under
+  `threeObject` - its debug capsule and the rendered `SkinnedMesh` alike - then spawns a
+  `RagdollInstance` from the template, **teleported onto the bones' CURRENT pose** (not the
+  template's build-time one) via the documented `readPoseFromBones` + `Ragdoll.SetPose` escape
+  hatch (see "The big gotcha" above), and given the character's current `linearVelocity` via
+  `Ragdoll.SetLinearVelocity` (see the new verified signature below) - a coherent "the corpse
+  keeps the momentum the character had" handoff. Registers a plain `captureStep()` subscription
+  (`physicsSystem.onAfterStep`) so the SkinnedMesh keeps animating from the ragdoll's live pose
+  every substep for as long as it is live (uninterpolated - a caller that wants `<Ragdoll>`'s
+  frame-blended interpolation can call `instance.applyInterpolated()` off the returned instance
+  itself, in its own `useFrame`, same as `<Ragdoll>` does). Idempotent: calling it again while
+  already a ragdoll returns the existing instance rather than spawning a second one. Returns
+  `undefined` if there is no SkinnedMesh to build/spawn from.
+- **`fromRagdoll()`**: destroys the live `RagdollInstance` and stands the character back up at the
+  ragdoll's root/pelvis position and rotation (`Ragdoll.GetRootTransform()`), carrying the root
+  part's linear velocity over too, then reattaches the character to the step loop and makes its
+  render objects visible again. No-op if `toRagdoll()` was never called (or already reversed).
+  Leaves the cached `RagdollTemplate` alive, so a later `toRagdoll()` reuses it at no rebuild cost.
+- **`isRagdoll` / `ragdollInstance`**: cheap getters - `isRagdoll` is true between a `toRagdoll()`
+  and its matching `fromRagdoll()`; `ragdollInstance` is the live instance or `undefined`.
+- **Teardown**: `CharacterControllerSystem.destroy()` tears down a live `activeRagdoll` and the
+  cached `ragdollTemplate` too (in that order, both idempotent), guarded by the same
+  `!physicsSystem.destroyed` check every other Jolt-owning field in `destroy()` uses - a world
+  torn down directly (not through unmount) must not touch either, since the memory they'd try to
+  free may already belong to a different live world by the time `destroy()` runs (issue #227).
+- **What is NOT handled here**: the character's inner body (`innerBody: true`,
+  `CharacterInnerBodyOptions`), if present, is left exactly where it was when `toRagdoll()` was
+  called - `CharacterVirtual` has no API to remove or hide it, only to move it (it is glued to the
+  character's position, which stops updating once the character is deactivated). A kinematic inner
+  body sitting frozen where the character died could interfere with the ragdoll it just spawned
+  (e.g. a limb resting against it). Not exercised by this issue's tests (which use a character
+  with no inner body) - flagged for the maintainer as an open question for whoever builds the
+  death/hit-reaction demo (#253) with `innerBody: true`.
+
+### New signature found while building #255 (not in #251's table above)
+
+`Ragdoll.SetLinearVelocity(inLinearVelocity: Vec3, inLockBodies?: boolean): void` - sets every
+part's linear velocity in one call (verified against `jolt-physics` 1.1.0's `types.d.ts`, which
+also lists `SetLinearAndAngularVelocity`, `AddLinearVelocity` and `AddImpulse` alongside it - none
+of the four were needed by `<Ragdoll>`'s own `RagdollHandle.setVelocity`, which instead loops every
+part's `BodyState.velocity` setter, so none made it into #251's "Verified signatures" table). Takes
+a `Vec3` by value (the shared `joltScratch.vec3()` temporary is enough, no allocation needed), same
+copy-on-call convention as everything else in this file.
+
 ### New findings from building #251 (not in the original #249 spike)
 
 **`SkeletonPose.SetSkeleton()` transfers ownership.** `Raw.module.destroy(pose)` frees the

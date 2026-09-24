@@ -8,18 +8,41 @@ import {
     type BodyState,
     type BodySystem,
     createShapeFromSettings,
+    devWarn,
     Emitter,
     generateBodySettings,
     joltScratch,
     Layer,
     type PhysicsSystem,
     quat,
+    type RagdollInstance,
+    type RagdollTemplate,
+    type RagdollTemplateOptions,
     Raw,
+    readPoseFromBones,
     releaseShape,
+    type SpawnRagdollOptions,
     type Unsubscribe,
     vec3,
     wrapPointer
 } from '../../index';
+
+/**
+ * The first `THREE.SkinnedMesh` found in `root`'s subtree, or `undefined`.
+ *
+ * Mirrors `<Ragdoll>`'s own `findSkinnedMesh` (`components/Ragdoll.tsx`) - kept as a small local
+ * copy rather than a shared export: the two search roots (a `<Ragdoll>`'s own children vs. a
+ * character's `threeObject`) are different enough, and the helper small enough, that sharing it
+ * would cost more than it saves (issue #255).
+ */
+function findSkinnedMesh(root: THREE.Object3D | null): THREE.SkinnedMesh | undefined {
+    if (!root) return undefined;
+    let found: THREE.SkinnedMesh | undefined;
+    root.traverse((child) => {
+        if (!found && child instanceof THREE.SkinnedMesh) found = child;
+    });
+    return found;
+}
 
 interface CharacterFilters {
     objectVsBroadPhaseLayerFilter?: Jolt.ObjectVsBroadPhaseLayerFilter;
@@ -351,6 +374,14 @@ export class CharacterControllerSystem {
     private destroyed = false;
     private anchorHandle: number | undefined;
 
+    //* Ragdoll handoff (issue #255) ======================
+    /** Built (once) by `prepareRagdoll()`, from the `SkinnedMesh` rendered inside this character. */
+    private ragdollTemplate?: RagdollTemplate;
+    /** The live ragdoll instance while `isRagdoll` is true, else `undefined`. */
+    private activeRagdoll?: RagdollInstance;
+    /** Unsubscribes the per-substep bone sync `toRagdoll()` registers on `physicsSystem`. */
+    private detachRagdollSync?: Unsubscribe;
+
     /**
      * Set by the contact listener (`OnContactSolve`) when a head/ceiling contact is seen,
      * consumed at the start of the next `prePhysicsUpdate` - see issue #88 and the notes on
@@ -490,6 +521,10 @@ export class CharacterControllerSystem {
         // stop being stepped before anything is freed: everything below is memory the step reads
         this.detachFromLoop();
         this.detachFromLoop = () => {};
+        // JS-side subscription only (no jolt memory touched) - always safe to drop, regardless
+        // of whether the physics world below is still alive.
+        this.detachRagdollSync?.();
+        this.detachRagdollSync = undefined;
         this.clearTimers();
         // the action listeners live on the Emitter now (issue #50/#187), so dropping them means
         // clearing it and the legacy subscription bookkeeping rather than emptying an array
@@ -529,6 +564,8 @@ export class CharacterControllerSystem {
         this._tmpVec3 = undefined as unknown as Jolt.Vec3;
         this.anchor = undefined;
         this.anchorHandle = undefined;
+        this.activeRagdoll = undefined;
+        this.ragdollTemplate = undefined;
     }
 
     private clearTimers() {
@@ -545,6 +582,18 @@ export class CharacterControllerSystem {
     /** every `new Raw.module.*` this class owns, freed in dependency order */
     private releaseJoltObjects() {
         const jolt = Raw.module;
+
+        // Ragdoll handoff state (issue #255), if any - both own real jolt allocations (the live
+        // ragdoll's bodies/constraints, the cached template's settings/skeleton) and must go
+        // before the character/anchor teardown below touches anything else, the same
+        // "remove before destroy" ordering docs/ragdolls.md documents for a standalone
+        // `<Ragdoll>`. `RagdollInstance.destroy()`/`RagdollTemplate.destroy()` are both
+        // idempotent, so this is safe even mid-`toRagdoll()`.
+        this.activeRagdoll?.destroy();
+        this.activeRagdoll = undefined;
+        this.ragdollTemplate?.destroy();
+        this.ragdollTemplate = undefined;
+
         // the anchor is a real body in the simulation; it has to go before the world does
         if (this.anchorHandle !== undefined) this.bodySystem.removeBody(this.anchorHandle);
 
@@ -1187,6 +1236,157 @@ export class CharacterControllerSystem {
     }
     removeFromScene() {
         this.threeObject.parent?.remove(this.threeObject);
+    }
+
+    //* Ragdoll handoff (issue #255) ==========================
+    // `<CharacterController>`'s SkinnedMesh (rendered as a child, exactly like a rigid body's
+    // debug mesh - `add()`/`<CharacterController>`'s `children` puts it under `threeObject`) can
+    // hand off to a physical `Ragdoll` on demand (death, a big hit) and stand back up later.
+    // Built entirely on RagdollSystem/SkeletonSystem (#250/#251) - nothing here talks to Jolt
+    // directly beyond the two calls docs/ragdolls.md already documents as the teleport escape
+    // hatch (`Ragdoll.SetPose`) and the root-transform readback (`Ragdoll.GetRootTransform`).
+
+    /** Whether {@link toRagdoll} is currently active for this character. */
+    get isRagdoll(): boolean {
+        return this.activeRagdoll !== undefined;
+    }
+    /** The live ragdoll instance while {@link isRagdoll} is true, else `undefined`. */
+    get ragdollInstance(): RagdollInstance | undefined {
+        return this.activeRagdoll;
+    }
+
+    /**
+     * Build (once) the reusable {@link RagdollTemplate} `toRagdoll()` spawns from, out of the
+     * `THREE.SkinnedMesh` rendered inside this character (the first one found in `threeObject`'s
+     * subtree - the same convention `<Ragdoll>` uses for its own children). Cached: calling this
+     * again returns the same template - docs/ragdolls.md's "RagdollSettings is a reusable
+     * template, rebuilding it repeatedly is unsafe" applies here exactly as it does to
+     * `<Ragdoll>`, so this never rebuilds once it has succeeded.
+     *
+     * Optional to call explicitly - `toRagdoll()` calls this itself, lazily, with no options, the
+     * first time it is needed. Call it yourself ahead of time (e.g. right after the character is
+     * created) to build the template before gameplay needs it, or to pass per-bone
+     * capsule/constraint `options` (same shape as `<Ragdoll>`'s `parts`/`defaultConstraint`
+     * props).
+     *
+     * Returns `undefined` (and warns in dev) if no `SkinnedMesh` has been added yet.
+     */
+    prepareRagdoll(options?: RagdollTemplateOptions): RagdollTemplate | undefined {
+        if (this.destroyed) return undefined;
+        if (this.ragdollTemplate) return this.ragdollTemplate;
+        const mesh = findSkinnedMesh(this.threeObject);
+        if (!mesh?.skeleton) {
+            devWarn(
+                'react-three-jolt: CharacterControllerSystem.prepareRagdoll found no ' +
+                    '<skinnedMesh> rendered inside this character - nothing to build a ragdoll ' +
+                    'template from.'
+            );
+            return undefined;
+        }
+        this.ragdollTemplate = this.physicsSystem.ragdollSystem.buildTemplate(
+            mesh.skeleton,
+            options
+        );
+        return this.ragdollTemplate;
+    }
+
+    /**
+     * Swap this character for a physical ragdoll (issue #255: death, a big hit).
+     *
+     * Deactivates the character - stops it being pre-stepped (so it no longer reads player input
+     * or resolves its own collision) and hides every object under `threeObject` (its debug
+     * capsule and the rendered `SkinnedMesh` alike) - then spawns a {@link RagdollInstance} from
+     * the {@link prepareRagdoll prebuilt template} (built lazily, with default options, if
+     * `prepareRagdoll()` was never called), positioned at the SkinnedMesh's **current** bone pose
+     * (not the template's build-time one - see `RagdollSystem`'s spike notes on why those differ)
+     * and given this character's current {@link linearVelocity} - a coherent "the corpse keeps
+     * the momentum the character had" handoff.
+     *
+     * The ragdoll's bones keep animating every physics substep for as long as it lives (a plain
+     * `captureStep()` subscription - the live pose, uninterpolated; a caller that wants
+     * `<Ragdoll>`'s frame-interpolated blend can read `instance.applyInterpolated()` off the
+     * returned instance itself in its own `useFrame`).
+     *
+     * Idempotent: calling this again while already a ragdoll just returns the existing instance.
+     * Returns `undefined` if there is no `SkinnedMesh` to build/spawn from.
+     */
+    toRagdoll(options: SpawnRagdollOptions = {}): RagdollInstance | undefined {
+        if (this.destroyed) return undefined;
+        if (this.activeRagdoll) return this.activeRagdoll;
+        const template = this.ragdollTemplate ?? this.prepareRagdoll();
+        if (!template) return undefined;
+
+        // Hold off simulating until the pose/velocity below are applied - regardless of what the
+        // caller asked for; `startAsleep` (below) still honours a caller that wants the ragdoll
+        // to *stay* dormant.
+        const startAsleep = options.activation === 'deactivate';
+        const instance = this.physicsSystem.ragdollSystem.spawn(template, {
+            ...options,
+            activation: 'deactivate'
+        });
+
+        // Teleport every part onto the bones' CURRENT pose. `spawn()` (via `CreateRagdoll`)
+        // places bodies at the template's BUILD-TIME capsule positions - `readPoseFromBones` +
+        // `SetPose` is the documented teleport escape hatch (docs/ragdolls.md's "GetPose() vs
+        // CalculateJointMatrices()" section) for moving a freshly spawned ragdoll onto whatever
+        // pose the character is actually in right now (mid-animation, mid-fall, ...).
+        readPoseFromBones(template.joints, instance.pose);
+        instance.ragdoll.SetPose(instance.pose, true);
+        // `Ragdoll.SetLinearVelocity` sets every part's linear velocity in one call - verified at
+        // runtime (jolt-physics 1.1.0's `types.d.ts`; not in docs/ragdolls.md's "Verified
+        // signatures" table, which only covers `RagdollSettings`/`Ragdoll`'s pose/lifecycle
+        // methods - see this issue's final report for the exact signature).
+        instance.ragdoll.SetLinearVelocity(joltScratch.vec3(this.linearVelocity), true);
+
+        if (!startAsleep) instance.ragdoll.Activate();
+
+        // stop the character stepping/colliding and hide it - the ragdoll takes over physically
+        // and visually from here.
+        this.detachFromLoop();
+        this.detachFromLoop = () => {};
+        this.threeObject.visible = false;
+
+        this.detachRagdollSync = this.physicsSystem.onAfterStep(() => instance.captureStep());
+        this.activeRagdoll = instance;
+        return instance;
+    }
+
+    /**
+     * Undo {@link toRagdoll}: destroys the live ragdoll instance and stands the character back up
+     * at the ragdoll's root/pelvis position (`Ragdoll.GetRootTransform()`) and rotation, carrying
+     * over the root part's linear velocity, then reattaches the character to the physics step
+     * loop and makes its render objects visible again.
+     *
+     * No-op if `toRagdoll()` was never called (or has already been reversed). The cached
+     * {@link RagdollTemplate} `prepareRagdoll()`/`toRagdoll()` built is kept - `fromRagdoll()`
+     * only tears down the live instance, so a later `toRagdoll()` spawns from it again with no
+     * rebuild cost (see the template's own "reusable" contract).
+     */
+    fromRagdoll(): void {
+        if (this.destroyed || !this.activeRagdoll) return;
+        const instance = this.activeRagdoll;
+
+        // Read the root transform, and the root part's velocity, before anything is torn down.
+        const outPosition = joltScratch.rvec3(0, 0, 0);
+        const outRotation = joltScratch.quat([0, 0, 0, 1]);
+        instance.ragdoll.GetRootTransform(outPosition, outRotation, true);
+        const rootPosition = vec3.three(outPosition);
+        const rootRotation = quat.three(outRotation);
+        const rootBoneName = instance.bones[0]?.name;
+        const rootVelocity =
+            (rootBoneName ? instance.getBodyState(rootBoneName)?.velocity : undefined) ??
+            new THREE.Vector3();
+
+        this.detachRagdollSync?.();
+        this.detachRagdollSync = undefined;
+        instance.destroy();
+        this.activeRagdoll = undefined;
+
+        this.threeObject.visible = true;
+        this.position = rootPosition;
+        this.rotation = rootRotation;
+        this.linearVelocity = rootVelocity;
+        this.detachFromLoop = this.physicsSystem.onBeforeStep(this.handlePreStep);
     }
 
     //* loop functions ========================================
