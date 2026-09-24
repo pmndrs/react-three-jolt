@@ -2,8 +2,9 @@
 // designed to be used from the body system although it can be accessed directly
 
 import type Jolt from 'jolt-physics';
-import { type JoltClass, Raw } from '../raw';
-import { type anyVec3, vec3 } from '../utils';
+import * as THREE from 'three';
+import { type JoltClass, Raw, wrapPointer } from '../raw';
+import { type anyQuat, type anyVec3, quat, vec3 } from '../utils';
 import type { BodyState } from './body-state';
 import type { PhysicsSystem } from './physics-system';
 
@@ -25,10 +26,21 @@ export interface ConstraintTypeMap {
     cone: Jolt.ConeConstraint;
     swingTwist: Jolt.SwingTwistConstraint;
     sixDOF: Jolt.SixDOFConstraint;
+    // added for #242, see the "Path constraint (#242)" block further down
+    path: Jolt.PathConstraint;
 }
 export type ConstraintType = keyof ConstraintTypeMap;
 
 export type ConstraintAxis = 'x' | 'y' | 'z';
+
+/** `PathConstraintSettings.mRotationConstraintType`, spelled out (#242). */
+export type PathRotationConstraintType =
+    | 'free'
+    | 'constrainAroundTangent'
+    | 'constrainAroundNormal'
+    | 'constrainAroundBinormal'
+    | 'constrainToPath'
+    | 'fullyConstrained';
 
 export interface ConstraintSpringOptions {
     /** frequency in Hz, or stiffness when `mode` is `'stiffness'` */
@@ -92,6 +104,20 @@ export interface ConstraintOptions {
     /** per-axis friction, in `SixDOFConstraintSettings::EAxis` order */
     friction?: number[];
     limitShape?: 'cone' | 'pyramid';
+    // path only (#242) ---
+    /** the rail: a three.js curve, or points upgraded to a `CatmullRomCurve3` */
+    path?: THREE.Curve<THREE.Vector3> | anyVec3[];
+    /** loop the path end-to-start. Also threaded through to the `CatmullRomCurve3` built from `path` when it is a point array */
+    closed?: boolean;
+    /** path frame origin, local to body 1. Defaults to `(0,0,0)` - the curve's own coordinates */
+    pathPosition?: anyVec3;
+    /** path frame rotation, local to body 1. Defaults to identity */
+    pathRotation?: anyQuat;
+    /** initial `mPathFraction` (world-space arc length along the curve). Default `0` */
+    pathFraction?: number;
+    rotationConstraintType?: PathRotationConstraintType;
+    /** how many samples `computeFrenetFrames`/closest-point search use. Default 200 */
+    pathResolution?: number;
 }
 
 /** what the system tracks for every live constraint */
@@ -381,6 +407,55 @@ export class ConstraintSystem {
                 return settings;
             }
 
+            //* Path (#242) --------------------------------
+            // see the "Path constraint (#242)" block below `getEaxis` for `createCurvePath`/
+            // `pathRotationConstraintType` - kept together and out of this switch to stay a
+            // clearly separated diff from the pulley/gear work landing in this same file.
+            case 'path': {
+                if (!options?.path)
+                    throw new Error(
+                        'r3/jolt: "path" constraint requires options.path (a THREE.Curve or an array of points)'
+                    );
+                const settings = new Raw.module.PathConstraintSettings();
+                const closed = options.closed ?? false;
+                const { path: curvePath } = this.createCurvePath(
+                    options.path,
+                    closed,
+                    options.pathResolution
+                );
+                // a RefTarget, not a value struct - `mPath`'s setter copies it into a
+                // `RefConst<>` that keeps it alive (and, via emval, keeps this JS wrapper
+                // alive) for as long as the constraint holds it. Never `temps.track()` this.
+                settings.mPath = curvePath;
+                // local to body 1 - defaults are the curve's own coordinates / no extra spin
+                settings.mPathPosition = temps.track(ownedVec3(options.pathPosition ?? [0, 0, 0]));
+                settings.mPathRotation = temps.track(
+                    quat.jolt(options.pathRotation ?? [0, 0, 0, 1])
+                );
+                if (options.pathFraction !== undefined)
+                    settings.mPathFraction = options.pathFraction;
+                if (options.maxFrictionForce !== undefined)
+                    settings.mMaxFrictionForce = options.maxFrictionForce;
+                settings.mRotationConstraintType = this.pathRotationConstraintType(
+                    options.rotationConstraintType
+                );
+                // the target itself (`SetTargetVelocity`/`SetTargetPathFraction`) is applied
+                // post-creation by `applyMotorState`, same as hinge/slider - only the limits
+                // and spring belong on the settings.
+                if (
+                    options.motor &&
+                    (options.motor.minForce !== undefined ||
+                        options.motor.maxForce !== undefined ||
+                        options.motor.spring)
+                )
+                    settings.mPositionMotorSettings = temps.track(
+                        this.createMotorSettings(options.motor)
+                    );
+                // no `mSpace` on `PathConstraintSettings` - the path frame is always local to
+                // body 1, so `applySpace` does not apply here.
+                return settings;
+            }
+
             default:
                 throw new Error(`r3/jolt: unknown constraint type "${type}"`);
         }
@@ -527,6 +602,8 @@ export class ConstraintSystem {
                 return jolt.ConeConstraint as unknown as BinderClass;
             case 'swingTwist':
                 return jolt.SwingTwistConstraint as unknown as BinderClass;
+            case 'path':
+                return jolt.PathConstraint as unknown as BinderClass;
             // jolt has no `FixedConstraint` binding, the base class is all there is
             default:
                 return null;
@@ -577,9 +654,24 @@ export class ConstraintSystem {
         if (!motor) return;
         const isHinge = type === 'hinge' || type === 'revolute';
         const isSlider = type === 'slider' || type === 'prismatic';
-        if (!isHinge && !isSlider) {
+        // #242: path's motor drives along the curve, in the same arc-length units as
+        // `GetPathFraction()`/`SetTargetPathFraction` - see the "Path constraint" block below.
+        const isPath = type === 'path';
+        if (!isHinge && !isSlider && !isPath) {
             if (this.physicsSystem.debug)
                 console.warn(`r3/jolt: constraint type "${type}" has no motor support`);
+            return;
+        }
+
+        if (isPath) {
+            const path = constraint as Jolt.PathConstraint;
+            if (motor.type === 'velocity') {
+                path.SetPositionMotorState(Raw.module.EMotorState_Velocity);
+                if (motor.velocity !== undefined) path.SetTargetVelocity(motor.velocity);
+            } else {
+                path.SetPositionMotorState(Raw.module.EMotorState_Position);
+                if (motor.target !== undefined) path.SetTargetPathFraction(motor.target);
+            }
             return;
         }
 
@@ -779,6 +871,135 @@ export class ConstraintSystem {
                     : Raw.module.SixDOFConstraintSettings_EAxis_RotationZ;
             default:
                 throw new Error(`r3/jolt: unknown sixDOF axis "${axis}"`);
+        }
+    }
+
+    //* Path constraint (#242) ========================================
+    // Kept as its own trailing section - not interleaved with the helpers above - so this stays
+    // an easy diff to merge alongside the pulley/gear work landing in this same file.
+    //
+    // jolt-physics 1.1.0's WASM binder has NO constructor for `PathConstraintPathHermite`:
+    // `new Raw.module.PathConstraintPathHermite()` throws "cannot construct a
+    // PathConstraintPathHermite, no constructor in IDL" (verified against the real wasm module -
+    // `jolt-physics/dist/jolt-physics.wasm.js` only binds `AddPoint`/`IsLooping`/`SetIsLooping`/
+    // ref-counting/`__destroy__` for that class, never a constructor). `PathConstraintPathJS` is
+    // the one `PathConstraintPath` subtype the binder does let JS construct: it is designed to
+    // have `GetPathMaxFraction`/`GetClosestPoint`/`GetPointOnPath` implemented in JS and called
+    // back into from C++ - the same "JSImplementation" mechanism `BodyActivationListenerJS` and
+    // `ContactListenerJS` use in body-system.ts. It is also a better fit for wrapping an
+    // arbitrary three.js `Curve` than re-fitting a Hermite spline to sampled points would be:
+    // position/tangent come straight from the curve's own arc-length parameterisation
+    // (`getPointAt`/`getTangentAt`), not a piecewise approximation of it.
+
+    /**
+     * Build the `PathConstraintPathJS` behind a `path` constraint from a three.js curve (or an
+     * array of points, upgraded to a `CatmullRomCurve3`).
+     *
+     * "fraction" is world-space arc length along the curve (`curve.getLength()`), not a
+     * normalised `0..1` - that keeps `SetTargetVelocity`'s unit an intuitive m/s and matches
+     * `GetPathFraction()`/`SetTargetPathFraction` on the returned constraint.
+     *
+     * Ownership: the returned `PathConstraintPathJS` is a jolt `RefTarget`
+     * (`AddRef`/`Release`/`GetRefCount`), not a plain value struct. Assigning it to
+     * `PathConstraintSettings.mPath` copies it into a `RefConst<>` that keeps both the wasm
+     * object and (via emval) this JS wrapper alive for as long as the constraint holds it. It
+     * must NEVER be pushed onto `Temporaries`/`Raw.module.destroy()`d by hand - it is released
+     * automatically when the owning constraint is removed.
+     */
+    private createCurvePath(
+        source: THREE.Curve<THREE.Vector3> | anyVec3[],
+        closed: boolean,
+        resolution = 200
+    ): { path: Jolt.PathConstraintPathJS; maxFraction: number } {
+        const curve = Array.isArray(source)
+            ? new THREE.CatmullRomCurve3(
+                  source.map((p) => vec3.three(p)),
+                  closed
+              )
+            : source;
+
+        // `getSpacedPoints`/`computeFrenetFrames` sample at the same `u` divisions, so position
+        // and frame stay consistent with each other at every index.
+        const points = curve.getSpacedPoints(resolution);
+        const frenet = curve.computeFrenetFrames(resolution, closed);
+        const maxFraction = curve.getLength();
+
+        const path = new Raw.module.PathConstraintPathJS();
+        path.SetIsLooping(closed);
+
+        // Embind's JSImplementation glue does a `hasOwnProperty` check per callback, so these
+        // MUST be own properties of the instance, not prototype methods - a subclass with
+        // prototype methods would throw from inside the WASM callback (see the identical warning
+        // on `BodyActivationListenerJS`/`ContactListenerJS` in body-system.ts).
+        path.GetPathMaxFraction = () => maxFraction;
+
+        // `inPositionPtr` is body 1's current position in path space, handed over as a raw
+        // `Jolt.Vec3*` the way every JSImplementation callback argument is (verified empirically
+        // against the real wasm module). `wrapPointer` aliases it rather than allocating; never
+        // destroy the result.
+        path.GetClosestPoint = (inPositionPtr: number, _inFractionHint: number): number => {
+            const p = wrapPointer(inPositionPtr, Raw.module.Vec3);
+            const px = p.GetX();
+            const py = p.GetY();
+            const pz = p.GetZ();
+            let bestIndex = 0;
+            let bestDistSq = Number.POSITIVE_INFINITY;
+            for (let i = 0; i <= resolution; i++) {
+                const pt = points[i];
+                const dx = pt.x - px;
+                const dy = pt.y - py;
+                const dz = pt.z - pz;
+                const distSq = dx * dx + dy * dy + dz * dz;
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq;
+                    bestIndex = i;
+                }
+            }
+            return (bestIndex / resolution) * maxFraction;
+        };
+
+        path.GetPointOnPath = (
+            inFraction: number,
+            outPositionPtr: number,
+            outTangentPtr: number,
+            outNormalPtr: number,
+            outBinormalPtr: number
+        ): void => {
+            const u = THREE.MathUtils.clamp(maxFraction > 0 ? inFraction / maxFraction : 0, 0, 1);
+            const position = curve.getPointAt(u);
+            const tangent = curve.getTangentAt(u);
+            const index = Math.min(resolution, Math.max(0, Math.round(u * resolution)));
+            const normal = frenet.normals[index];
+            const binormal = frenet.binormals[index];
+
+            // also raw `Jolt.Vec3*` pointers - `Set()` writes through them, it does not
+            // allocate.
+            wrapPointer(outPositionPtr, Raw.module.Vec3).Set(position.x, position.y, position.z);
+            wrapPointer(outTangentPtr, Raw.module.Vec3).Set(tangent.x, tangent.y, tangent.z);
+            wrapPointer(outNormalPtr, Raw.module.Vec3).Set(normal.x, normal.y, normal.z);
+            wrapPointer(outBinormalPtr, Raw.module.Vec3).Set(binormal.x, binormal.y, binormal.z);
+        };
+
+        return { path, maxFraction };
+    }
+
+    /** `PathConstraintSettings.mRotationConstraintType`, spelled out. */
+    private pathRotationConstraintType(
+        type: PathRotationConstraintType | undefined
+    ): Jolt.EPathRotationConstraintType {
+        switch (type) {
+            case 'constrainAroundTangent':
+                return Raw.module.EPathRotationConstraintType_ConstrainAroundTangent;
+            case 'constrainAroundNormal':
+                return Raw.module.EPathRotationConstraintType_ConstrainAroundNormal;
+            case 'constrainAroundBinormal':
+                return Raw.module.EPathRotationConstraintType_ConstrainAroundBinormal;
+            case 'constrainToPath':
+                return Raw.module.EPathRotationConstraintType_ConstrainToPath;
+            case 'fullyConstrained':
+                return Raw.module.EPathRotationConstraintType_FullyConstrained;
+            default:
+                return Raw.module.EPathRotationConstraintType_Free;
         }
     }
 }
