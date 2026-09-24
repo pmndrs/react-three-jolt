@@ -65,8 +65,14 @@ export function Friction() {
             {frictionValues.map((friction, i) => {
                 const boxX = rampPos[0] + (i - 2) * 2.2;
                 const labelTop = rampHeight / 2 + 1.2;
-                const labelY = rampPos[1] + labelTop * Math.cos(rampRotation) - localZ * Math.sin(rampRotation);
-                const labelZ = rampPos[2] + labelTop * Math.sin(rampRotation) + localZ * Math.cos(rampRotation);
+                const labelY =
+                    rampPos[1] +
+                    labelTop * Math.cos(rampRotation) -
+                    localZ * Math.sin(rampRotation);
+                const labelZ =
+                    rampPos[2] +
+                    labelTop * Math.sin(rampRotation) +
+                    localZ * Math.cos(rampRotation);
                 return (
                     <group key={`friction-${i}`}>
                         <RigidBody

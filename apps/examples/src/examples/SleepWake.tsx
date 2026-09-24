@@ -43,11 +43,7 @@ export function SleepWake() {
                 return Array.from({ length: n }).map((_, col) => (
                     <Box
                         key={`${row}-${col}`}
-                        position={[
-                            (col - (n - 1) / 2) * 1.05,
-                            0.5 + row * 1.0,
-                            0
-                        ]}
+                        position={[(col - (n - 1) / 2) * 1.05, 0.5 + row * 1.0, 0]}
                     />
                 ));
             })}
