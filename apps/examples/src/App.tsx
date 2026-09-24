@@ -24,6 +24,7 @@ import { AddRemoveBodies } from './examples/AddRemoveBodies';
 import { BallBox } from './examples/BallBox';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
 import { Constraints } from './examples/Constraints';
+import { ContactEvents } from './examples/ContactEvents';
 import { CubeHeap } from './examples/CubeHeap';
 import { FloatingPlatforms } from './examples/FloatingPlatforms';
 import { FooterFunnel } from './examples/FooterFunnel';
@@ -177,6 +178,12 @@ const routes: RouteMap = {
         target: [0, 3, 0],
         background: '#3d405b',
         element: <SleepWake />
+    ContactEvents: {
+        label: 'Contact Events',
+        position: [0, 8, 20],
+        target: [0, 3, 0],
+        background: '#22333b',
+        element: <ContactEvents />
     },
     Vehicle: {
         position: [2, 25, 51],
