@@ -39,9 +39,9 @@ import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
-import { SleepWake } from './examples/SleepWake';
-import { Shapecast } from './examples/Shapecast';
 import { Sensors } from './examples/Sensors';
+import { Shapecast } from './examples/Shapecast';
+import { SleepWake } from './examples/SleepWake';
 import { JoltMemoryReadout } from './JoltMemoryReadout';
 import {
     getJoltFactory,
@@ -187,6 +187,7 @@ const routes: RouteMap = {
         target: [0, 3, 0],
         background: '#3d405b',
         element: <SleepWake />
+    },
     ContactEvents: {
         label: 'Contact Events',
         position: [0, 8, 20],
@@ -259,6 +260,7 @@ const routes: RouteMap = {
         target: [0, 3, 0],
         background: '#2a4d3a',
         element: <Friction />
+    },
     Sensors: {
         position: [0, 20, 20],
         target: [0, 5, 0],
