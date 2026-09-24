@@ -7,5 +7,6 @@ export * from './events';
 export * from './physics-system';
 export * from './queries';
 export * from './queries/raycasters';
+export * from './ragdoll-system';
 export * from './shape-system';
 export * from './skeleton-system';

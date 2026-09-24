@@ -471,7 +471,12 @@ export class BodySystem {
         }
 
         // VERY IMPORTANT! ADD TO THE ACTUAL SIMULATION
-        this.bodyInterface.AddBody(body.GetID(), activationState);
+        // #251: `RagdollSystem` registers a `BodyState` per ragdoll part so it can reuse this
+        // system's contact/activation dispatch, but `Ragdoll.AddToPhysicsSystem()` has already
+        // added those bodies (and their constraints) to the simulation - calling `AddBody` again
+        // here would double-add them. `skipAddBody` lets a caller that already added the body
+        // itself skip straight to the bookkeeping below.
+        if (!options?.skipAddBody) this.bodyInterface.AddBody(body.GetID(), activationState);
         // Registry event (#158), after the body is fully live so a listener may read its shape
         // and pose. Costs nothing when nothing is listening.
         this.worldEvents?.emit('bodyAdded', state);

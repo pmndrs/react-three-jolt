@@ -5,5 +5,6 @@ export * from './Heightfield';
 export * from './InstancedRigidBodies';
 export * from './MeshFloor';
 export * from './Physics';
+export * from './Ragdoll';
 export * from './RigidBody';
 export * from './shape';

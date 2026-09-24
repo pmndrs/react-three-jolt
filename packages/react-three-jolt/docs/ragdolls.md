@@ -1,9 +1,110 @@
-# Ragdolls (spike, issue #249)
+# Ragdolls (spike #249, implementation #251)
 
-Status: **research spike**, not an implementation. This documents what was verified against the
-real jolt-physics 1.1 WASM binder while writing `test/ragdoll-spike.test.ts`, and recommends a
-design for the "Rigged Bodies" milestone that builds on it: `SkeletonSystem` (#250), `<Ragdoll>`
-(#251), drive modes (#252).
+Status: the spike (issue #249) below is now implemented. `SkeletonSystem` (#250) maps a
+three.js `Skeleton`/`Bone` hierarchy onto a Jolt `Skeleton` and converts poses - see
+`docs/skeletons.md`. `RagdollSystem` + `<Ragdoll>` (#251, this section) build a `RagdollSettings`
+template from a `SkinnedMesh` and drive a live ragdoll from it. Drive modes (kinematic/motor,
+#252) are not implemented yet. The rest of this file is the original #249 spike write-up, kept
+because every ownership/API fact in it is still what #251 is built on.
+
+## `RagdollSystem` / `<Ragdoll>` (issue #251)
+
+`src/systems/ragdoll-system.ts` exports `RagdollSystem` (reachable as `physicsSystem.ragdollSystem`
+on every world) and the types around it; `<Ragdoll>` (`src/components/Ragdoll.tsx`) is the React
+wrapper.
+
+```tsx
+<Physics>
+    <Ragdoll
+        parts={{
+            spine: { radius: 0.18 },
+            armL: { constraint: 'hinge', hingeMin: -1.5, hingeMax: 0 }
+        }}
+        debug
+        onCollisionEnter={(e) => console.log(e.target.object?.name, 'part landed')}
+    >
+        <primitive object={mySkinnedMesh} />
+    </Ragdoll>
+</Physics>
+```
+
+- **Template**: `RagdollSystem.buildTemplate(skeleton, options)` builds one capsule per joint
+  (auto-sized: `radiusFraction * length`, `length` = distance to the joint's first child bone, or
+  inherited from the parent for a leaf) and one constraint per non-root joint - default
+  `swingTwist` (a cone + independent twist limit), or `hinge` / `fixed` / `none` per joint via
+  `parts[boneName].constraint` (`none` gives the joint its own body but no `mToParent` at all - it
+  is **not** true shape merging, see the type doc on `RagdollJointConstraint`). Capsule placement
+  and constraint anchors are read from the bones' *current* world transform at build time
+  (`Object3D.updateWorldMatrix` is called for you), so build the template after the character is
+  posed where you want the ragdoll to start.
+- **Spawning**: `RagdollSystem.spawn(template, options)` calls `CreateRagdoll` +
+  `AddToPhysicsSystem`, registers one `BodyState` per part (on an unparented proxy `Object3D`, not
+  the bone itself - the bone's transform is driven by the pose sync below, not by the normal
+  body-to-object sync loop) so `onCollisionEnter`/etc. work through the ordinary `BodySystem`
+  dispatch, and registers the instance as a `PhysicsSystem` disposable so a world torn down
+  directly still removes the ragdoll before its bodies/constraints, matching the hard invariant
+  below.
+- **Pose sync**: every physics substep, `RagdollInstance.captureStep()` reads `ragdoll.GetPose()`
+  (no `CalculateJointMatrices()` - see the gotcha below) and writes it onto the bones via
+  `SkeletonSystem.writePoseToBones`, the same "no interpolation, but always current" write
+  `<RigidBody>`'s own sync makes each substep. `<Ragdoll>`'s `useFrame` (registered after
+  `<Physics>`'s own stepper, same ordering `<Debug>` relies on) then blends the last two captures
+  by `physicsSystem.frameAlpha` when `interpolate` is on, respecting interpolation the same way
+  `PhysicsSystem.syncBodyToObject` does for an ordinary body.
+- **Teardown**: `RagdollInstance.destroy()` calls `RemoveFromPhysicsSystem()` then `destroy(ragdoll)`
+  then `destroy(pose)`, in that order, and unregisters every part's `BodyState` without touching
+  Jolt (the bodies are Ragdoll's to free). `RagdollTemplate.destroy()` frees `settings` (which
+  cascades - see the ownership table below).
+- **`<Ragdoll>` props**: `parts`, `defaultConstraint`, `layer` (Jolt object layer, default
+  `Layer.MOVING` so it collides with the world out of the box - see the `Layer.RIG` note below),
+  `activate`, `debug` (draws a wireframe capsule per part via `BodyState.debug`, the same overlay
+  `<RigidBody debug>` uses), and the usual `onCollisionEnter`/etc. props, fanned out to every
+  part. `parts`/`defaultConstraint`/`layer` are read once, at mount, never rebuilt on a prop
+  change - see "RagdollSettings is a reusable template" below for why. The imperative `ref` is a
+  `RagdollHandle`: `parts` (every part's `BodyState`), `getPart(boneName)`, `setVelocity` (every
+  part, a coherent "throw"), `addImpulse(boneName, impulse)`.
+- **`Layer.RIG`**: `PhysicsSystem`'s pair filter currently disables `Layer.RIG` against
+  everything, including itself (see `constants.ts`/`physics-system.ts`) - a ragdoll built with
+  `layer: Layer.RIG` will not collide with the floor or anything else. `<Ragdoll>` defaults to
+  `Layer.MOVING` instead specifically so it works out of the box; pass `Layer.RIG` deliberately
+  only if you want a non-colliding rig (and expect to flip that pair filter on yourself, or wait
+  for a future issue that does). Flagged for the maintainer - this looks like a gap the RIG layer
+  was reserved for but never wired up.
+
+### New findings from building #251 (not in the original #249 spike)
+
+**`SkeletonPose.SetSkeleton()` transfers ownership.** `Raw.module.destroy(pose)` frees the
+`Skeleton` it was set with - it does not just drop a borrowed reference, the way `Ragdoll`'s own
+bodies borrow the template's shapes without owning them. Binding every spawned instance's pose to
+the shared `template.skeleton` (the obvious choice, since `Ragdoll`'s bodies were already built
+from it) frees that shared skeleton the first time *any* instance's pose is destroyed, corrupting
+`RagdollSettings.mSkeleton` for the template and every other instance. `RagdollSystem.spawn()`
+therefore builds each instance a bare **private** `Jolt.Skeleton` (joint count/hierarchy only, no
+names/shapes/constraints - nothing else ever reads a pose's skeleton back) for its `SkeletonPose`,
+and lets destroying the pose free that private copy.
+
+**Spawning a second ragdoll on the same `PhysicsSystem`, after a previous one has been destroyed,
+does not work - this contradicts "RagdollSettings is a reusable template" below, which was only
+verified by heap byte count.** Re-tested here with the exact `buildRagdollSettings()` helper from
+`test/ragdoll-spike.test.ts`, looping
+`CreateRagdoll -> AddToPhysicsSystem -> step -> RemoveFromPhysicsSystem -> destroy(ragdoll)` on one
+settings object: the first `CreateRagdoll()` produces a working 4-body ragdoll
+(`GetBodyCount()` 4, valid `GetBodyID()`s); every `CreateRagdoll()` call *after* a prior ragdoll
+built from the same settings has been destroyed produces an **empty** one -
+`GetBodyCount()` 0, `GetBodyID(0).GetIndexAndSequenceNumber()` 0 (Jolt's invalid-body sentinel) -
+even though the heap-byte accounting still looks perfectly clean, which is exactly why the
+original spike's stress test (byte-count only) missed it. A fresh settings object built per spawn
+fares only slightly better: two cycles succeed and the third corrupts the heap for real, matching
+this file's own "rebuilding settings" finding below precisely - rebuilding was never a working
+alternative either. **Net effect: nothing in this package can safely spawn a second ragdoll
+instance, ever, on the same `PhysicsSystem`, whether or not the settings are reused.** Two ragdolls
+spawned and kept alive *simultaneously* (no destroy in between) were fine in testing - it is
+specifically spawn -> destroy -> spawn again that breaks. This is a `jolt-physics` 1.1
+WASM-binder-level issue this package cannot fix from JS; `test/ragdoll-system.test.ts` spawns at
+most once per `PhysicsSystem` for exactly this reason (each test builds its own world), the same
+way this file's "RemoveFromPhysicsSystem is not optional" finding below was backed by a standalone
+reproduction never added to the committed suite. **Needs the maintainer's attention, and probably
+an upstream jolt-physics bug report, before #253's demos lean on recycling ragdolls.**
 
 Nothing here was taken from documentation - there isn't any. `jolt-physics/dist/types.d.ts` has
 signatures but zero ownership notes, and the only working example code is
@@ -306,17 +407,15 @@ single animation frame (e.g. a death pose) wants. `#252`'s drive-mode design sho
 - Provides the model-space → three.js-bone-local conversion described above as a per-frame method,
   fed by `Ragdoll.GetPose()`.
 
-### `<Ragdoll>` (#251)
+### `<Ragdoll>` (#251) - implemented, see the section near the top of this file
 
-- A thin React wrapper, in the same spirit as `<RigidBody>`: takes a `SkeletonSystem`-built
-  template (or builds a small default one from props, mirroring how `<RigidBody>` can build its
-  own shape), calls `CreateRagdoll`/`AddToPhysicsSystem` on mount, `RemoveFromPhysicsSystem` +
-  `destroy` on unmount - in that order, always, per the hard invariant above.
-- Per-frame, reads the live pose via `GetPose()` (no `CalculateJointMatrices()` call - see the
-  gotcha above) and writes the converted local transforms onto a three.js `Skeleton`'s `Bone[]`,
-  the same shape a `SkinnedMesh` expects.
-- Exposes `GetBodyID(i)`/individual body access for cases that need one limb (e.g. attaching a
-  weapon to a hand bone) - `Ragdoll.GetBodyID(i)` is 1:1 with the skeleton's joint index.
+Built as described here: a thin React wrapper that builds a template from the `SkinnedMesh` found
+among its children, spawns one instance on mount, and calls `RemoveFromPhysicsSystem` + `destroy`
+on unmount in that order, per the hard invariant above. Per-substep pose sync goes through
+`GetPose()` (no `CalculateJointMatrices()` call) and `SkeletonSystem.writePoseToBones`, exactly as
+recommended. Individual body access is exposed via the imperative `RagdollHandle` (`parts`,
+`getPart(boneName)`) rather than a raw `GetBodyID(i)` passthrough, since every part already has a
+full `BodyState`.
 
 ### Drive modes (#252)
 
