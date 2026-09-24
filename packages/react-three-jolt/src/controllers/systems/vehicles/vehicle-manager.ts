@@ -27,7 +27,7 @@ import {
     type VehicleSettings,
     type WheelSmoothingSettings
 } from './vehicle-settings';
-import { SKID_STARTED, WheelState } from './wheel-state';
+import { SKID_STARTED, type WheelKind, WheelState } from './wheel-state';
 import { createWheelSettings, disposeGeneratedObject } from './wheels';
 
 /**
@@ -574,9 +574,22 @@ export class VehicleManager {
         >;
         return wheels?.[corner]?.object ?? this.settings.wheelObjects?.[index];
     }
+    /**
+     * The jolt wheel subclass this vehicle's wheels are - `'wv'` for every controller but the
+     * tracked one, which overrides this to `'tv'` (issue #246).
+     */
+    protected wheelKind(): WheelKind {
+        return 'wv';
+    }
+
     /** register a wheel state and parent its container under the vehicle */
     protected addWheelState(name: string, index: number) {
-        const state = new WheelState(this.constraint, index, this.wheelObjectFor(name, index));
+        const state = new WheelState(
+            this.constraint,
+            index,
+            this.wheelObjectFor(name, index),
+            this.wheelKind()
+        );
         state.debug = this.isDebugging;
         this.wheels.set(name, state);
         this.wheelOrder[index] = name;

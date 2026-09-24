@@ -18,6 +18,14 @@ export const SKID_STARTED = 1;
 export const SKID_ENDED = -1;
 
 /**
+ * Which jolt wheel subclass a `WheelState` is backed by (issue #246). `Wheel` is the common base
+ * every controller returns from `GetWheel()`; `WheelWV`/`WheelTV` are separate branches of it
+ * (siblings, not parent/child), so `castObject`ing a `WheelTV` to `WheelWV` (or back) throws -
+ * the kind has to be known up front rather than guessed from the pointer.
+ */
+export type WheelKind = 'wv' | 'tv';
+
+/**
  * The three.js side of one wheel of a `VehicleConstraint`.
  *
  * `threeObject` is the container the wheel's local transform (including the steering rotation) is
@@ -74,10 +82,11 @@ export class WheelState {
     wheelSettings: Jolt.WheelSettings | undefined;
     joltWheel: Jolt.Wheel | undefined;
     /**
-     * The same wheel seen as a `WheelWV`, which is where the slip lives. `GetWheel` is typed (and
-     * wrapped) as the base `Wheel`; `castObject` re-wraps the *same pointer*, and emscripten's
-     * binder caches wrappers per pointer and class, so this is one object for the wheel's whole
-     * life rather than a per frame allocation.
+     * The same wheel seen as a `WheelWV`, which is where the slip lives - only set for a `'wv'`
+     * wheel (issue #246: a tracked wheel is a `WheelTV`, a sibling class, and has no slip ratio of
+     * its own to read). `GetWheel` is typed (and wrapped) as the base `Wheel`; `castObject`
+     * re-wraps the *same pointer*, and emscripten's binder caches wrappers per pointer and class,
+     * so this is one object for the wheel's whole life rather than a per frame allocation.
      */
     private wheelWV: Jolt.WheelWV | undefined;
 
@@ -108,18 +117,23 @@ export class WheelState {
     constructor(
         constraint: Jolt.VehicleConstraint,
         wheelIndex: number,
-        object?: THREE.Object3D | null
+        object?: THREE.Object3D | null,
+        kind: WheelKind = 'wv'
     ) {
         this.constraint = constraint;
         this.index = wheelIndex;
         this.joltWheel = constraint.GetWheel(wheelIndex);
         this.wheelSettings = this.joltWheel.GetSettings();
         // every wheel of a WheeledVehicleController (and so of a MotorcycleController too) is a
-        // WheelWV; the cast is a re-wrap of the same pointer, not a conversion
-        this.wheelWV = Raw.module.castObject(
-            this.joltWheel,
-            Raw.module.WheelWV
-        ) as unknown as Jolt.WheelWV;
+        // WheelWV; the cast is a re-wrap of the same pointer, not a conversion. A tracked wheel is
+        // a WheelTV instead - a sibling of WheelWV, not a subclass of it - so it is never cast
+        // here (issue #246); the base `Wheel` methods `readState()` uses below cover both.
+        if (kind === 'wv') {
+            this.wheelWV = Raw.module.castObject(
+                this.joltWheel,
+                Raw.module.WheelWV
+            ) as unknown as Jolt.WheelWV;
+        }
         // GetLocalUp returns a static temporary by value: read it, never destroy it
         vec3.joltToThree(constraint.GetLocalUp(), this.steerAxis);
         // a user supplied wheel replaces the generated one outright: no cylinder is ever built
@@ -196,17 +210,22 @@ export class WheelState {
      * Read everything jolt solved for this wheel into the readouts above (issue #41).
      *
      * Every getter here returns a number or a static temporary; nothing is allocated and nothing
-     * is destroyed.
+     * is destroyed. `HasContact`/`GetSuspensionLength`/`GetAngularVelocity`/`GetSteerAngle`/
+     * `GetRotationAngle` are all `Wheel` base methods, so they work identically for a `WheelTV`
+     * (issue #246); only the slip ratios are `WheelWV`-specific and stay 0 for a tracked wheel -
+     * jolt does not track per-wheel slip for a track the way it does for an independent wheel.
      */
     private readState() {
-        const wheel = this.wheelWV;
+        const wheel = this.joltWheel;
         if (!wheel) return;
         this.hasContact = wheel.HasContact();
         this.suspensionLength = wheel.GetSuspensionLength();
         this.spinVelocity = wheel.GetAngularVelocity();
-        this.slipRatio = wheel.mLongitudinalSlip;
-        this.lateralSlip = wheel.mLateralSlip;
         this.rawSteerAngle = wheel.GetSteerAngle();
+        if (this.wheelWV) {
+            this.slipRatio = this.wheelWV.mLongitudinalSlip;
+            this.lateralSlip = this.wheelWV.mLateralSlip;
+        }
 
         // jolt wraps the rotation angle into [0, 2pi); unwrap it so the readout keeps climbing
         const rawSpin = wheel.GetRotationAngle();

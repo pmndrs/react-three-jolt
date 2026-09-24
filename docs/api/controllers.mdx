@@ -439,8 +439,8 @@ import { Vehicle } from '@react-three/jolt/controllers';
 
 | prop | type | default | |
 | --- | --- | --- | --- |
-| `type` | `'fourWheel' \| 'twoWheel'` | `'fourWheel'` | a car or a motorcycle |
-| `name` | `string` | `'car'` / `'bike'` | the key it is registered under in its `VehicleSystem` |
+| `type` | `'fourWheel' \| 'twoWheel' \| 'tracked'` | `'fourWheel'` | a car, a motorcycle or a tank |
+| `name` | `string` | `'car'` / `'bike'` / `'tank'` | the key it is registered under in its `VehicleSystem` |
 | `position` | `THREE.Vector3 \| [number, number, number]` | — | reactive |
 | `vehicleSettings` | `VehicleSettings` | per type | merged **over** the defaults — see below |
 | `bodyObject` | `Object3DSource` | — | your own chassis object |
@@ -466,8 +466,11 @@ Driving is bound to the `move` command (stick/WASD) out of the box.
 
 Children become the chassis by default. `bodyObject` does the same with an object or a ref, and
 `wheels` / `wheelObjects` do it for the wheels — position *and* rotation, steering included. Wheel
-order is `fl, fr, bl, br` for a four-wheeler and `front, back` for a two-wheeler
-(`wheelOrderByType`). If both `wheels` and `wheelObjects` are given, `wheels` wins.
+order is `fl, fr, bl, br` for a four-wheeler, `front, back` for a two-wheeler and, for a tracked
+vehicle, the left track front-to-back followed by the right track front-to-back (`l0, l1, l2, l3,
+r0, r1, r2, r3` at the default `wheels.count`) — see `wheelOrderByType`. A tracked wheel never
+steers, so its rotation only ever spins about its own axle. If both `wheels` and `wheelObjects`
+are given, `wheels` wins.
 
 **Ownership:** the manager disposes only the meshes it generated itself. An object you injected is
 detached on teardown and never disposed.
@@ -509,17 +512,18 @@ setters. The vehicle, its `VehicleSystem` and everything they own are destroyed 
 | `destroy()` | idempotent |
 
 `settings` is a fully resolved, typed `ResolvedVehicleSettings` object rather than `any`.
-`FourWheelVehicleManager` and `TwoWheelVehicleManager` are the two concrete classes;
-`VehicleSystem` holds them by name (`addVehicle`, `getVehicle`, `removeVehicle`, `setPosition`,
-`detachFromLoop`, `destroy`).
+`FourWheelVehicleManager`, `TwoWheelVehicleManager` and `TrackedVehicleManager` are the three
+concrete classes; `VehicleSystem` holds them by name (`addVehicle`, `getVehicle`, `removeVehicle`,
+`setPosition`, `detachFromLoop`, `destroy`).
 
 ### Settings
 
-`vehicleSettings` is a discriminated union on `type`. Shared by both:
+`vehicleSettings` is a discriminated union on `type`. Shared by all three:
 
 `bodyPosition`, `castType` (`'ray' | 'sphere' | 'cylinder'`), `vehicleLength`, `vehicleWidth`,
 `vehicleHeight`, `vehicleMass`, `maxPitchRollAngle`, `maxEngineTorque`, `clutchStrength`,
-`bodyObject`, `wheelObjects`.
+`bodyObject`, `wheelObjects`. (`twoWheel` declares the same two engine fields but its manager does
+not read them yet — the motorcycle's engine is still the fixed tuning jolt's own example uses.)
 
 **`fourWheel`** adds `fourWheelDrive`, `frontBackLimitedSlipRatio`, `leftRightLimitedSlipRatio`,
 `antiRollbar`, `splitEngineTorqueFront`, `splitEngineTorqueRear`, `frontRollBarStiffness`,
@@ -531,17 +535,35 @@ steering, 0.5 m wheels.
 `casterAngle` and a `wheels` object with `front` / `back` overrides. Defaults: 0.8 × 0.4 × 0.6 m,
 250 kg, 30° caster, 0.31 m wheels.
 
+**`tracked`** (jolt's `TrackedVehicleController` — issue #246) adds `left` / `right` track
+settings and a `wheels` object. A track
+(`{ drivenWheel, inertia, angularDamping, maxBrakeTorque, differentialRatio }`) is jolt's
+`VehicleTrackSettings`: `drivenWheel` indexes into *that track's own* wheel list (0, the
+frontmost wheel, by default), not the constraint's global wheel list. `wheels.count` (default 4)
+lays that many wheels evenly along each side, front to back; there is no per-corner override, only
+the shared radius/width/suspension/friction settings and `longitudinalFriction` /
+`lateralFriction` (jolt's `WheelSettingsTV` — a tracked wheel never steers, so it has none of the
+`fourWheel` wheel's steering/brake torque properties). Defaults: 5.0 × 2.6 × 0.7 m, 4000 kg,
+cylinder cast, 2000 N·m of engine torque, 0.4 m wheels.
+
+Driving a tracked vehicle steers by skidding: `move()`'s steering axis is mixed into jolt's
+`leftRatio`/`rightRatio` (`SetDriverInput(forward, leftRatio, rightRatio, brake)`) rather than
+forwarded as a wheel angle — the outside track speeds up and the inside one slows (or reverses,
+for a turn sharp enough to pivot in place) by the same amount, so driving straight always asks
+both tracks for exactly `forward`.
+
 Per-wheel settings cover `radius`, `width`, `position` (the attachment point; when given it
 overrides the `wheelOffsetHorizontal` / `wheelOffsetVertical` layout helpers),
 `suspensionMinLength` / `suspensionMaxLength` / `suspensionPreloadLength`, `suspensionDirection`,
 `suspensionForcePoint`, `suspensionSpring` (`{ frequency, damping }`), `steeringAxis`, `wheelUp`,
 `wheelForward`, `inertia`, `angularDamping`, plus `maxSteerAngle` / `maxBrakeTorque` /
-`maxHandBrakeTorque` (four-wheel) or `posZ` / `suspensionFreq` / `brakeTorque` (two-wheel).
+`maxHandBrakeTorque` (four-wheel), `posZ` / `suspensionFreq` / `brakeTorque` (two-wheel) or
+`longitudinalFriction` / `lateralFriction` (tracked).
 
-`defaultFourWheelVehicleSettings`, `defaultTwoWheelVehicleSettings` and
-`resolveVehicleSettings(settings)` are exported if you want to inspect or pre-merge them. Your
-settings are merged **over** the defaults — a motorcycle built with a custom mass or custom wheels
-no longer silently gets the defaults back.
+`defaultFourWheelVehicleSettings`, `defaultTwoWheelVehicleSettings`,
+`defaultTrackedVehicleSettings` and `resolveVehicleSettings(settings)` are exported if you want to
+inspect or pre-merge them. Your settings are merged **over** the defaults — a motorcycle built
+with a custom mass or custom wheels no longer silently gets the defaults back.
 
 ### Secondary physics
 
@@ -646,6 +668,20 @@ payloads are **pooled** (the same object every dispatch): `VehicleSkidEvent` car
 carries `rpm`, `gear`, `throttle`, `brake`, `speed`, `speedKmh`, `shifting`, `clutch` and
 `skidding`. `onEngine`'s handler is skipped entirely (no state object is even filled) unless
 something is subscribed, so an unused dashboard costs nothing per step.
+
+### `TrackedVehicle`
+
+```tsx
+import { TrackedVehicle } from '@react-three/jolt/controllers';
+
+<TrackedVehicle position={[0, 4, 0]} vehicleSettings={{ vehicleMass: 6000 }}>
+    <primitive object={hullGltf.scene} />
+</TrackedVehicle>;
+```
+
+`<TrackedVehicle>` is exactly `<Vehicle type="tracked">` under its own name — every prop, every
+secondary physics option, `useVehicle({ type: 'tracked' })`, all of it. `TrackedVehicleManager` is
+the concrete class (`declare controller: Jolt.TrackedVehicleController`).
 
 ### `VehicleFourWheel`
 

@@ -1,10 +1,12 @@
 import type * as THREE from 'three';
 import type { PhysicsSystem } from '../../../index';
 import { FourWheelVehicleManager } from './four-wheel-vehicle-manager';
+import { TrackedVehicleManager } from './tracked-vehicle-manager';
 import { TwoWheelVehicleManager } from './two-wheel-vehicle-manager';
 import type { VehicleManager } from './vehicle-manager';
 import {
     defaultFourWheelVehicleSettings,
+    defaultTrackedVehicleSettings,
     defaultTwoWheelVehicleSettings,
     type ResolvedVehicleSettings,
     resolveVehicleSettings,
@@ -22,6 +24,8 @@ export class VehicleSystem {
     defaultVehicleSettings = defaultFourWheelVehicleSettings;
     /** the defaults a two wheeled vehicle is built from */
     defaultVehicleSettingsTwoWheels = defaultTwoWheelVehicleSettings;
+    /** the defaults a tracked vehicle (a tank) is built from */
+    defaultVehicleSettingsTracked = defaultTrackedVehicleSettings;
 
     vehicles = new Map<string, VehicleManager>();
 
@@ -80,7 +84,9 @@ export class VehicleSystem {
         const vehicle =
             resolved.type === 'twoWheel'
                 ? new TwoWheelVehicleManager(this.physicsSystem, resolved)
-                : new FourWheelVehicleManager(this.physicsSystem, resolved);
+                : resolved.type === 'tracked'
+                  ? new TrackedVehicleManager(this.physicsSystem, resolved)
+                  : new FourWheelVehicleManager(this.physicsSystem, resolved);
         this.vehicles.set(name, vehicle);
         return vehicle;
     }
