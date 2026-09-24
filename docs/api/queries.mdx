@@ -4,7 +4,7 @@ description: Raycasting, shapecasting and collide-shape overlap tests, and who o
 nav: 6
 ---
 
-Four query objects, all created from the physics system and all following the same shape: set up
+Five query objects, all created from the physics system and all following the same shape: set up
 a caster, `cast()` it, read hits.
 
 | | what it answers |
@@ -15,6 +15,7 @@ a caster, `cast()` it, read hits.
 | [`AdvancedRaycaster`](#advancedraycaster) | same, with your own per-body / per-hit filtering |
 | [`Shapecaster`](#shapecasting) | what does this *shape* hit as it sweeps along a direction |
 | [`ShapeCollider`](#shapecollider) | what is this shape overlapping *right now* (Jolt's `CollideShape`) |
+| [`PointCollider`](#collidepoint) / [`useCollidePoint`](#collidepoint) | which bodies contain this single point *right now* (Jolt's `CollidePoint`) |
 
 > [!CAUTION]
 > **Every query object owns Jolt (WASM) memory and must be destroyed.** The `useRaycaster` /
@@ -289,6 +290,59 @@ own reference alive for as long as the shapecaster uses it.
 | `shapeMatrix` | the transform the query was run with |
 | `subShapeId1` / `subShapeId2` | **raw `Jolt.SubShapeID` objects owned by the collector** — read `.GetValue()`, never destroy |
 
+## CollidePoint
+
+`CollidePoint` asks the simplest overlap question of all: not "what does this shape overlap",
+just "which bodies contain this single point, right now" — a spawn-point check, a click-to-select
+test against 3D volumes rather than the three.js scene graph, a trigger volume shaped like
+whatever you already have instead of a sensor body.
+
+```tsx
+import { useCollidePoint } from '@react-three/jolt';
+import { useEffect } from 'react';
+
+export function SpawnCheck() {
+    const collider = useCollidePoint([0, 1, 0]);
+
+    useEffect(() => {
+        const result = collider.cast();
+        if (result) console.log('occupied');
+    }, [collider]);
+
+    return null;
+}
+```
+
+`useCollidePoint(point?, type?)` creates a `PointCollider`, applies the arguments, and destroys it
+when the component unmounts — or whenever `point`/`type` change, mirroring `useRaycaster` (compare
+by identity, so hoist an inline array/`Vector3`). There is no hook-less form needed for the simple
+case, but you can still take one from the physics system yourself:
+
+```ts
+import { useJolt } from '@react-three/jolt';
+
+const { physicsSystem } = useJolt();
+const collider = physicsSystem.getPointCollider();
+```
+
+`point` accepts the same `anyVec3` shapes as `Raycaster.origin`/`direction` (a `THREE.Vector3`, a
+`number[]`, or a Jolt vector) and is rebuilt in place on every write — no allocation per frame, so
+it's safe to drive from `useFrame`.
+
+`setCollector('closest' | 'any' | 'all')` works exactly as it does for the other queries.
+`cast()` returns the single hit when there is exactly one, the `hits` array when there are more,
+and `false` on a miss — same contract as `ShapeCollider.cast()`.
+
+### `PointCollisionResult`
+
+Jolt's own `CollidePointResult` carries only a body and a sub-shape id — no contact point or
+penetration depth, since a point is either inside a shape or it isn't:
+
+| member | |
+| --- | --- |
+| `bodyHandle` | pass to `bodySystem.getBody()` |
+| `subShapeId2` | **a raw `Jolt.SubShapeID` owned by the collector** — read `.GetValue()`, never destroy |
+
 ## Debugging
 
 Casters draw themselves when you ask — they deliberately ignore `<Physics debug>`, because a
@@ -323,8 +377,9 @@ markers, and its `destroy()` / `clearDebugging()` dispose the pools too.
 
 `Raycaster`, `Shapecaster`, `ShapeCollider` and `Multicaster` used to each duplicate the same
 filter setup, destroy bookkeeping and (for the ray-like casters) debug-drawing code (issue #217).
-They now all extend a small hierarchy instead — useful mainly if you're building a fifth query
-type, or want to know exactly what `destroy()` covers:
+They now all extend a small hierarchy instead — useful mainly if you're building another query
+type (`PointCollider` — issue #248 — is one such addition, following the same pattern as
+`ShapeCollider`), or want to know exactly what `destroy()` covers:
 
 | class | extends | adds |
 | --- | --- | --- |
@@ -333,9 +388,10 @@ type, or want to know exactly what `destroy()` covers:
 | `HitBase` | — | the shape every single-cast result shares: a `start`/`end`/`position` triple, a `bodyHandle`/`shapeIdValue` pair, and the `impactNormal` getter that turns those back into a live surface normal |
 
 `Raycaster` and `Shapecaster` extend `CastQueryBase` (and `AdvancedRaycaster` extends
-`Raycaster`); `ShapeCollider` and `Multicaster` extend `QueryBase` directly since neither uses the
-ray-cast collector family. `RaycastHit` and `ShapecastHit` both extend `HitBase`, which is why
-their fields line up exactly (see [`RaycastHit`](#raycasthit) above).
+`Raycaster`); `ShapeCollider`, `PointCollider` and `Multicaster` extend `QueryBase` directly since
+none of them uses the ray-cast collector family. `RaycastHit` and `ShapecastHit` both extend
+`HitBase`, which is why their fields line up exactly (see [`RaycastHit`](#raycasthit) above) -
+`PointCollisionResult` does not, since `CollidePoint`'s result has no start/end/position at all.
 
 `QueryBase` implements `destroy()` once, as a template: it flips an internal `destroyed` flag and
 calls the abstract `releaseResources()` every subclass implements for whatever else it allocated.
@@ -360,18 +416,22 @@ freed only by `destroy()`.
 | --- | --- |
 | `useMouseRaycaster()` | on unmount **and** whenever `type` / `filter` change |
 | `useRaycaster()` | unmount only — a change to `origin` / `direction` / `type` builds a new one and leaks the old |
+| `useCollidePoint()` | unmount only, and whenever `point` / `type` change — a change to either builds a new `PointCollider` and destroys the old one, same as `useRaycaster` |
 | `useMulticaster()` | unmount only, and it frees the inner `Raycaster` rather than calling `Multicaster.destroy()` |
 | `useAdvancedRaycaster()` | **never** — call `destroy()` yourself |
 
-`useRaycaster`'s `origin` and `direction` are compared by identity, so passing an inline array or
-`Vector3` re-creates the caster on every render. Hoist them, or use `raycaster.set(...)`.
+`useRaycaster`'s `origin` and `direction` (and `useCollidePoint`'s `point`) are compared by
+identity, so passing an inline array or `Vector3` re-creates the caster/collider on every render.
+Hoist them, or use `raycaster.set(...)` / `pointCollider.point = ...`.
 
-- Anything from `physicsSystem.getShapecaster()` / `getShapeCollider()` / `getRaycaster()` is
-  yours: pair it with `useEffect(() => () => caster.destroy(), [caster])`.
+- Anything from `physicsSystem.getShapecaster()` / `getShapeCollider()` / `getPointCollider()` /
+  `getRaycaster()` is yours: pair it with `useEffect(() => () => caster.destroy(), [caster])`.
 - `destroy()` is idempotent on every query type — see [Shared base](#shared-base). `ShapeCollider`
-  goes one step further and also nulls out every field it freed, so a stray call afterwards fails
-  loudly instead of touching freed memory; the others just no-op on a second call.
-- There is no `useShapecaster` / `useShapeCollider` hook yet.
+  and `PointCollider` go one step further and also null out every field they freed, so a stray
+  call afterwards fails loudly instead of touching freed memory; the others just no-op on a
+  second call.
+- There is no `useShapecaster` / `useShapeCollider` hook yet — `useCollidePoint` (issue #248) is
+  the first hook wrapper for one of the `QueryBase`-direct query types.
 
 ### Objects Jolt hands you
 

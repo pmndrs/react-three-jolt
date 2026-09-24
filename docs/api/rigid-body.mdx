@@ -41,6 +41,7 @@ and `<RigidBody colliders>`. See [Colliders](/api/colliders).
 | `friction` | `number` | `0` (ice) to `1` (glue). Jolt's default is `0.2`. Reactive |
 | `restitution` | `number` | bounciness, `0`–`1`. Default `0`. Reactive |
 | `gravityFactor` | `number` | multiplier on world gravity for this body. Default `1`. Reactive |
+| `motionQuality` | `'discrete' \| 'linearCast'` | collision detection quality. `'discrete'` (Jolt's default) only tests at the start/end of a step; `'linearCast'` sweeps the body for the step, so a small fast body doesn't tunnel through thin geometry. Costs more. Reactive |
 | `linearDamping` | `number` | Jolt's default is `0.05` |
 | `angularDamping` | `number` | Jolt's default is `0.05` |
 | `isSensor` | `boolean` | fires sensor events, causes no collision response |
@@ -335,6 +336,11 @@ worth the readability cost for a handful.
 `friction`, `restitution`, `mass`, `gravityFactor`, `linearDamping`, `angularDamping`,
 `isSensor` — all plain get/set number/boolean properties. `color` gets/sets the three.js material
 colour (and the per-instance colour on instanced bodies).
+
+`motionQuality` (`'discrete' | 'linearCast'`) is the same idea, but goes through
+`BodyInterface.SetMotionQuality` rather than a `MotionProperties` setter — jolt-physics exposes
+`MotionProperties.GetMotionQuality()` but no matching setter on it, only on `BodyInterface`. A
+no-op on a static body, which has no `MotionProperties` at all.
 
 `mass` is the body's *simulated* mass in kilograms, read from its motion properties rather than
 from the shape's density, so it reflects a `mass` prop or a later write. Static and kinematic
