@@ -1,11 +1,12 @@
-# Ragdolls (spike #249, implementation #251)
+# Ragdolls (spike #249, implementation #251, drive modes #252)
 
 Status: the spike (issue #249) below is now implemented. `SkeletonSystem` (#250) maps a
 three.js `Skeleton`/`Bone` hierarchy onto a Jolt `Skeleton` and converts poses - see
 `docs/skeletons.md`. `RagdollSystem` + `<Ragdoll>` (#251, this section) build a `RagdollSettings`
-template from a `SkinnedMesh` and drive a live ragdoll from it. Drive modes (kinematic/motor,
-#252) are not implemented yet. The rest of this file is the original #249 spike write-up, kept
-because every ownership/API fact in it is still what #251 is built on.
+template from a `SkinnedMesh` and drive a live ragdoll from it. Drive modes (#252 - `'animated'`
+kinematic, `'powered'` motors, `'ragdoll'` free, with blending - see "Drive modes (issue #252)"
+below) are now implemented too. The rest of this file is the original #249 spike write-up, kept
+because every ownership/API fact in it is still what #251/#252 are built on.
 
 ## `RagdollSystem` / `<Ragdoll>` (issue #251)
 
@@ -70,6 +71,110 @@ wrapper.
   only if you want a non-colliding rig (and expect to flip that pair filter on yourself, or wait
   for a future issue that does). Flagged for the maintainer - this looks like a gap the RIG layer
   was reserved for but never wired up.
+
+## Drive modes: animated / powered / ragdoll (issue #252)
+
+`RagdollInstance`/`<Ragdoll>` now has a `mode: 'animated' | 'powered' | 'ragdoll'` (default
+`'ragdoll'`), and per-part `swingTwist` motor tuning, on top of #251's spawn/pose-sync mechanics.
+
+```tsx
+<Ragdoll mode={hit ? 'ragdoll' : 'powered'} blendTime={0.3}>
+    <primitive object={mySkinnedMesh} />
+</Ragdoll>
+```
+
+- **`'animated'`**: every substep, `driveStep()` reads `bones`' CURRENT local transforms (their
+  parent-relative `position`/`quaternion`, exactly what `SkeletonSystem.readPoseFromBones` reads -
+  see `docs/skeletons.md`) into a private target `SkeletonPose` and calls
+  `ragdoll.DriveToPoseUsingKinematics(pose, deltaTime)`. `captureStep()` (unconditionally run every
+  substep, in every mode, per #251) then writes the physics result back onto the SAME `bones`
+  array. **One array serves both roles** - read as the drive target before `Step()`, written as the
+  render output after it - which is what lets a plain `THREE.AnimationMixer` targeting the
+  `<Ragdoll>`'s own `SkinnedMesh` "just work": the mixer's `useFrame` update (which must run before
+  `<Physics>`'s own step within the same rendered frame - not itself enforced by this package, the
+  caller's `useFrame` priority/mount order has to make it so) sets the bones to this frame's
+  animated pose, `driveStep()` reads that as the target, `Step()` runs, and `captureStep()`
+  overwrites the bones with the (very closely tracking, since kinematic driving is velocity-exact
+  per substep) physics result, ready for the mixer to overwrite again next frame.
+- **`'powered'`**: same target read, but `ragdoll.DriveToPoseUsingMotors(pose)` - every
+  `swingTwist` joint's `SwingTwistConstraint` motor (torque-limited, spring-driven towards the
+  pose's target orientation) does the work instead of a direct velocity set, so an external force
+  (a hit, another body) can still perturb the pose while it's being driven. Only `swingTwist`
+  joints are motor-driven - `hinge`/`fixed`/`none` joints are unaffected by `'powered'` mode (Jolt
+  exposes hinge/slider motors too, per `constraint-system.ts`'s existing `ConstraintMotorOptions`,
+  but wiring ragdoll parts to those is out of scope here - the issue asked for SwingTwist motors).
+- **`'ragdoll'`** (default): `driveStep()` no-ops; bodies are free, `captureStep()`'s usual
+  physics-to-bones sync is the only thing touching `bones` - this is exactly what #251's own tests
+  already exercised, unchanged.
+
+### Per-part motor tuning (`'powered'` mode)
+
+`RagdollPartOptions.motorStrength`/`motorDamping` (`swingTwist` joints only; defaults via
+`RagdollTemplateOptions.defaultMotorStrength`/`defaultMotorDamping`, `6`/`1`) are baked into the
+joint's `mSwingMotorSettings`/`mTwistMotorSettings` (a `MotorSettings` with a `SpringSettings`
+spring, `mFrequency`/`mDamping` - see `constraint-system.ts`'s existing `createMotorSettings` for
+the same pattern applied to hinge/slider constraints) at **template build time**, same as every
+other per-part option here - motors can't be rebuilt cheaply per spawn any more than shapes or
+constraint limits can (see "RagdollSettings is a reusable template" below). A joint built with
+`motorStrength: 0` never has its motor turned on in `'powered'` mode (`setMode()` leaves it at
+`EMotorState_Off` instead of `EMotorState_Position` - see below) - it stays limp even while the
+rest of the ragdoll is powered, the mechanism the issue calls "a hit region go limp".
+
+### `RagdollInstance.setMode(mode, blendSeconds?)`
+
+- Entering/leaving `'powered'` flips every `swingTwist` joint's constraint motor state
+  (`SetSwingMotorState`/`SetTwistMotorState`, `EMotorState_Position` only when that joint's
+  `motorStrength > 0`, else `EMotorState_Off`). `'animated'`'s kinematic driving doesn't touch
+  constraint motors at all, so switching into/out of it is a no-op here.
+- **Switching TO `'ragdoll'` needs no special handling to "inherit velocity"**: kinematic driving
+  and motor torque both already leave the bodies with real physics velocity every substep (that's
+  how they work - see below); simply not driving them further (`driveStep()` no-ops in `'ragdoll'`
+  mode) is enough. Verified in `test/ragdoll-modes.test.ts`: a kinematically-driven body's velocity
+  right after `setMode('ragdoll')` is still close to what it was while driven, not reset to zero.
+- **Switching AWAY from `'ragdoll'`** snapshots `bones`' current local transforms and blends
+  `captureStep()`'s writes from that snapshot towards the newly-driven pose over `blendSeconds`
+  (default the `blendTime` passed to `spawn()`/the `<Ragdoll blendTime>` prop, itself default
+  `0.2`) instead of popping straight to the driven pose - a per-bone position lerp + quaternion
+  slerp, advanced by the real substep `delta` each `captureStep()` call. Pass `0` for an immediate
+  cut. Never blended going INTO `'ragdoll'` - going limp is meant to be an immediate, physically
+  real transition, not a smoothed one.
+- `<Ragdoll mode>` is reactive (unlike `parts`/`layer`/`defaultMotorStrength`/`defaultMotorDamping`,
+  which stay build-time-only, same as #251) - changing the prop after mount calls `setMode()`.
+
+### Two facts pinned down while building this, not in #249/#250/#251's docs
+
+**`Ragdoll.SetPose()`/`DriveToPoseUsingKinematics()`/`DriveToPoseUsingMotors()` read the ROOT's
+target WORLD position from `pose.GetJoint(0)`'s STATE** (what `readPoseFromBones` writes from
+`bones[0].position` - joint 0 has no parent, so its "local" state IS its world target directly),
+**not from `pose.GetRootOffset()`.** This is the opposite convention from `GetPose()`'s OUTPUT (see
+"Joint matrices are root-relative model space" below, where `GetRootOffset()` holds the live world
+position and joint 0's own matrix is always ~identity) - the input and output conventions are NOT
+symmetric, and nothing in #249/#250 exercised the input side. Verified with a throwaway probe:
+moving `bones[0].position` by `+5` on X and calling `SetPose()` (`GetRootOffset()` left at its
+default `(0,0,0)`) moved the root body by exactly `+5` on X. `driveStep()` needs no
+`SetRootOffset()` call because of this - `readPoseFromBones` already puts the root's target where
+these calls expect it. One consequence worth flagging for `<Ragdoll>`'s own root bone handling
+later: because `captureStep()`'s `writePoseToBones` call always writes the root's OWN local
+translation back as `(0,0,0)` (the flip side of the same "root's own model matrix is always
+identity" fact), a caller driving `'animated'`/`'powered'` mode must set the root bone's FULL
+target transform every substep (not just mutate one axis) - leaving a component untouched means it
+silently reads back as whatever `captureStep()` last zeroed it to, not "hold your last real value".
+
+**Kinematically/motor-driving a multi-body CONSTRAINED chain does not move every part in lockstep,
+even for `'animated'` mode's supposedly velocity-exact kinematic drive.** The root (no parent
+constraint pulling on it) converges tightly and immediately to a moving OR still target. A
+downstream joint (spine, armL/armR) settles to a bounded, non-zero STEADY-STATE offset from its
+own forward-kinematically-computed target - verified in `test/ragdoll-modes.test.ts` by holding a
+moving target still and waiting up to 120 extra substeps (2 seconds): the gap does not shrink
+further, it is a genuine equilibrium, not slow decay. Best working theory (not confirmed against
+Jolt's source): `DriveToPoseUsingKinematics` sets each body's velocity independently from the
+forward-kinematic pose every substep, and the `swingTwist` constraint's own positional correction
+(pulling a child back towards where its PARENT physically is *this substep*, not where the
+parent's kinematic TARGET is) partially fights that imposed velocity on a compliant joint. Deeper
+joints (two constraints from the root) carry a larger gap than shallower ones. Flagged for the
+maintainer/for anyone building a precision-tracking use case on `'animated'` mode - `<Ragdoll>`'s
+current shipped behavior is good enough for "drag a controlled character's ragdoll along with its
+animation, close enough to still collide sensibly", not for exact multi-body IK-style tracking.
 
 ### New findings from building #251 (not in the original #249 spike)
 
@@ -456,24 +561,21 @@ recommended. Individual body access is exposed via the imperative `RagdollHandle
 `getPart(boneName)`) rather than a raw `GetBodyID(i)` passthrough, since every part already has a
 full `BodyState`.
 
-### Drive modes (#252)
+### Drive modes (#252) - implemented, see "Drive modes: animated / powered / ragdoll" near the top
 
-Three modes map directly onto what this spike verified works:
+The original recommendation below (kept for history) was to sample a package-owned
+`SkeletalAnimation` into the pose every frame. What actually shipped reads the target pose
+directly from `bones`' CURRENT local transforms instead (`SkeletonSystem.readPoseFromBones`, no
+`SkeletalAnimation`/`Sample()` involved) - simpler, and it means ANY external driver of the
+`<Ragdoll>`'s own `SkinnedMesh` bones (a `THREE.AnimationMixer`, a procedural rig, another
+package) works as the drive target for free, not just a Jolt-native `SkeletalAnimation` clip. The
+three modes still map onto the same three Jolt calls this spike verified:
 
-1. **Ragdoll (passive)** - just `AddToPhysicsSystem` + step; no pose driving at all. What
-   `test/ragdoll-spike.test.ts`'s main test exercises.
-2. **Animated / kinematic** - `SkeletalAnimation.Sample(time, pose)` →
-   `pose.CalculateJointMatrices()` → `ragdoll.DriveToPoseUsingKinematics(pose, deltaTime)`. Use
-   `SetIsLooping(false)` unless the clip should loop (see above). Good for a controlled character
-   that should still push other dynamic bodies around, matching `kinematic_rig.html`.
-3. **Motor-driven ("powered ragdoll")** - same sampling path, but
-   `ragdoll.DriveToPoseUsingMotors(pose)` (or the `(prevPose, pose, deltaTime)` overload for
-   velocity-aware driving). Lets external forces (an explosion, another character) still perturb
-   the pose while it's actively driven, matching `powered_rig.html`. `SetPose(pose)` is the
-   teleport-instead-of-drive escape hatch for either mode (e.g. snapping to an animation's first
-   frame before handing off to motors, as `powered_rig.html` does).
-
-All three modes read/write the *same* `SkeletonPose`/`SkeletalAnimation` objects, so `#252` can be
-a single "drive mode" enum on `<Ragdoll>` that swaps which of `DriveToPoseUsingKinematics` /
-`DriveToPoseUsingMotors` / nothing gets called per frame, rather than three separate component
-trees.
+1. **`'ragdoll'` (passive, default)** - just `AddToPhysicsSystem` + step; no pose driving at all.
+   What `test/ragdoll-spike.test.ts`'s main test exercises, and #251's tests too.
+2. **`'animated'` (kinematic)** - `ragdoll.DriveToPoseUsingKinematics(pose, deltaTime)`, matching
+   `kinematic_rig.html`.
+3. **`'powered'` (motor-driven)** - `ragdoll.DriveToPoseUsingMotors(pose)`, matching
+   `powered_rig.html`. The `(prevPose, pose, deltaTime)` velocity-aware overload and `SetPose()`'s
+   teleport escape hatch are both still unused by this package - flagged as possible follow-ups,
+   not needed for what #252 asked for.
