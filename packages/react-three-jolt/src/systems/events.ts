@@ -6,6 +6,7 @@
 import type { Object3D, Vector3 } from 'three';
 import type { BodyState } from './body-state';
 import type { ShapeDescriptor } from './shape-system';
+import type { SoftBodyState } from './soft-body-system';
 
 /**
  * One bit per event type. `Emitter.mask` ors these together, which is what lets the Jolt
@@ -72,6 +73,12 @@ export interface CollisionTarget {
     subShapeId: number;
     /** Instance index, for a body belonging to an `<InstancedRigidBody>`. */
     index?: number;
+    /**
+     * The soft body this side of the contact belongs to (issue #245), when it is one. A soft
+     * body has no `BodyState` - `body` is always `undefined` for it, `object` is the mesh it
+     * drives instead. `undefined` for every rigid-body side.
+     */
+    softBody?: SoftBodyState;
 }
 
 /**
@@ -137,6 +144,17 @@ export interface ValidatePayload {
     other: CollisionTarget;
     /** World space offset the manifold's relative contact points are expressed against. */
     baseOffset: Vector3;
+}
+
+/**
+ * `contactValidate` payload for a soft body (issue #245). Unlike rigid's {@link ValidatePayload},
+ * Jolt hands no `baseOffset` to `SoftBodyContactListener::OnSoftBodyContactValidate` - it fires
+ * once per (soft body, other body) whose bounding boxes overlap, *before* any vertex contact is
+ * confirmed (accepting doesn't mean anything actually touches; rejecting skips it for the step).
+ */
+export interface SoftBodyValidatePayload {
+    target: CollisionTarget;
+    other: CollisionTarget;
 }
 
 /**
@@ -208,3 +226,43 @@ export const BODY_EVENT_BITS: Partial<Record<keyof BodyEventMap, number>> = {
  * no bit.
  */
 export const WORLD_EVENT_BITS: Partial<Record<keyof WorldEventMap, number>> = BODY_EVENT_BITS;
+
+/**
+ * Events emitted by a `SoftBodyState`'s own emitter (issue #245) - the soft-body counterpart of
+ * {@link BodyEventMap}. Same names and the same pooled `CollisionEnterPayload` /
+ * `CollisionExitPayload` / `SensorPayload` shapes a rigid body's events get: `target` is always
+ * the soft body itself (`target.body` is `undefined`, `target.softBody` is set, `target.object`
+ * is the mesh it drives) and `other` resolves against `BodySystem` or `SoftBodySystem` exactly
+ * like a rigid contact's `other` does.
+ *
+ * There is no `sleep` / `wake` - soft bodies have no sleep story yet (see `soft-body-system.ts`)
+ * - and `contactValidate` carries {@link SoftBodyValidatePayload} rather than `ValidatePayload`,
+ * since Jolt gives the soft body validate callback no `baseOffset`.
+ */
+export type SoftBodyEventMap = {
+    collisionEnter: (payload: CollisionEnterPayload) => void;
+    collisionPersist: (payload: CollisionEnterPayload) => void;
+    collisionExit: (payload: CollisionExitPayload) => void;
+    sensorEnter: (payload: SensorPayload) => void;
+    sensorExit: (payload: SensorPayload) => void;
+    /**
+     * Runs *synchronously inside* `joltInterface.Step()`, once per (soft body, other body)
+     * bounding box overlap. Return `false` to reject the contact for this step. Must be fast and
+     * must not touch bodies - see docs/events.md.
+     */
+    contactValidate: (payload: SoftBodyValidatePayload) => boolean | void;
+};
+
+/**
+ * Bit assignment handed to a `SoftBodyState`'s `Emitter`. Reuses the same bit values as
+ * {@link BODY_EVENT_BITS} - a bit only has to be unique within the one `Emitter` instance it
+ * backs, and a soft body's emitter is never the same instance as a rigid body's.
+ */
+export const SOFT_BODY_EVENT_BITS: Partial<Record<keyof SoftBodyEventMap, number>> = {
+    collisionEnter: EventBit.collisionEnter,
+    collisionPersist: EventBit.collisionPersist,
+    collisionExit: EventBit.collisionExit,
+    sensorEnter: EventBit.sensorEnter,
+    sensorExit: EventBit.sensorExit,
+    contactValidate: EventBit.contactValidate
+};

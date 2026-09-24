@@ -364,6 +364,161 @@ export class ContactPairTracker {
     }
 }
 
+// Soft body peer aggregation (issue #245) ==================================================
+
+/** One (soft body, peer) accumulator for a single `OnSoftBodyContactAdded` call. Pooled - see
+ * {@link SoftBodyContactAccumulator}. */
+export type SoftPeerAccum = {
+    peer: number;
+    count: number;
+    sensor: boolean;
+    normalX: number;
+    normalY: number;
+    normalZ: number;
+    /** Up to `pointCapacity` world space points, flattened xyz. */
+    points: Float32Array;
+    pointCount: number;
+};
+
+/**
+ * Aggregates one soft body's per-vertex `SoftBodyManifold` into per-peer-body contact records,
+ * and derives enter/persist/exit against the previous call.
+ *
+ * `SoftBodyContactListenerJS` gets no "removed" callback the way `ContactListenerJS` does -
+ * Jolt calls `OnSoftBodyContactAdded` once per soft body per step with *every* vertex contact
+ * that step, never once per pair going away. So "stopped touching" is read off which peer
+ * handles disappeared from one step's touched set to the next, the same double-buffering idea
+ * `ContactEventQueue` uses for its front/back record buffers.
+ *
+ * One instance per `SoftBodySystem`, reused across every soft body and every step: `begin()`
+ * clears the scratch map (not reallocates it), `touch()` reuses pooled per-peer records, and
+ * `end()` swaps rather than recreates the previous/current peer sets.
+ */
+export class SoftBodyContactAccumulator {
+    private readonly pointCapacity: number;
+    /** This call's peers, soft-body-agnostic: `begin()`/`end()` bracket exactly one soft body. */
+    private readonly scratch = new Map<number, SoftPeerAccum>();
+    private pool: SoftPeerAccum[] = [];
+    private poolIndex = 0;
+    /** Per soft body handle: the peer handles (and whether each was a sensor) touched last call. */
+    private previous = new Map<number, Map<number, boolean>>();
+
+    constructor(pointCapacity = 4) {
+        this.pointCapacity = Math.max(0, pointCapacity);
+    }
+
+    /** Start accumulating one soft body's contacts for this call. */
+    begin(): void {
+        this.scratch.clear();
+        this.poolIndex = 0;
+    }
+
+    /**
+     * Record one contacting vertex (or one sensor contact) against `peer`. Allocation free once
+     * warmed up - pooled records, no per-call `Map`/array construction. The first touch of a
+     * peer this call sets its representative normal and (up to `pointCapacity`) world space
+     * points; later touches of the same peer only bump `count`.
+     */
+    touch(
+        peer: number,
+        sensor: boolean,
+        normalX = 0,
+        normalY = 0,
+        normalZ = 0,
+        pointX?: number,
+        pointY?: number,
+        pointZ?: number
+    ): void {
+        let entry = this.scratch.get(peer);
+        if (!entry) {
+            entry = this.acquire(peer, sensor, normalX, normalY, normalZ);
+            this.scratch.set(peer, entry);
+        }
+        entry.count++;
+        if (pointX !== undefined && entry.pointCount < this.pointCapacity) {
+            const i = entry.pointCount++ * 3;
+            entry.points[i] = pointX;
+            entry.points[i + 1] = pointY ?? 0;
+            entry.points[i + 2] = pointZ ?? 0;
+        }
+    }
+
+    private acquire(
+        peer: number,
+        sensor: boolean,
+        normalX: number,
+        normalY: number,
+        normalZ: number
+    ): SoftPeerAccum {
+        let entry = this.pool[this.poolIndex];
+        if (!entry) {
+            entry = {
+                peer,
+                count: 0,
+                sensor,
+                normalX,
+                normalY,
+                normalZ,
+                points: new Float32Array(this.pointCapacity * 3),
+                pointCount: 0
+            };
+            this.pool[this.poolIndex] = entry;
+        } else {
+            entry.peer = peer;
+            entry.sensor = sensor;
+            entry.normalX = normalX;
+            entry.normalY = normalY;
+            entry.normalZ = normalZ;
+        }
+        entry.count = 0;
+        entry.pointCount = 0;
+        this.poolIndex++;
+        return entry;
+    }
+
+    /**
+     * Diff this call's peers against `softHandle`'s previous call: `onPeer(peer, accum, isNew,
+     * sensor)` runs for every peer touched this call (`accum` set, `isNew` true the first time a
+     * peer appears) and for every peer that stopped (`accum` is `undefined`, `sensor` says which
+     * exit channel it was on). Then records this call's peers as the new "previous".
+     */
+    end(
+        softHandle: number,
+        onPeer: (peer: number, accum: SoftPeerAccum | undefined, isNew: boolean, sensor: boolean) => void
+    ): void {
+        const prev = this.previous.get(softHandle);
+        if (prev) {
+            for (const [peer, accum] of this.scratch) onPeer(peer, accum, !prev.has(peer), accum.sensor);
+            for (const [peer, sensor] of prev)
+                if (!this.scratch.has(peer)) onPeer(peer, undefined, false, sensor);
+        } else {
+            for (const [peer, accum] of this.scratch) onPeer(peer, accum, true, accum.sensor);
+        }
+
+        let next = prev;
+        if (!next) next = new Map();
+        else next.clear();
+        for (const [peer, accum] of this.scratch) next.set(peer, accum.sensor);
+        this.previous.set(softHandle, next);
+    }
+
+    /**
+     * Forget a soft body that is being removed from the simulation. Returns its last known peers
+     * (handle -> was it a sensor), or `undefined` if it had none, so the caller can close them out
+     * - Jolt never tells us a soft body's contacts ended, so nothing else will.
+     */
+    forget(softHandle: number): Map<number, boolean> | undefined {
+        const prev = this.previous.get(softHandle);
+        this.previous.delete(softHandle);
+        return prev;
+    }
+
+    /** Test / leak-check helper: how many soft bodies still have tracked peer state. */
+    get trackedSoftBodyCount(): number {
+        return this.previous.size;
+    }
+}
+
 // Payload pool ============================================================================
 
 const makeTarget = (): CollisionTarget => ({

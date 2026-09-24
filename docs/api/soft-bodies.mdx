@@ -69,6 +69,12 @@ is `pressure`.
 | `mass` | `number` | total mass in kg, spread evenly across the **unpinned** vertices. Left out, every unpinned vertex is `mInvMass = 1` (1kg each) |
 | `fixed` | `number[] \| (position, index) => boolean` | which vertices to pin (`mInvMass = 0`) — see [Pinning vertices](#pinning-vertices) |
 | `ref` | `Ref<SoftBodyState>` | see [The ref](#the-ref) |
+| `onCollisionEnter` | `(payload: CollisionEnterPayload) => void` | started touching another body — see [Events](#events) |
+| `onCollisionPersist` | `(payload: CollisionEnterPayload) => void` | still touching, every step |
+| `onCollisionExit` | `(payload: CollisionPayload) => void` | stopped touching |
+| `onSensorEnter` | `(payload: CollisionPayload) => void` | entered a sensor |
+| `onSensorExit` | `(payload: CollisionPayload) => void` | left a sensor |
+| `onContactValidate` | `(payload: SoftBodyValidatePayload) => boolean \| void` | accept/reject a contact, synchronously |
 
 The mesh's own `position`/`rotation` (set as ordinary three.js/JSX props, read once at creation)
 become the body's starting pose — there is no separate `position`/`rotation` prop on `<SoftBody>`
@@ -141,6 +147,8 @@ function Jelly() {
 | `disposed` | read-only |
 | `syncGeometry()` | reads every simulated vertex back into the geometry and syncs the mesh's pose. Called for you every rendered frame — see [Without a ref](#without-a-ref) |
 | `destroy()` | removes and frees the body, and releases this state's reference on the shared settings. Idempotent |
+| `events` | the `Emitter<SoftBodyEventMap>` backing `on()` and the props — see [Events](#events) |
+| `on(type, fn)` / `onCollisionEnter(fn)` / … | subscribe imperatively. Returns the unsubscribe |
 
 ### Without a ref
 
@@ -160,6 +168,60 @@ function LogSoftBodies() {
 
 `softBodySystem.addBody(mesh, options)` / `.removeBody(handle)` / `.getBody(handle)` are the same
 calls `<SoftBody>` makes for you, for building one outside a component.
+
+## Events
+
+`<SoftBody>` wires into the same event system as `<RigidBody>` (issue #245), through Jolt's
+`SoftBodyContactListenerJS` — a separate listener from the rigid `ContactListenerJS`, so a
+`<RigidBody>` does **not** receive `onCollisionEnter`/`onCollisionExit` for touching a soft body;
+only the `<SoftBody>` side (and a world-level `<Physics onCollisionEnter>`) does.
+
+```tsx
+<SoftBody
+    onCollisionEnter={(e) => console.log('touched', e.other.object?.name, e.normal)}
+    onCollisionExit={(e) => console.log('stopped touching', e.other.handle)}
+>
+    <mesh>
+        <sphereGeometry args={[1, 16, 12]} />
+    </mesh>
+</SoftBody>
+```
+
+The payload shapes are the **same pooled `CollisionEnterPayload` / `CollisionPayload` /
+`SensorPayload`** types a `<RigidBody>`'s events get — see
+[RigidBody → Payloads](/api/rigid-body#payloads) for the full shape and the "don't retain this"
+pooling contract, which applies here too. A few differences, all from how Jolt's soft body contacts
+actually work:
+
+- `target` (the soft body itself) has no `BodyState` — `target.body` is always `undefined`,
+  `target.softBody` is the `SoftBodyState`, and `target.object` is the mesh it drives. `other`
+  resolves to a rigid `BodyState` (`other.body`), another soft body (`other.softBody`), or neither
+  (a Jolt body never registered with either system) — exactly like a rigid contact's `other`.
+- there is no `collisionPersist` **and** `sleep`/`wake` distinction the way rigid bodies get —
+  soft bodies have no sleep story yet (see [Performance](#performance)), so there's no `onSleep`/
+  `onWake` at all.
+- `onContactValidate` fires once per (soft body, other body) whose bounding boxes overlap —
+  *before* any vertex actually collides — and its payload, `SoftBodyValidatePayload`, is `{
+  target, other }` with no `baseOffset` (Jolt doesn't hand the soft body validate callback one).
+  Return `false` to reject the pair for that step:
+
+  ```tsx
+  <SoftBody onContactValidate={(e) => e.other.body?.userData.team !== 'blue'}>
+      <mesh>
+          <sphereGeometry args={[1, 16, 12]} />
+      </mesh>
+  </SoftBody>
+  ```
+
+- `penetration` is always `0` — Jolt's `SoftBodyManifold` doesn't expose a per-vertex penetration
+  depth the way a rigid `ContactManifold` does.
+- `contactCount` is the number of the soft body's vertices currently touching that peer this step,
+  the closest soft-body analogue of a rigid pair's open sub-shape manifold count.
+
+`points`/`normal` come from `SoftBodyManifold.GetLocalContactPoint`/`GetContactNormal`, which Jolt
+returns in the soft body's own (center-of-mass-relative) local frame; they're rotated/translated
+into world space using the same `body.GetPosition()`/`GetRotation()` read [Vertex
+space](#vertex-space) already describes.
 
 ## Lifecycle & memory
 

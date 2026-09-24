@@ -206,8 +206,9 @@ export class PhysicsSystem {
     }
     set debug(value: boolean) {
         this._debug = value;
-        // BodySystem does not exist yet while the field initialisers run
+        // BodySystem/SoftBodySystem do not exist yet while the field initialisers run
         if (this.bodySystem) this.bodySystem.debug = value;
+        if (this.softBodySystem) this.softBodySystem.debug = value;
     }
     private _interpolate = true;
     /**
@@ -354,6 +355,12 @@ export class PhysicsSystem {
         // dispatching world level events
         this.bodySystem.worldEvents = this.events;
         this.bodySystem.debug = this._debug;
+        // same wiring for soft bodies (issue #245): the shared world emitter for its zero-cost
+        // mask/dispatch, and `bodySystem` so a soft body contact's `other` side can resolve to a
+        // rigid `BodyState` the same way a rigid contact's does.
+        this.softBodySystem.worldEvents = this.events;
+        this.softBodySystem.bodySystem = this.bodySystem;
+        this.softBodySystem.debug = this._debug;
     }
 
     //* Disposables ===================================
@@ -441,12 +448,13 @@ export class PhysicsSystem {
 
             // 4. every body, including ones handed to `addExistingBody`, and every soft body
             this.bodySystem.removeAllBodies();
-            this.softBodySystem.destroy();
+            this.softBodySystem.removeAllBodies();
 
             // 5. no more dispatching into user code
             this.events.clear();
             this.legacyStepSubs.clear();
             this.bodySystem.clearEvents();
+            this.softBodySystem.clearEvents();
 
             // 6. the world itself
             Raw.module.destroy(this.joltInterface);
@@ -455,7 +463,9 @@ export class PhysicsSystem {
 
             // 7. ...and only now the listener objects it was pointing at, plus the rest of the
             // BodySystem's own heap allocations (the ref counted GroupFilterTable - issue #95).
+            // Same ordering requirement for SoftBodySystem's `SoftBodyContactListenerJS` (#245).
             this.bodySystem.destroy(true);
+            this.softBodySystem.destroy(true);
         } finally {
             this.destroying = false;
             this.destroyed = true;
@@ -600,6 +610,7 @@ export class PhysicsSystem {
         this.bodySystem.handlePendingActions(delta);
         this.joltInterface.Step(delta, steps);
         this.bodySystem.flushEvents();
+        this.softBodySystem.flushEvents();
         this.events.emit('afterStep', delta, this.currentSubframe);
         this.currentSubframe = (this.currentSubframe + 1) % 4;
     }

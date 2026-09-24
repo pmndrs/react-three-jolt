@@ -6,10 +6,12 @@ import React, {
     isValidElement,
     type ReactElement,
     useEffect,
-    useRef
+    useRef,
+    useState
 } from 'react';
 import type { Mesh } from 'three';
-import { useForwardedRef, useJolt } from '../hooks';
+import { useForwardedRef, useJolt, useSoftBodyEvent } from '../hooks';
+import type { SoftBodyEventMap } from '../systems/events';
 import type {
     SoftBodyBendType,
     SoftBodyFixed,
@@ -56,17 +58,40 @@ export interface SoftBodyProps {
     /** Vertices to pin (`mInvMass = 0`): indices into the geometry after `mergeVertices`, or a
      * predicate over each vertex's local rest position. */
     fixed?: SoftBodyFixed;
+
+    //* Events (issue #245) -------------------------------------------
+    /** This soft body started touching another body. */
+    onCollisionEnter?: SoftBodyEventMap['collisionEnter'];
+    /** The contact was maintained this step. */
+    onCollisionPersist?: SoftBodyEventMap['collisionPersist'];
+    /** This soft body stopped touching another body. */
+    onCollisionExit?: SoftBodyEventMap['collisionExit'];
+    onSensorEnter?: SoftBodyEventMap['sensorEnter'];
+    onSensorExit?: SoftBodyEventMap['sensorExit'];
+    /** Synchronous, inside the step. Return `false` to reject the contact. */
+    onContactValidate?: SoftBodyEventMap['contactValidate'];
 }
 
 export const SoftBody = React.memo(function SoftBody(props: SoftBodyProps) {
-    const { children, ref: forwardedRef, ...optionProps } = props;
+    const {
+        children,
+        ref: forwardedRef,
+        onCollisionEnter,
+        onCollisionPersist,
+        onCollisionExit,
+        onSensorEnter,
+        onSensorExit,
+        onContactValidate,
+        ...optionProps
+    } = props;
     const options = optionProps as SoftBodyOptions;
 
     const meshRef = useRef<Mesh | null>(null);
-    // A plain ref, not React state (issue #243, v1): nothing in this component's own render
-    // depends on the body existing - there is no context value or event wiring yet, unlike
-    // <RigidBody>'s `body` state. `ref` still resolves once `addBody` has run.
+    // A plain ref for the exposed `ref` prop, plus `softBody` state (issue #245) so the event
+    // wiring effects below re-run once the body actually exists - a mutable ref alone never
+    // re-renders, so nothing could subscribe on the pass that creates the body.
     const stateRef = useForwardedRef(forwardedRef ?? null);
+    const [softBody, setSoftBody] = useState<SoftBodyState>();
     const { softBodySystem } = useJolt();
 
     const built = useRef(false);
@@ -84,6 +109,7 @@ export const SoftBody = React.memo(function SoftBody(props: SoftBodyProps) {
         const next = softBodySystem.getBody(handle);
         if (!next) throw new Error('r3/jolt: <SoftBody> failed to create its body');
         stateRef.current = next;
+        setSoftBody(next);
         // Deliberately [softBodySystem] only: creation options are read once, at mount - exactly
         // like <RigidBody>'s body-creation effect. Reactive updates to individual options are out
         // of scope for v1 (#243); changing them has no effect after the body exists.
@@ -94,9 +120,17 @@ export const SoftBody = React.memo(function SoftBody(props: SoftBodyProps) {
             const current = stateRef.current as SoftBodyState | undefined;
             if (current) softBodySystem.removeBody(current.handle);
             built.current = false;
+            setSoftBody(undefined);
         };
         // Deliberately [] - unmount-only teardown.
     }, []);
+
+    useSoftBodyEvent(softBody, 'collisionEnter', onCollisionEnter);
+    useSoftBodyEvent(softBody, 'collisionPersist', onCollisionPersist);
+    useSoftBodyEvent(softBody, 'collisionExit', onCollisionExit);
+    useSoftBodyEvent(softBody, 'sensorEnter', onSensorEnter);
+    useSoftBodyEvent(softBody, 'sensorExit', onSensorExit);
+    useSoftBodyEvent(softBody, 'contactValidate', onContactValidate);
 
     const onlyChild = Children.only(children);
     if (!isValidElement(onlyChild))
