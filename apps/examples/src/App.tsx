@@ -41,6 +41,7 @@ import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
 import { SleepWake } from './examples/SleepWake';
 import { Shapecast } from './examples/Shapecast';
+import { Sensors } from './examples/Sensors';
 import { JoltMemoryReadout } from './JoltMemoryReadout';
 import {
     getJoltFactory,
@@ -258,6 +259,11 @@ const routes: RouteMap = {
         target: [0, 3, 0],
         background: '#2a4d3a',
         element: <Friction />
+    Sensors: {
+        position: [0, 20, 20],
+        target: [0, 5, 0],
+        background: '#2c3e50',
+        element: <Sensors />
     }
 };
 
