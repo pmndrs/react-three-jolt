@@ -7,9 +7,9 @@ import { useDemo } from '../App';
 import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 
 /**
- * Demonstrates onSleep/onWake events: a grid of boxes that change color
- * when they fall asleep (grey) or wake up (colored). Click a box to apply
- * an upward impulse and watch it wake and influence neighbours.
+ * Demonstrates onSleep/onWake events: sleeping bodies cost nothing; Jolt wakes
+ * neighbours touched by an awake body. A pyramid starts colored (awake),
+ * turns grey when settled (~1s), then colored again when clicked to apply impulses.
  *
  * Key APIs: RigidBody onSleep/onWake props, BodyState.addImpulse().
  */
@@ -33,19 +33,24 @@ export function SleepWake() {
             defaultBodySettings={defaultBodySettings}
         >
             <JoltMemoryRegistrar />
-            <Floor position={[0, -2, 0]} size={100}>
+            <Floor position={[0, 0, 0]} size={100}>
                 <meshStandardMaterial color="#cccccc" />
             </Floor>
 
-            {/* 3x3 pyramid grid of boxes */}
-            {Array.from({ length: 3 }).map((_, row) =>
-                Array.from({ length: 3 - row }).map((_, col) => (
+            {/* 4-3-2-1 centered pyramid: rows from bottom to top */}
+            {Array.from({ length: 4 }).map((_, row) => {
+                const n = 4 - row;
+                return Array.from({ length: n }).map((_, col) => (
                     <Box
                         key={`${row}-${col}`}
-                        position={[col * 1.5 - row * 0.75, 2 + row * 1.2, 0]}
+                        position={[
+                            (col - (n - 1) / 2) * 1.05,
+                            0.5 + row * 1.0,
+                            0
+                        ]}
                     />
-                ))
-            )}
+                ));
+            })}
 
             <directionalLight
                 castShadow
@@ -65,11 +70,13 @@ export function SleepWake() {
 function Box({ position }: { position: [number, number, number] }) {
     const bodyRef = useRef<BodyState>(null);
     const meshRef = useRef<THREE.Mesh>(null);
-    const [sleeping, setSleeping] = useState(true);
+    const [sleeping, setSleeping] = useState(false);
 
     const handleClick = () => {
         if (bodyRef.current) {
-            bodyRef.current.addImpulse(new THREE.Vector3(0, 5, 0));
+            const x = (Math.random() - 0.5) * 2;
+            const z = (Math.random() - 0.5) * 2;
+            bodyRef.current.addImpulse(new THREE.Vector3(x, 8, z));
         }
     };
 
@@ -77,6 +84,7 @@ function Box({ position }: { position: [number, number, number] }) {
         <RigidBody
             position={position}
             ref={bodyRef}
+            mass={1}
             onSleep={() => setSleeping(true)}
             onWake={() => setSleeping(false)}
         >
