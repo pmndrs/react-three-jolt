@@ -12,21 +12,27 @@ import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 // the left lane (discrete, red) sail straight through its wall while the right lane (linearCast,
 // blue) stops dead against it.
 //
-// Why discrete tunnels here, worked out at the physics step rate (`<Physics timeStep>`, 1/60s by
-// default):
-//   per-step distance = SPEED / 60 = 30 / 60 = 0.5 units
-//   wall thickness     = 0.05 units
-// 'discrete' motion quality only tests for a collision at the START and END of a step - never in
-// between. Since 0.5 units (10x the wall's thickness) is covered in a single step, a projectile
-// can be entirely in front of the wall at the start of a step and entirely behind it at the end,
-// without its swept path ever being tested against the wall - it tunnels straight through.
-// 'linearCast' sweeps the body's whole motion for the step instead of sampling only the
-// endpoints, so it still catches the wall no matter how thin it is relative to the step distance.
+// Why discrete reliably tunnels here (neither example overrides `<Physics timeStep>`, so both
+// run it at its real default, `packages/react-three-jolt/src/components/Physics.tsx`'s fixed
+// `1/60` accumulator step - one `joltInterface.Step()` call per 1/60s of simulated time, not a
+// step tied to render frame length):
+//   per-step distance = SPEED / 60 = 60 / 60 = 1.0 unit
+// 'discrete' motion quality only tests for a collision at the START and END of a step, and only
+// registers a hit when a sample lands within roughly `radius + wall_half_thickness +
+// speculative_margin` (0.15 + 0.025 + ~0.02 ≈ 0.2) of the wall's center - a ~0.4-wide window. A
+// bigger per-step distance alone does not guarantee a miss: a step could still happen to land a
+// sample inside that window. So this spawns at an integer z (`SPAWN_Z = -6`) and steps by exactly
+// 1.0 unit/step, which puts every sample at an integer z - then places the wall at a
+// *half-integer* z (`WALL_Z = 6.5`), exactly between two samples. The nearest sample is 0.5 units
+// from the wall center, well outside the ~0.2 window, so discrete never sees it and tunnels every
+// shot. 'linearCast' instead sweeps the whole step's segment (e.g. z=6 to z=7) rather than
+// sampling only its endpoint, and that segment always contains z=6.5 - so it stops every shot
+// regardless of this alignment trick.
 
 const SPHERE_RADIUS = 0.15;
-const SPEED = 30; // units/second - see the tunneling math above
-const SPAWN_Z = -6;
-const WALL_Z = 6;
+const SPEED = 60; // units/second - exactly 1 unit/step at the fixed 1/60 timeStep; see above
+const SPAWN_Z = -6; // integer, so every step sample also lands on an integer z
+const WALL_Z = 6.5; // half-integer: exactly between the z=6 and z=7 samples
 const WALL_THICKNESS = 0.05;
 const FIRE_INTERVAL_MS = 900;
 const MAX_VOLLEYS = 6; // caps live bodies at MAX_VOLLEYS * lanes.length
