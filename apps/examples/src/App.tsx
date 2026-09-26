@@ -35,6 +35,7 @@ import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
+import { TrackedVehicleDemo } from './examples/TrackedVehicle';
 import { JoltMemoryReadout } from './JoltMemoryReadout';
 import {
     getJoltFactory,
@@ -166,6 +167,13 @@ const routes: RouteMap = {
         target: [0, 1, 10],
         background: '#3d405b',
         element: <FourWheelDemo />
+    },
+    TrackedVehicle: {
+        label: 'Tracked Vehicle',
+        position: [2, 25, 51],
+        target: [0, 1, 10],
+        background: '#3d405b',
+        element: <TrackedVehicleDemo />
     },
     Character: {
         position: [2, 25, 51],

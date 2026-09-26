@@ -51,6 +51,7 @@ beforeAll(async () => {
     const warmup = new VehicleSystem(ps);
     warmup.addVehicle('car', at(-40));
     warmup.addVehicle('bike', { type: 'twoWheel', ...at(40) });
+    warmup.addVehicle('tank', { type: 'tracked', ...at(80) });
     warmup.destroy();
 });
 
@@ -101,7 +102,7 @@ function at(z: number): { bodyPosition: [number, number, number] } {
     return { bodyPosition: [0, 4, z] };
 }
 
-for (const type of ['fourWheel', 'twoWheel'] as const) {
+for (const type of ['fourWheel', 'twoWheel', 'tracked'] as const) {
     test(`${type}: construct -> step -> destroy leaves no live jolt objects behind`, () => {
         const alloc = installAllocTracker(Raw, { types: TRACKED_TYPES });
         try {

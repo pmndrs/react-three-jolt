@@ -66,7 +66,11 @@ export interface UseVehicleOptions {
     skid?: SkidSettings | false;
 }
 
-const defaultNames: Record<VehicleType, string> = { fourWheel: 'car', twoWheel: 'bike' };
+const defaultNames: Record<VehicleType, string> = {
+    fourWheel: 'car',
+    twoWheel: 'bike',
+    tracked: 'tank'
+};
 
 const readPosition = (position?: THREE.Vector3 | Vector): Vector | undefined => {
     if (!position) return undefined;

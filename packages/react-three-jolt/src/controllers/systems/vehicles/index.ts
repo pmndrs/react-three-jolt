@@ -1,4 +1,5 @@
 export * from './four-wheel-vehicle-manager';
+export * from './tracked-vehicle-manager';
 export * from './two-wheel-vehicle-manager';
 export * from './vehicle-manager';
 export * from './vehicle-settings';

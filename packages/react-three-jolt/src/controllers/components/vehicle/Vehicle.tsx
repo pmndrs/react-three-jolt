@@ -22,7 +22,7 @@ import type {
 
 export type VehicleProps = {
     children?: React.ReactNode;
-    /** 'fourWheel' (a car, the default) or 'twoWheel' (a motorcycle) */
+    /** 'fourWheel' (a car, the default), 'twoWheel' (a motorcycle) or 'tracked' (a tank) */
     type?: VehicleType;
     /** the key the vehicle is registered under in its `VehicleSystem` */
     name?: string;

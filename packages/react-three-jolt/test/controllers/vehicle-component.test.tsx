@@ -13,6 +13,7 @@ import { create } from '@react-three/test-renderer';
 import React, { act, useEffect } from 'react';
 import * as THREE from 'three';
 import { assert, test } from 'vitest';
+import { TrackedVehicle } from '../../src/controllers/components/vehicle/TrackedVehicle';
 import { Vehicle } from '../../src/controllers/components/vehicle/Vehicle';
 import { VehicleFourWheel } from '../../src/controllers/components/vehicle/VehicleFourWheel';
 import type { VehicleManager } from '../../src/controllers/systems/vehicles';
@@ -123,6 +124,55 @@ test('the deprecated <VehicleFourWheel> alias still renders a four wheeled vehic
     const created = vehicle as unknown as VehicleManager;
     assert.equal(created.settings.type, 'fourWheel');
     assert.equal(created.wheels.size, 4);
+
+    await renderer.unmount();
+});
+
+test('<TrackedVehicle> renders a tracked vehicle with children as its chassis', async () => {
+    let system: AnyPhysicsSystem | undefined;
+    let vehicle: VehicleManager | null = null;
+    const onReady = (s: AnyPhysicsSystem) => {
+        system = s;
+    };
+    const tree = (show: boolean) => (
+        <Physics>
+            <Harness show={show} onReady={onReady}>
+                <TrackedVehicle
+                    position={[0, 4, 60]}
+                    onVehicle={(created) => {
+                        if (created) vehicle = created;
+                    }}
+                >
+                    <mesh name="hull">
+                        <boxGeometry args={[2.6, 0.7, 5]} />
+                        <meshBasicMaterial />
+                    </mesh>
+                </TrackedVehicle>
+            </Harness>
+        </Physics>
+    );
+
+    const renderer = await create(tree(false));
+    await settle(() => system !== undefined);
+    await renderer.update(tree(true));
+    await settle(() => vehicle !== null);
+
+    assert.isNotNull(vehicle, '<TrackedVehicle> never created a vehicle');
+    const created = vehicle as unknown as VehicleManager;
+    assert.equal(created.settings.type, 'tracked');
+    assert.equal(created.wheels.size, 8);
+    const chassis = created.bodyObject;
+    assert.isDefined(chassis, 'the children were not used as the chassis');
+    assert.isDefined(chassis!.getObjectByName('hull'));
+
+    await act(async () => {
+        for (let i = 0; i < 10; i++) system!.onUpdate(1 / 60);
+    });
+    created.threeObject.updateMatrixWorld(true);
+    assert.isBelow(
+        chassis!.getWorldPosition(new THREE.Vector3()).distanceTo(created.position),
+        1e-6
+    );
 
     await renderer.unmount();
 });

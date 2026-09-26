@@ -2,10 +2,12 @@ import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { joltPropName, Raw, withJolt } from '../../../index';
 import type {
+    ResolvedTrackedVehicleSettings,
     ResolvedVehicleSettings,
     SuspensionSpringSettings,
     Vector,
-    WheelSettings
+    WheelSettings,
+    WheelSettingsTracked
 } from './vehicle-settings';
 
 // the settings types used to live here; they are re-exported by the package index from
@@ -50,7 +52,9 @@ function applySuspensionSpring(wheel: Jolt.WheelSettings, spring: SuspensionSpri
 export function createWheelSettings(
     baseSettings: ResolvedVehicleSettings,
     corner?: string,
-    // tracked vehicles ('tv') are not supported yet; the argument is kept for the call sites
+    // tracked vehicles build their `WheelSettingsTV` through `createTrackedWheelSettings` below
+    // instead (issue #246: a wholly different settings shape, laid out per track rather than per
+    // corner); the argument is kept for the call sites
     _type: 'wv' | 'tv' = 'wv'
 ): Jolt.WheelSettingsWV {
     const wheel = new Raw.module.WheelSettingsWV();
@@ -101,6 +105,55 @@ export function createWheelSettings(
         }
         joltWheel[joltKey] = value;
     }
+    return wheel;
+}
+
+/**
+ * Build the jolt `WheelSettingsTV` for one wheel of one track (issue #246). Unlike the four
+ * wheeler's corners, a track's wheels are laid out programmatically: `count` wheels per side,
+ * evenly spaced front to back, all sharing `baseSettings.wheels` unless `position` overrides it.
+ *
+ * Same ownership as `createWheelSettings`: the caller pushes the result into
+ * `VehicleConstraintSettings.mWheels` (a `Ref<>` array), which owns it from there on.
+ */
+export function createTrackedWheelSettings(
+    baseSettings: ResolvedTrackedVehicleSettings,
+    side: 'left' | 'right',
+    indexInTrack: number,
+    count: number
+): Jolt.WheelSettingsTV {
+    const wheel = new Raw.module.WheelSettingsTV();
+    const shared: WheelSettingsTracked = baseSettings.wheels ?? {};
+
+    const halfVehicleWidth = baseSettings.vehicleWidth / 2;
+    const halfVehicleLength = baseSettings.vehicleLength / 2;
+    // evenly spaced front (+z) to back (-z); a single wheel per side sits centred
+    const spacing = count > 1 ? (2 * halfVehicleLength) / (count - 1) : 0;
+    const z = count > 1 ? halfVehicleLength - indexInTrack * spacing : 0;
+    const position: Vector = shared.position ?? [
+        side === 'left' ? halfVehicleWidth : -halfVehicleWidth,
+        -(shared.wheelOffsetVertical ?? 0),
+        z
+    ];
+    withJolt(position, (value) => {
+        wheel.mPosition = value;
+    });
+
+    if (shared.radius !== undefined) wheel.mRadius = shared.radius;
+    if (shared.width !== undefined) wheel.mWidth = shared.width;
+    if (shared.suspensionMinLength !== undefined)
+        wheel.mSuspensionMinLength = shared.suspensionMinLength;
+    if (shared.suspensionMaxLength !== undefined)
+        wheel.mSuspensionMaxLength = shared.suspensionMaxLength;
+    if (shared.suspensionPreloadLength !== undefined)
+        wheel.mSuspensionPreloadLength = shared.suspensionPreloadLength;
+    if (shared.enableSuspensionForcePoint !== undefined)
+        wheel.mEnableSuspensionForcePoint = shared.enableSuspensionForcePoint;
+    if (shared.suspensionSpring) applySuspensionSpring(wheel, shared.suspensionSpring);
+    if (shared.longitudinalFriction !== undefined)
+        wheel.mLongitudinalFriction = shared.longitudinalFriction;
+    if (shared.lateralFriction !== undefined) wheel.mLateralFriction = shared.lateralFriction;
+
     return wheel;
 }
 

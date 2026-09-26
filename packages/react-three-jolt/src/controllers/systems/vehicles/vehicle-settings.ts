@@ -9,7 +9,7 @@ import type * as THREE from 'three';
 import { MathUtils } from 'three';
 
 /** The vehicle flavours the library ships. `fourWheel` is the default. */
-export type VehicleType = 'fourWheel' | 'twoWheel';
+export type VehicleType = 'fourWheel' | 'twoWheel' | 'tracked';
 
 /** [x, y, z] */
 export type Vector = [number, number, number];
@@ -100,6 +100,36 @@ export interface FourWheelWheelSettings extends WheelSettingsFourWheel {
 export interface TwoWheelWheelSettings extends WheelSettingsTwoWheel {
     front?: WheelSettingsTwoWheel;
     back?: WheelSettingsTwoWheel;
+}
+
+/**
+ * A wheel of a tracked vehicle, driven by jolt's `TrackedVehicleController`. Unlike a `WheelWV`
+ * it never steers - the whole track turns the vehicle - so the only jolt properties beyond the
+ * shared `WheelSettings` are the two friction curves jolt's `WheelSettingsTV` adds.
+ */
+export interface WheelSettingsTracked extends WheelSettings {
+    longitudinalFriction?: number;
+    lateralFriction?: number;
+}
+
+/**
+ * One track of a tracked vehicle (jolt's `VehicleTrackSettings`): the wheel the engine drives and
+ * how the track as a whole answers the throttle and the brake. `drivenWheel` is an index into
+ * *this track's own* wheel list (jolt: "Index (in mWheels) of the wheel that's driven by the
+ * engine"), not a global wheel index - 0, the frontmost wheel, is a sound default.
+ */
+export interface TrackSettings {
+    drivenWheel?: number;
+    inertia?: number;
+    angularDamping?: number;
+    maxBrakeTorque?: number;
+    differentialRatio?: number;
+}
+
+/** The wheels of a tracked vehicle: shared settings plus how many sit on each side. */
+export interface TrackedVehicleWheelSettings extends WheelSettingsTracked {
+    /** wheels per side, evenly spaced front to back (default 4) */
+    count?: number;
 }
 
 //* Secondary physics (issue #41) =============================================================
@@ -285,8 +315,19 @@ export interface TwoWheelVehicleSettings extends VehicleSettingsBase {
     wheels?: TwoWheelWheelSettings;
 }
 
+/** A tank: two tracks driven by jolt's `TrackedVehicleController`, steered by skidding. */
+export interface TrackedVehicleSettings extends VehicleSettingsBase {
+    type?: 'tracked';
+    maxEngineTorque?: number;
+    clutchStrength?: number;
+    left?: TrackSettings;
+    right?: TrackSettings;
+    wheels?: TrackedVehicleWheelSettings;
+}
+
 /** Anything `<Vehicle vehicleSettings={...}>` / `useVehicle({ settings })` accepts. */
-export type VehicleSettings = FourWheelVehicleSettings | TwoWheelVehicleSettings;
+export type VehicleSettings =
+    FourWheelVehicleSettings | TwoWheelVehicleSettings | TrackedVehicleSettings;
 
 /** @deprecated renamed to `FourWheelVehicleSettings` (issue #10) */
 export type VehicleFourWheelSettings = FourWheelVehicleSettings;
@@ -330,8 +371,25 @@ export type ResolvedTwoWheelVehicleSettings = TwoWheelVehicleSettings &
             | 'wheels'
         >
     >;
+export type ResolvedTrackedVehicleSettings = TrackedVehicleSettings &
+    Required<
+        Pick<
+            TrackedVehicleSettings,
+            | AlwaysResolved
+            | 'vehicleHeight'
+            | 'vehicleMass'
+            | 'maxPitchRollAngle'
+            | 'maxEngineTorque'
+            | 'clutchStrength'
+            | 'left'
+            | 'right'
+            | 'wheels'
+        >
+    >;
 export type ResolvedVehicleSettings =
-    ResolvedFourWheelVehicleSettings | ResolvedTwoWheelVehicleSettings;
+    | ResolvedFourWheelVehicleSettings
+    | ResolvedTwoWheelVehicleSettings
+    | ResolvedTrackedVehicleSettings;
 
 export const defaultFourWheelVehicleSettings: ResolvedFourWheelVehicleSettings = {
     type: 'fourWheel',
@@ -404,10 +462,56 @@ export const defaultTwoWheelVehicleSettings: ResolvedTwoWheelVehicleSettings = {
     }
 };
 
+export const defaultTrackedVehicleSettings: ResolvedTrackedVehicleSettings = {
+    type: 'tracked',
+    bodyPosition: [0, 4, 0],
+    castType: 'cylinder',
+
+    vehicleLength: 5.0,
+    vehicleWidth: 2.6,
+    vehicleHeight: 0.7,
+    vehicleMass: 4000.0,
+    maxPitchRollAngle: MathUtils.degToRad(60),
+
+    maxEngineTorque: 2000.0,
+    clutchStrength: 10.0,
+
+    // jolt: `drivenWheel` indexes into the *track's own* `mWheels`, so 0 (the frontmost wheel of
+    // each track) needs no knowledge of the other track's wheel count
+    left: {
+        drivenWheel: 0,
+        inertia: 0.9,
+        angularDamping: 0.5,
+        maxBrakeTorque: 4000,
+        differentialRatio: 6
+    },
+    right: {
+        drivenWheel: 0,
+        inertia: 0.9,
+        angularDamping: 0.5,
+        maxBrakeTorque: 4000,
+        differentialRatio: 6
+    },
+
+    wheels: {
+        count: 4,
+        radius: 0.4,
+        width: 0.4,
+        suspensionMinLength: 0.3,
+        suspensionMaxLength: 0.5,
+        longitudinalFriction: 4,
+        lateralFriction: 2.5
+    }
+};
+
 /** the wheel names of each vehicle type, in constraint index order */
 export const wheelOrderByType: Record<VehicleType, string[]> = {
     fourWheel: ['fl', 'fr', 'bl', 'br'],
-    twoWheel: ['front', 'back']
+    twoWheel: ['front', 'back'],
+    // matches `defaultTrackedVehicleSettings.wheels.count` (4 per side); a vehicle built with a
+    // different `wheels.count` has more (or fewer) wheels than this default table describes, so
+    // `wheels`/`wheelObjects` positional injection only lines up 1:1 at the default count
+    tracked: ['l0', 'l1', 'l2', 'l3', 'r0', 'r1', 'r2', 'r3']
 };
 
 const wheelOverrideKeys = ['fl', 'fr', 'bl', 'br', 'front', 'back'] as const;
@@ -435,9 +539,23 @@ function mergeWheelSettings(
  */
 export function resolveVehicleSettings(settings: VehicleSettings = {}): ResolvedVehicleSettings {
     const type: VehicleType = settings.type ?? 'fourWheel';
+    const asRecord = (value: unknown) => value as Record<string, unknown> | undefined;
+
+    if (type === 'tracked') {
+        const trackedSettings = settings as TrackedVehicleSettings;
+        const defaults = defaultTrackedVehicleSettings;
+        return {
+            ...defaults,
+            ...trackedSettings,
+            type,
+            wheels: mergeWheelSettings(asRecord(defaults.wheels), asRecord(trackedSettings.wheels)),
+            left: { ...defaults.left, ...trackedSettings.left },
+            right: { ...defaults.right, ...trackedSettings.right }
+        } as unknown as ResolvedTrackedVehicleSettings;
+    }
+
     const defaults =
         type === 'twoWheel' ? defaultTwoWheelVehicleSettings : defaultFourWheelVehicleSettings;
-    const asRecord = (value: unknown) => value as Record<string, unknown> | undefined;
     return {
         ...defaults,
         ...settings,
