@@ -90,7 +90,6 @@ const installAllocationSpy = () => {
 test('jolt 1.1 has no GetConstraints binding, so the system keeps its own registry', () => {
     // if this ever starts failing, the registry can be cross-checked against jolt directly
     assert.isUndefined(
-        // biome-ignore lint/suspicious/noExplicitAny: probing for a binding that does not exist
         (Raw.module.PhysicsSystem.prototype as any).GetConstraints,
         'jolt now exposes GetConstraints - use it to verify the registry'
     );
@@ -256,7 +255,6 @@ test('addConstraint rejects an unknown type without leaking', () => {
     const b = addBody([40, 12, 0]);
     const spy = installAllocationSpy();
     try {
-        // biome-ignore lint/suspicious/noExplicitAny: deliberately bypassing the type map
         expect(() => ps.constraintSystem.addConstraint('nope' as any, a, b)).toThrow(
             /unknown constraint type/
         );
