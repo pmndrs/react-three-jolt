@@ -1,7 +1,7 @@
 import { useTexture } from '@react-three/fiber';
 // React stays a *value* import: this package compiles JSX with the classic runtime, so the
-// emitted `React.createElement` calls need it at runtime (biome's organizeImports will offer to
-// make it `import type` - don't).
+// emitted `React.createElement` calls need it at runtime (an autofixer for eslint's
+// @typescript-eslint/consistent-type-imports would offer to make it `import type` - don't).
 import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { applyHeightmapToPlane } from '../heightfield/generators';
