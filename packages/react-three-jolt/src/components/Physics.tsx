@@ -347,6 +347,7 @@ export function Physics(props: PhysicsProps) {
             jolt,
             physicsSystem,
             bodySystem: physicsSystem.bodySystem,
+            softBodySystem: physicsSystem.softBodySystem,
             joltInterface: physicsSystem.joltInterface,
             events: physicsSystem.events,
             paused,

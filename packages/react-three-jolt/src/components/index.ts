@@ -6,4 +6,5 @@ export * from './InstancedRigidBodies';
 export * from './MeshFloor';
 export * from './Physics';
 export * from './RigidBody';
+export * from './SoftBody';
 export * from './shape';

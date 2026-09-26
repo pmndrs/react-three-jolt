@@ -1,0 +1,182 @@
+---
+title: Soft bodies
+description: SoftBodySystem and <SoftBody>, Jolt's position-based-dynamics cloth/jelly/inflated shapes built from a BufferGeometry.
+nav: 14
+---
+
+`<SoftBody>` builds a Jolt soft body straight from a three.js `BufferGeometry`: every vertex
+becomes a simulated particle, every triangle a face, and the triangle edges become distance
+constraints. There is no separate collision shape the way a `<RigidBody>` has one — the geometry
+*is* the simulation, and the mesh's own position attribute is rewritten from it every frame.
+
+```tsx
+import { SoftBody } from '@react-three/jolt';
+
+<SoftBody pressure={1000} position={[0, 5, 0]}>
+    <mesh>
+        <sphereGeometry args={[1, 16, 12]} />
+        <meshStandardMaterial color="tomato" />
+    </mesh>
+</SoftBody>;
+```
+
+This is new (issue #243) and considerably rawer than `<RigidBody>`: one mesh in, one body out, no
+compound shapes, no collider components, no volume (tetrahedra) constraints, and no reactive
+props — everything is read once, when the body is created. Demo pages are a follow-up
+([#244](https://github.com/pmndrs/react-three-jolt/issues/244)).
+
+## How the geometry becomes a body
+
+`<SoftBody>` takes exactly one `<mesh>` child. Its geometry is first run through three's
+`mergeVertices` (`SoftBodySystem`'s `prepareSoftBodyGeometry`), because shared vertices have to be
+*one* Jolt vertex — an un-indexed geometry, or one duplicated for flat shading, would otherwise
+give a seam's vertices separate, unconnected particles that stretch apart under simulation. The
+merged geometry **replaces** `mesh.geometry`, so the rendered vertex order matches the simulated
+one exactly: every step, `SoftBodyState.syncGeometry()` reads
+`SoftBodyMotionProperties.GetVertex(i).mPosition` for every vertex straight into the position
+attribute, then recomputes normals and the bounding sphere.
+
+From there:
+
+- every triangle in the (merged) index becomes a `SoftBodySharedSettingsFace`;
+- every triangle edge, deduplicated, becomes a structural `SoftBodySharedSettingsEdge` (its
+  `mCompliance` from the `compliance` prop);
+- `CreateConstraints` adds shear edges (and, with `bendType="dihedral"`, bend constraints) on top
+  of those, and computes rest lengths for every edge — including the structural ones already
+  added, so nothing separately calls `CalculateEdgeLengths`;
+- `Optimize()` runs once, before the body is created.
+
+Volume (tetrahedra) constraints are not built — the only volume-preserving force available in v1
+is `pressure`.
+
+## Props
+
+| prop | type | notes |
+| --- | --- | --- |
+| `pressure` | `number` | inflation pressure. `0` (default) is an unpressurized membrane; a closed mesh with a positive pressure resists collapsing |
+| `compliance` | `number` | inverse stiffness of the structural edges (and `CreateConstraints`' shear edges). `0` (default) is rigid/inextensible |
+| `shearCompliance` | `number` | defaults to `compliance` |
+| `bendCompliance` | `number` | default `0`. Only meaningful with `bendType="dihedral"` |
+| `bendType` | `'none' \| 'distance' \| 'dihedral'` | default `'distance'` — see [`CreateConstraints`](#how-the-geometry-becomes-a-body) |
+| `numIterations` | `number` | PBD solver iterations per substep. Jolt's default is `2`; more is stiffer and costlier |
+| `gravityFactor` | `number` | multiplier on world gravity. Default `1` |
+| `linearDamping` | `number` | velocity lost per second to drag |
+| `friction` | `number` | against other bodies. Jolt's default is `0.2` |
+| `restitution` | `number` | bounciness against other bodies, `0`–`1`. Default `0` |
+| `vertexRadius` | `number` | collision radius around every vertex. Jolt's default is `0.05` |
+| `layer` | `number` | Jolt object layer. Default `Layer.MOVING` |
+| `updatePosition` | `boolean` | whether the body's origin re-centers on the simulated shape every step. Default `true` — see [vertex space](#vertex-space) |
+| `mass` | `number` | total mass in kg, spread evenly across the **unpinned** vertices. Left out, every unpinned vertex is `mInvMass = 1` (1kg each) |
+| `fixed` | `number[] \| (position, index) => boolean` | which vertices to pin (`mInvMass = 0`) — see [Pinning vertices](#pinning-vertices) |
+| `ref` | `Ref<SoftBodyState>` | see [The ref](#the-ref) |
+
+The mesh's own `position`/`rotation` (set as ordinary three.js/JSX props, read once at creation)
+become the body's starting pose — there is no separate `position`/`rotation` prop on `<SoftBody>`
+itself.
+
+## Pinning vertices
+
+`fixed` sets `mInvMass = 0` on the vertices it selects, anchoring them — the rest of the mesh
+simulates around them.
+
+```tsx
+<SoftBody fixed={(position) => Math.abs(position.z) > 1.9}>
+    <mesh>
+        <planeGeometry args={[4, 4, 6, 6]} />
+    </mesh>
+</SoftBody>
+```
+
+The predicate is called once per (post-merge) vertex with its **local rest position** — before any
+body transform — so pin by geometric criteria (corners, one edge, a ring) without knowing the
+merged index order ahead of time. `fixed: number[]` pins by index instead, into the geometry
+*after* `mergeVertices`; for an already-indexed, already-deduplicated geometry (any procedural
+three.js geometry — `PlaneGeometry`, `SphereGeometry`, `BoxGeometry`, …) that is the same order the
+geometry was authored in.
+
+> [!NOTE]
+> Pinning **every** boundary vertex of a flat, unstretched mesh (all four corners of a taut plane,
+> say) leaves it no slack to sag at all — a `compliance: 0` net pinned at exactly its rest distance
+> is inextensible, so gravity has nothing to pull against. Pin fewer points (one edge, one corner)
+> to get a drape/hang effect, or raise `compliance` so the edges can stretch.
+
+## Vertex space
+
+`SoftBodyMotionProperties.GetVertex(i).mPosition` is **local** to a moving origin: with
+`updatePosition` (the default `true`), Jolt re-centers the body's own transform on the simulated
+shape periodically, for numerical precision on a body that travels far from where it was created.
+`syncGeometry()` handles this exactly like a `<RigidBody>`'s pose sync — the mesh's `position`/
+`quaternion` are written from `body.GetPosition()`/`GetRotation()` every step, and the vertex
+positions written into the geometry are local to that, so world space is the two combined. You
+never need to account for this yourself; it only matters if you read `SoftBodyMotionProperties`
+directly.
+
+## The ref
+
+`<SoftBody ref>` gives you the `SoftBodyState` for that body, once it exists.
+
+```tsx
+import { SoftBody, SoftBodyState } from '@react-three/jolt';
+import { useRef } from 'react';
+
+function Jelly() {
+    const soft = useRef<SoftBodyState>(undefined);
+
+    return (
+        <SoftBody ref={soft} pressure={800}>
+            <mesh>
+                <sphereGeometry args={[1, 16, 12]} />
+            </mesh>
+        </SoftBody>
+    );
+}
+```
+
+| member | |
+| --- | --- |
+| `object` | the three.js `Mesh` — same object as the child, now driving its own geometry |
+| `body` | the raw `Jolt.Body` (`body.IsSoftBody()` is `true`) |
+| `handle` | `BodyID.GetIndexAndSequenceNumber()` — recycled by Jolt, don't hold one across the body's lifetime |
+| `vertexCount` | vertex count of the merged geometry |
+| `disposed` | read-only |
+| `syncGeometry()` | reads every simulated vertex back into the geometry and syncs the mesh's pose. Called for you every rendered frame — see [Without a ref](#without-a-ref) |
+| `destroy()` | removes and frees the body, and releases this state's reference on the shared settings. Idempotent |
+
+### Without a ref
+
+Every soft body is also reachable through the soft body system, `useJolt().softBodySystem` (or
+`physicsSystem.softBodySystem`) — `Map<number, SoftBodyState>` at `.bodies`, keyed by handle,
+mirroring `bodySystem`:
+
+```tsx
+import { useJolt } from '@react-three/jolt';
+
+function LogSoftBodies() {
+    const { softBodySystem } = useJolt();
+    console.log(softBodySystem.bodies.size, 'soft bodies');
+    return null;
+}
+```
+
+`softBodySystem.addBody(mesh, options)` / `.removeBody(handle)` / `.getBody(handle)` are the same
+calls `<SoftBody>` makes for you, for building one outside a component.
+
+## Lifecycle & memory
+
+`<SoftBody>` unmounting calls `softBodySystem.removeBody(handle)`, which removes and destroys the
+Jolt body and releases the system's own reference on its `SoftBodySharedSettings` (see
+[Memory & lifecycle](/advanced/memory) — `SoftBodySharedSettings` is reference counted the same
+way a `Shape` is; the system takes one `AddRef()` when it builds the settings and `Release()`s it
+exactly once, here). `destroy()` is idempotent, safe to call more than once.
+
+> [!NOTE]
+> The **first** soft body step a `<Physics>` world ever runs lazily allocates roughly 100KB of
+> scratch space for Jolt's soft body solver. That allocation is a one-time, per-world cost — not
+> per body — and is only freed when the world itself is destroyed; it is not a leak in your scene.
+
+## Performance
+
+Every soft body is read back and written into its geometry on the **rendered frame**, not per
+physics substep — there is no interpolation or sleeping story for soft bodies yet. A scene with
+many high-resolution soft bodies pays for that every frame whether or not the body is visible or
+settled; keep vertex counts modest (a few hundred, not thousands) until that lands.

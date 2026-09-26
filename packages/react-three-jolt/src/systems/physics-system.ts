@@ -23,6 +23,7 @@ import { type StepCallback, WORLD_EVENT_BITS, type WorldEventMap } from './event
 import { ShapeCollider } from './queries/collider';
 import { AdvancedRaycaster, Multicaster, Raycaster } from './queries/raycasters';
 import { Shapecaster } from './queries/shapecasters';
+import { SoftBodySystem } from './soft-body-system';
 
 /**
  * Any callable, used only as the identity key of the deprecated `removeStepListener(fn)`.
@@ -173,6 +174,8 @@ export class PhysicsSystem {
     bodyInterface!: Jolt.BodyInterface;
     bodySystem!: BodySystem;
     constraintSystem!: ConstraintSystem;
+    /** Soft bodies (issue #243) - cloth, jelly, inflated shapes. See `<SoftBody>`. */
+    softBodySystem!: SoftBodySystem;
 
     /**
      * This world's slot in `Raw`'s interface registry, from a counter that only ever goes up.
@@ -342,6 +345,7 @@ export class PhysicsSystem {
         // start the chain of systems/services
         this.constraintSystem = new ConstraintSystem(this);
         this.bodySystem = new BodySystem(this.joltPhysicsSystem);
+        this.softBodySystem = new SoftBodySystem(this.joltPhysicsSystem);
         // so removing a body also removes the constraints attached to it (issue #82)
         this.bodySystem.constraintSystem = this.constraintSystem;
         // bodies read the world's step timing through this (e.g. moveKinematic's default delta)
@@ -435,8 +439,9 @@ export class PhysicsSystem {
             // 3. constraints before bodies
             this.constraintSystem.removeAllConstraints();
 
-            // 4. every body, including ones handed to `addExistingBody`
+            // 4. every body, including ones handed to `addExistingBody`, and every soft body
             this.bodySystem.removeAllBodies();
+            this.softBodySystem.destroy();
 
             // 5. no more dispatching into user code
             this.events.clear();
@@ -501,6 +506,10 @@ export class PhysicsSystem {
             this.bodySystem.movedStatics.forEach(this.syncBodyToObject);
             this.bodySystem.movedStatics.clear();
         }
+
+        // Soft bodies have no sleep/interpolation story yet (#243): every one is read back and
+        // written into its geometry every rendered frame, live.
+        if (this.softBodySystem.bodies.size) this.softBodySystem.syncAll();
 
         // todo: consider sleeping
         invalidate();
