@@ -263,6 +263,13 @@ export class CameraBoom {
 
         //reset the camera to a 0 position
         camera.position.set(0, 0, 0);
+        // issue #301 follow-up ("rotated and askew"): a camera can arrive here with a rotation
+        // already baked in - `CameraRigManager.addCamera()` used to call `camera.lookAt()` while
+        // the camera was still parented in `base`'s frame (a different frame than the one it is
+        // about to live in), and nothing here ever cleared that. `pivot`'s yaw and `cameraSpace`'s
+        // pitch are the boom's *only* source of orientation from this point on - identity is the
+        // one rotation that composes correctly with them, whatever frame the camera came from.
+        camera.quaternion.identity();
         this.cameraSpace.add(camera);
         this.activeCamera = camera;
         this.handleLookUpdate();
