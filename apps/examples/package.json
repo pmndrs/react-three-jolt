@@ -5,9 +5,9 @@
     "scripts": {
         "dev": "vite",
         "build": "tsc && vite build",
-        "lint": "biome check .",
+        "lint": "eslint .",
         "preview": "vite preview",
-        "format": "biome format --write ."
+        "format": "prettier --write ."
     },
     "dependencies": {
         "@react-three/drei": "11.0.0-alpha.7",
@@ -24,7 +24,6 @@
         "three": "^0.186.0"
     },
     "devDependencies": {
-        "@biomejs/biome": "^2.5.14",
         "@types/react": "~19.2.18",
         "@types/react-dom": "~19.2.7",
         "@types/three": "^0.186.0",

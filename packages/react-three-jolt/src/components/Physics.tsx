@@ -241,9 +241,7 @@ export function Physics(props: PhysicsProps) {
         ps.maxSubSteps = maxSubSteps;
         liveSystem.current = ps;
         setPhysicsSystem(ps);
-        // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only, deliberately not
-        // reactive - every prop read here is applied once, at construction; later prop changes
-        // are each their own effect below.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only, deliberately not reactive - every prop read here is applied once, at construction; later prop changes are each their own effect below.
     }, []);
 
     // setup the step
@@ -281,8 +279,7 @@ export function Physics(props: PhysicsProps) {
                 dying.destroy();
             });
         };
-        // biome-ignore lint/correctness/useExhaustiveDependencies: unmount-only teardown - see
-        // the comment above.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount-only teardown - see the comment above.
     }, []);
 
     // These will be effects for props to send to the correct systems
@@ -298,7 +295,7 @@ export function Physics(props: PhysicsProps) {
     useEffect(() => {
         if (!physicsSystem) return;
         physicsSystem.setGravity(gravity);
-        // biome-ignore lint/correctness/useExhaustiveDependencies: gravityKey stands in for the value of gravity
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- gravityKey stands in for the value of gravity
     }, [gravityKey, physicsSystem]);
 
     // Scalar simulation props. Each is written straight through so it takes effect on the very
