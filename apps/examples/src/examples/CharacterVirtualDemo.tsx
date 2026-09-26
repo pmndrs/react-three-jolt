@@ -98,12 +98,16 @@ export function CharacterVirtualDemo() {
 
                 <BoundBoxes />
                 <CharacterController debug position={[0, 0, 0]}>
-                    {/* Before the CameraRig options refactor (#86) the rig's camera was hard
-                        coded at (4,4,4) in rig space - an elevated, angled third-person view every
-                        `<CameraRig>` got automatically. #86 turned that into the `cameraPosition`
-                        option, whose own default is a flat (0,0,0), so this example lost its
-                        framing when it was never updated to ask for it explicitly (issue #301). */}
-                    <CameraRig cameraPosition={[4, 4, 4]} />
+                    {/* Over-the-shoulder third-person chase cam (issue #301 follow-up):
+                        `cameraPosition` starts the boom behind the character, slightly above and
+                        offset to one shoulder rather than dead centre. `followMode="movement"`
+                        (issue #75) eases the boom's yaw round to trail the character's own
+                        movement direction as it turns - the only automatic follow mode that keeps
+                        a chase cam behind a moving character; `"lookAt"` frames a fixed point
+                        instead, and `"free"` (the default) never turns on its own. Boom collision
+                        (the shapecast/whisker pipeline) stays on at its defaults, so the camera
+                        still pulls in around geometry between it and the character. */}
+                    <CameraRig cameraPosition={[0.8, 1.2, 4]} followMode="movement" />
                 </CharacterController>
                 <Floor size={150} position={[0, -0.5, 0]} />
             </Physics>
