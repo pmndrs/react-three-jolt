@@ -110,7 +110,7 @@ test('matrixAutoUpdate=false renders visually identically to the default under a
 
         const state = ps.bodySystem.getBody(ps.bodySystem.addBody(mesh))!;
         state.matrixAutoUpdate = matrixAutoUpdate;
-        return { scene, parent, mesh, state };
+        return { scene, parent, mesh, state, lane: laneX };
     }
 
     const control = buildRig(true);
@@ -134,7 +134,13 @@ test('matrixAutoUpdate=false renders visually identically to the default under a
     for (let i = 0; i < 16; i++)
         maxDelta = Math.max(
             maxDelta,
-            Math.abs(control.mesh.matrixWorld.elements[i] - optimised.mesh.matrixWorld.elements[i])
+            Math.abs(
+                control.mesh.matrixWorld.elements[i] -
+                    optimised.mesh.matrixWorld.elements[i] -
+                    // the rigs sit in different lanes on x (see buildRig); this used to cancel out
+                    // only because both collapsed to the origin (#300 parent-space fix)
+                    (i === 12 ? control.lane - optimised.lane : 0)
+            )
         );
     assert.isBelow(
         maxDelta,
