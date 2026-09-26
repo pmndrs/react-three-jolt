@@ -31,8 +31,8 @@
 import { create, waitFor } from '@react-three/test-renderer';
 import React from 'react';
 import { preload } from 'suspend-react';
-import * as THREE from 'three';
 import type { Mesh } from 'three';
+import * as THREE from 'three';
 import { assert, beforeAll, test } from 'vitest';
 import { Physics, RigidBody } from '../src';
 import { InstancedRigidBodies } from '../src/components/InstancedRigidBodies';
