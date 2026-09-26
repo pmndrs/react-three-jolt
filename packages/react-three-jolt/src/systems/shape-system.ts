@@ -378,11 +378,7 @@ export const releaseShape = (shape?: Jolt.Shape | null) => {
 
 // TODO: move this type later
 type PossibleGeometry =
-    | BufferGeometry
-    | BoxGeometry
-    | SphereGeometry
-    | CapsuleGeometry
-    | CylinderGeometry;
+    BufferGeometry | BoxGeometry | SphereGeometry | CapsuleGeometry | CylinderGeometry;
 
 export type DescribeShapeOptions = {
     /** force a shape type instead of inferring one from the geometry */

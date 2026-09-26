@@ -72,8 +72,14 @@ type HarnessProps = {
 // with a different `type` (via renderer.update()) changes useRaycaster's/etc.'s memo deps without
 // remounting the component, which is exactly the "deps changed, not unmounted" case #192 covers.
 const Harness = ({ type, hook, onReady }: HarnessProps) => {
+    // `hook` picks which of the three hooks this instance exercises and is fixed for the
+    // component's whole lifetime (each test mounts one `Harness` per hook, see `runsFor` below);
+    // it never changes across re-renders, so the hook actually called never changes order either.
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- static analysis can't see that `hook` is stable per instance
     if (hook === 'useRaycaster') useRaycaster(undefined, undefined, type);
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- see above
     else if (hook === 'useAdvancedRaycaster') useAdvancedRaycaster(undefined, undefined, type);
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- see above
     else useMulticaster(undefined, undefined, type);
 
     useEffect(() => {
