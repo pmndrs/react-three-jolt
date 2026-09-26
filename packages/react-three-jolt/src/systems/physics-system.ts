@@ -23,6 +23,7 @@ import { type StepCallback, WORLD_EVENT_BITS, type WorldEventMap } from './event
 import { ShapeCollider } from './queries/collider';
 import { AdvancedRaycaster, Multicaster, Raycaster } from './queries/raycasters';
 import { Shapecaster } from './queries/shapecasters';
+import { RagdollSystem } from './ragdoll-system';
 
 /**
  * Any callable, used only as the identity key of the deprecated `removeStepListener(fn)`.
@@ -173,6 +174,8 @@ export class PhysicsSystem {
     bodyInterface!: Jolt.BodyInterface;
     bodySystem!: BodySystem;
     constraintSystem!: ConstraintSystem;
+    /** Builds/spawns ragdolls from a `SkinnedMesh` - see `<Ragdoll>` (issue #251). */
+    ragdollSystem!: RagdollSystem;
 
     /**
      * This world's slot in `Raw`'s interface registry, from a counter that only ever goes up.
@@ -350,6 +353,7 @@ export class PhysicsSystem {
         // dispatching world level events
         this.bodySystem.worldEvents = this.events;
         this.bodySystem.debug = this._debug;
+        this.ragdollSystem = new RagdollSystem(this);
     }
 
     //* Disposables ===================================

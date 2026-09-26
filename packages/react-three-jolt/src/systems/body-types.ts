@@ -53,6 +53,14 @@ export interface GenerateBodyOptions {
      * - `'decompose'`: reserved for a convex decomposition; currently throws with an explanation.
      */
     dynamicMeshStrategy?: DynamicMeshStrategy;
+    /**
+     * `addExistingBody` only: skip its `bodyInterface.AddBody()` call because the body was
+     * already added to the simulation some other way (issue #251: `RagdollSystem` registers a
+     * `BodyState` per ragdoll part after `Ragdoll.AddToPhysicsSystem()` already added them, and
+     * adding them again would double-add them to the broadphase). Has no effect on `createBody`/
+     * `addBody`. Default `false`.
+     */
+    skipAddBody?: boolean;
 }
 
 // When debugging we need to create a three debug object
