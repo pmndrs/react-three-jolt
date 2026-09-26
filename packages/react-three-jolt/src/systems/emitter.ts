@@ -17,11 +17,9 @@
 
 export type Unsubscribe = () => void;
 
-// biome-ignore lint/suspicious/noExplicitAny: an event map is by definition heterogeneous
 export type EventMap = Record<string, (...args: any[]) => any>;
 
 type Entry = {
-    // biome-ignore lint/suspicious/noExplicitAny: see EventMap
     fn: (...args: any[]) => any;
     dead: boolean;
     once: boolean;
