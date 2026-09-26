@@ -1,0 +1,122 @@
+---
+title: Buoyancy
+description: <Water> volumes, useBuoyancy and Body.ApplyBuoyancyImpulse - let bodies float.
+nav: 10
+---
+
+```tsx
+import { Water } from '@react-three/jolt';
+
+<Water position={[0, 0, 0]} size={[20, 6, 20]} buoyancy={1.5} visible />;
+```
+
+A `<Water>` volume is a box. Every physics substep, every **dynamic** body whose broad-phase AABB
+overlaps it gets [`Body.ApplyBuoyancyImpulse`](https://jrouwe.github.io/JoltPhysics/) called on it
+- the same `useBeforePhysicsStep` hook [`<Attractor>`](/api/physics#attractor) is built on
+(issue #159), so a body gets a fixed amount of momentum per **substep**, not a frame-rate
+dependent one per rendered frame.
+
+## `buoyancy` is not density
+
+This is the one thing that isn't what it looks like at first: `buoyancy` is a property of the
+**volume** (how strongly *that water* pushes back), not of the body dropped into it, and its
+effect on a body's velocity does **not depend on the body's mass**. Verified empirically against
+jolt-physics 1.1 (it ships as wasm only, there is no source to read against):
+
+- `buoyancy: 1` is exactly **neutral** - gravity and the buoyant push cancel and the body holds its
+  depth.
+- `buoyancy > 1` floats.
+- `buoyancy < 1` sinks.
+- A 1kg and a 50,000kg box of the same shape, in the same volume, settle at the **same height**.
+
+So there is no per-body density knob to reach for. To drop "a cork and a rock in the same pool",
+give the cork and the rock **different volumes** at the same footprint, and use `group` (or
+`filter`) to pick who each one affects - which is exactly what the Buoyancy demo
+(`apps/examples/src/examples/Buoyancy.tsx`) does:
+
+```tsx
+<Water position={[0, 0, 0]} size={[24, 12, 24]} surfaceHeight={2} buoyancy={1.8} group={1} visible />
+<Water position={[0, 0, 0]} size={[24, 12, 24]} surfaceHeight={2} buoyancy={0.35} group={2} />
+
+<RigidBody group={1} /* the cork: floats */ />
+<RigidBody group={2} /* the rock: sinks */ />
+```
+
+## `<Water>`
+
+Renders a `<group>`, so it composes with the scene tree, and re-syncs its volume whenever a prop
+changes rather than removing/re-adding it (`updateVolume` is a plain JS record replace, not a wasm
+allocation - unlike [constraints](/api/rigid-body#constraints), nothing here needs rebuilding).
+
+| prop | default | meaning |
+| --- | --- | --- |
+| `position` | `[0,0,0]` | local position of the wrapper group / volume center |
+| `size` | `[10,4,10]` | full box dimensions (not half-extents) |
+| `surfaceHeight` | top of the box | world space Y the surface plane sits at |
+| `buoyancy` | `1.5` | see above - `1` neutral, `>1` floats, `<1` sinks |
+| `linearDrag` / `angularDrag` | `0.3` / `0.05` | velocity damping while (partially) submerged |
+| `flow` | `[0,0,0]` | fluid velocity - a current, added into the impulse |
+| `enabled` | `true` | turn buoyancy off without unmounting |
+| `activate` | `true` | wake a sleeping body the volume's AABB catches |
+| `group` | - | only affect bodies with this [`<RigidBody group>`](/api/collision-groups) id |
+| `filter` | - | `(body: BodyState) => boolean`, called per body per substep it overlaps |
+| `visible` | `false` | render a translucent surface plane sized to the box's X/Z footprint |
+| `color` / `opacity` | `'#3f83a3'` / `0.55` | the surface plane's material, when `visible` |
+
+> [!NOTE]
+> Unlike `<Attractor>`, `<Water>` does not track a moving parent's *world* transform every
+> substep - `surfaceHeight` in particular is used exactly as given. Set it explicitly (in world
+> space) if `<Water>` is nested under something that moves.
+
+## `useBuoyancy`
+
+The imperative half `<Water>` itself is built on - a world's water volumes are a single shared
+registry (`PhysicsSystem.getBuoyancySystem()`), created lazily the first time anything asks for
+it.
+
+```tsx
+import { useBuoyancy } from '@react-three/jolt';
+
+function CustomVolume() {
+    const { addVolume, updateVolume, removeVolume } = useBuoyancy();
+
+    useEffect(() => {
+        const id = addVolume({ position: [0, 0, 0], size: [20, 6, 20], buoyancy: 1.2 });
+        return () => removeVolume(id);
+    }, [addVolume, removeVolume]);
+
+    return null;
+}
+```
+
+| call | |
+| --- | --- |
+| `addVolume(options?)` | register a volume, returns an id |
+| `updateVolume(id, options?)` | replace a volume's options wholesale (not merged) |
+| `removeVolume(id)` | remove a volume; safe with an unknown id |
+| `volumeIds()` | every currently registered volume's id |
+
+`BuoyancyVolumeOptions` is the same shape `<Water>`'s props are, minus the rendering-only ones
+(`visible`, `color`, `opacity`, `children`).
+
+## Waking sleeping bodies
+
+A sleeping body has zero velocity and Jolt does not touch it until something wakes it - a volume
+that only ever checked overlap would never get the chance to float a body that fell asleep resting
+on the bottom. `<Water>` (`activate`, default `true`) wakes any sleeping body its AABB catches
+before applying the impulse. Set `activate={false}` to leave sleeping bodies alone - a "shallow
+end" a resting body won't be nudged out of, say.
+
+## Memory
+
+`Body.ApplyBuoyancyImpulse` takes three *different* `Vec3` arguments in one call - surface normal,
+fluid velocity, gravity - which is one more live value than the module-wide
+[`joltScratch`](/advanced/memory) singleton has room for (it holds exactly one `Vec3` at a time).
+`BuoyancySystem` keeps three of its own persistent scratch `Vec3`s instead - the same trick
+`joltScratch` uses, just with more slots - created once and freed when the system is torn down
+with the world. Nothing here allocates per substep; see `test/buoyancy.test.ts`'s allocation test
+if you're changing this file.
+
+`Body.GetWorldSpaceBounds()` (used for the broad-phase overlap check) returns `AABox` **by
+value** - like `GetPosition()` / `GetRotation()`, the WebIDL binder hands back a pointer to one
+static temporary per function. It is read immediately and never destroyed or retained.
