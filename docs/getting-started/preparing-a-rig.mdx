@@ -1,0 +1,124 @@
+---
+title: Preparing a rig
+description: Bone naming, scale, and bind pose — what a character needs before <Ragdoll> can use it.
+nav: 2
+---
+
+[`<Ragdoll>`](/api/ragdoll) builds a physical rig from any `THREE.SkinnedMesh` with a `Skeleton`,
+but "any" comes with real caveats once the character is a GLTF export from a DCC tool rather than a
+hand-built test skeleton. This page is the checklist — worked out against a real asset (a
+Mixamo-derived character exported to glTF, the same one `apps/examples`' `Ragdolls` and
+`PoweredRagdoll` demos use), not a synthetic rig.
+
+## Bone naming
+
+`<Ragdoll parts>` keys are matched against `THREE.Bone.name` **as loaded**, which is not always
+what your source file shows you. Loading a Mixamo-exported character through three.js's
+`GLTFLoader`, for example, silently strips the colon out of every bone name:
+`mixamorig:LeftUpLeg` becomes `mixamorigLeftUpLeg` (`THREE.PropertyBinding`'s node-name
+sanitizing). If your `parts` overrides never seem to apply, log the real names before writing them:
+
+```ts
+console.log(mesh.skeleton.bones.map((b) => b.name));
+```
+
+Prefer matching by a stable *substring* (`name.endsWith('Hips')`, `name.includes('Spine')`) over an
+exact string when you're building `parts` programmatically from a whole rig — it survives this kind
+of loader-specific mangling, and it means the same code works for more than one similarly-named
+character. See `apps/examples/src/examples/ragdollCharacter.ts`'s `buildSoldierParts` for a worked
+example that classifies every bone in a 49-joint Mixamo rig (including fingers and toes) this way.
+
+## Scale and the root bone's parent transform
+
+Mixamo-exported (and many other DCC-exported) glTF characters wrap their actual skeleton root
+(`Hips`) under an extra node — often named `Character` or similar — carrying a **non-identity
+transform**: commonly a `0.01` uniform scale plus a -90° X rotation, baking in the DCC tool's
+centimeters-and-Y-up convention into three.js's meters-and-(often)-Z-up expectations.
+
+This is harmless for **rendering** — `computeBoneGeometry` (what `<Ragdoll>` uses to place each
+capsule) reads bones' actual *world* positions, so capsule placement is correct regardless of what
+sits above the root. It is **not** harmless for [`'animated'`/`'powered'` drive
+modes](/api/ragdoll#drive-modes): the pose-driving code treats the root bone's own **local**
+position as its **world** target directly (there's no parent to be relative to, for the root — see
+[Skeleton](/api/skeleton#the-big-gotcha-getpose-vs-calculatejointmatrices)). If that local position
+is still expressed in the un-scaled, un-rotated space of a non-identity ancestor, the ragdoll's root
+gets driven toward the *raw* numbers — off by roughly the scale factor, in the wrong axes.
+Reproduced directly against the example asset: leaving this unfixed drove the root ~100 units away
+after ten physics substeps, not a few centimeters of settling error.
+
+The fix needs no engine code, just a one-time reparent after loading, using
+`THREE.Object3D.attach()` (preserves world transform, recomputes local):
+
+```ts
+function normalizeRagdollRoot(scene: THREE.Object3D, mesh: THREE.SkinnedMesh, boneRoot: THREE.Object3D) {
+    const root = mesh.skeleton.bones[0];
+    if (root.parent === boneRoot) return; // already fine
+    scene.updateMatrixWorld(true);
+    boneRoot.attach(root); // root's LOCAL (relative to boneRoot) transform now equals its real WORLD transform
+}
+```
+
+Call this once, right after loading (or cloning, for a `<Ragdoll>` instance you spawn more than
+once — see [Template lifetime](/api/ragdoll#template-lifetime)), before the skeleton is ever handed
+to `<Ragdoll>`/`RagdollSystem.buildTemplate`. `attach()` only supports a **uniform** scale in the
+chain it walks — true for Mixamo's `0.01` — check your own asset if it uses non-uniform scale
+anywhere above the root.
+
+> [!IMPORTANT]
+> `boneRoot` must itself sit at **true world identity** — pass the top-level r3f `THREE.Scene`
+> (`useThree().scene`), not a `<group position={...}>` you're using to place the character.
+> `attach()` preserves the bone's *world* transform relative to whatever parent you give it, so
+> reparenting under a group that itself carries your spawn position silently cancels that position
+> back out of the bone's new local value — the exact bug this fix exists to avoid, just moved one
+> level up. Bake the character's placement into the cloned scene's own `position` instead (before
+> calling this), and reparent the bone under something that never moves. See
+> `apps/examples/src/examples/ragdollCharacter.ts`'s `cloneCharacter`/`normalizeRagdollRoot` for
+> the full, working version (this only matters for `'animated'`/`'powered'` mode — `'ragdoll'`
+> mode's part proxies already use the same "reparent under the scene root" trick for debug
+> capsules, see `<Ragdoll debug>`).
+
+`'ragdoll'` mode (the default — bodies are free, nothing drives them) is unaffected by any of this;
+this only matters once you drive a character with `'animated'` or `'powered'` mode.
+
+## Bind pose
+
+Build (and spawn) a `<Ragdoll>` with the character in the pose you want the ragdoll to **start**
+in — capsule placement and constraint anchors are read from bones' current world transform at
+build time, not from any "rest pose" concept. For most characters that's just the bind pose (a
+T-pose or A-pose, whatever the rig's default is) — don't play an animation for a frame or two
+before a `<Ragdoll>` mounts, or the capsules will be built around that transient pose instead.
+
+If you drive the character with a `THREE.AnimationMixer` in `'animated'` mode, the mixer should
+target the **same** `SkinnedMesh` `<Ragdoll>` was built from — that's what lets one `bones` array
+serve as both the animation's output and the ragdoll's drive target every substep. See [Drive
+modes](/api/ragdoll#drive-modes) for the ordering requirement this needs (`useFrame` priority) and
+[the root bone gap](/api/ragdoll#the-root-bone-gap) for a second, related root-translation fix that
+sits on top of the scale fix above.
+
+## Sizing the auto-generated capsules
+
+Even with names and root transform sorted out, the default radius-from-bone-length heuristic can
+badly misjudge a real rig:
+
+- **Leaf bones with no meaningful "distance to child"** (a head, when a rig's head-top/end bone
+  isn't itself a skinned joint) inherit their parent's (often much shorter) length — producing a
+  near-invisible capsule instead of a head-sized one.
+- **Short bones relative to the body part's real girth** — a 3-segment spine chain, a pelvis — end
+  up far too thin, because the radius scales off the bone's own length, not the character's actual
+  proportions.
+- **Individual finger/toe bones** each get their own free `swingTwist` joint by default, which
+  jitters visibly and adds constraint-solver cost for little visual payoff at typical game/demo
+  scale.
+
+None of this needs an engine change — it's exactly what [`parts`
+overrides](/api/ragdoll#parts-per-bone-overrides) are for. Give short/leaf bones (hips, spine,
+neck, head, hands) explicit `radius`/`length`, and weld finger/toe segments with
+`constraint: 'fixed'`. `apps/examples/src/examples/ragdollCharacter.ts`'s `buildSoldierParts` is a
+complete, commented example tuned against a real 49-joint rig — a good starting point to adapt
+rather than re-deriving these numbers from scratch.
+
+## Next steps
+
+- [Ragdoll](/api/ragdoll) — the component and drive modes
+- [Skeleton](/api/skeleton) — the pose-conversion plumbing underneath it
+- `apps/examples/src/examples/Ragdolls.tsx` / `PoweredRagdoll.tsx` — complete, running examples
