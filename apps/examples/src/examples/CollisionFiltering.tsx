@@ -3,36 +3,55 @@
 // `<RigidBody group subGroup>` + `bodySystem.{disable,enable}Collision` decide which BODIES may
 // touch, independent of the broad object-layer category.
 //
-// Sharp edge that #302 tripped over: Jolt hardcodes "two bodies with the SAME sub group id never
-// collide" - it is not a table entry and disableCollision/enableCollision cannot touch it. So
-// each shelf AND each colour of falling box needs its OWN sub group id (never shared with the
-// thing it should land on); disableCollision then turns off just the (different-id) pairs that
-// shouldn't touch - here, every box/shelf pair whose colours don't match.
+// Sharp edges that #302 tripped over, twice: Jolt hardcodes "two bodies with the SAME sub group id
+// never collide" - it is not a table entry and disableCollision/enableCollision cannot touch it.
+// So every shelf AND every falling box needs its OWN sub group id: shelves never share one with
+// each other, and boxes never share one with each other either (or two boxes of the "same colour"
+// could never stack on one another). disableCollision then turns off just the pairs that
+// shouldn't touch - here, each box against the two shelves whose colour doesn't match it.
 //
 // Three coloured shelves stack above a catch-all floor; each shelf only catches falling boxes of
-// its own colour, the others fall straight through. Toggle filtering off to watch every colour
-// land on every shelf instead. A small mixed wave keeps dropping every few seconds so the sorting
-// keeps happening without touching anything.
+// its own colour, the others fall straight through onto a lower shelf (or the floor, for the
+// bottom shelf). Toggle filtering off and every shelf accepts every colour, so everything stops at
+// the first (topmost, blue) shelf it reaches instead of sorting by colour.
+//
+// A small, FIXED pool of boxes per colour (not one spawned per wave - see #302 follow-up) cycles
+// through the pool every few seconds, teleporting one already-landed box per colour back to the
+// top so the sorting keeps visibly happening without the subGroup count growing forever.
 import { Environment } from '@react-three/drei';
-import { Physics, RigidBody, useJolt } from '@react-three/jolt';
+import { type BodyState, Physics, RigidBody, useJolt } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt/addons';
 import { useControls } from 'leva';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import * as THREE from 'three';
 import { useDemo } from '../App';
 import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 
-// Shelves get sub groups 1-3, boxes get 11-13 (shelf id + BOX_ID_OFFSET) - distinct ids so a box
-// and its own shelf are free to collide; only the mismatched pairs get disabled below.
-const BOX_ID_OFFSET = 10;
 const SHELVES = [
     { name: 'red', color: '#e63946', subGroup: 1, y: 3 },
     { name: 'green', color: '#2a9d8f', subGroup: 2, y: 6 },
     { name: 'blue', color: '#457b9d', subGroup: 3, y: 9 }
 ] as const;
-const GRID = 3; // GRID x GRID boxes rain down onto each shelf on the first wave
-const SPACING = 1.1;
-const WAVE_INTERVAL = 4000; // ms between the periodic mixed-colour drops
-const MAX_WAVES = 6; // caps how many periodic waves stay live at once
+const POOL_SIZE = 5; // boxes per colour - fixed forever, so the sub group count never grows
+const BOX_ID_OFFSET = 10; // box subGroup = 10 + colourIndex * POOL_SIZE + slot + 1, always unique
+const SLOT_SPACING = 1.1;
+// a small cross so the 5 boxes of one colour don't spawn stacked on the same x/z column
+const SLOT_OFFSETS: [number, number][] = [
+    [0, 0],
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1]
+];
+const RECYCLE_INTERVAL = 4000; // ms between teleporting one box per colour back to the top
+
+function boxSubGroup(colourIndex: number, slot: number) {
+    return BOX_ID_OFFSET + colourIndex * POOL_SIZE + slot + 1;
+}
+function spawnPosition(shelf: (typeof SHELVES)[number], slot: number): [number, number, number] {
+    const [ox, oz] = SLOT_OFFSETS[slot];
+    return [ox * SLOT_SPACING, 14 + shelf.subGroup, oz * SLOT_SPACING];
+}
 
 export function CollisionFiltering() {
     const { debug, paused, interpolate, physicsKey, module } = useDemo();
@@ -58,30 +77,40 @@ function Inner() {
     const { filterByColor } = useControls('Collision Filtering', {
         filterByColor: { value: true, label: 'Shelves filter by colour' }
     });
-    // each periodic wave gets a fresh id so its boxes get a fresh React key; capped so the scene
-    // doesn't accumulate boxes forever
-    const [waves, setWaves] = useState<number[]>([0]);
+    // [colourIndex][slot] -> the pooled box's BodyState, so the recycler can teleport it
+    const boxRefs = useRef<(BodyState | null | undefined)[][]>(SHELVES.map(() => Array(POOL_SIZE)));
 
-    // Every shelf/colour pair whose colours DON'T match gets disabled - the shelf still always
-    // collides with its own colour (different, never-shared ids), so that pair is never touched.
+    // Every box against every shelf whose colour it does NOT match gets disabled - a box always
+    // collides with its own shelf (they never share a sub group id) and with the other boxes in
+    // its own pool (same reason), so neither of those needs to be touched here.
     useEffect(() => {
         for (const shelf of SHELVES) {
-            for (const other of SHELVES) {
-                if (shelf === other) continue;
-                const boxSubGroup = other.subGroup + BOX_ID_OFFSET;
-                if (filterByColor) bodySystem.disableCollision(shelf.subGroup, boxSubGroup);
-                else bodySystem.enableCollision(shelf.subGroup, boxSubGroup);
+            for (let colourIndex = 0; colourIndex < SHELVES.length; colourIndex++) {
+                if (SHELVES[colourIndex] === shelf) continue;
+                for (let slot = 0; slot < POOL_SIZE; slot++) {
+                    const box = boxSubGroup(colourIndex, slot);
+                    if (filterByColor) bodySystem.disableCollision(shelf.subGroup, box);
+                    else bodySystem.enableCollision(shelf.subGroup, box);
+                }
             }
         }
     }, [filterByColor, bodySystem]);
 
+    // Keep the sorting visible forever without ever creating a new body: round-robin through the
+    // pool, teleporting one already-settled box per colour back to its spawn height each tick.
     useEffect(() => {
+        let tick = 0;
         const id = setInterval(() => {
-            setWaves((prev) => {
-                const next = [...prev, Date.now()];
-                return next.length > MAX_WAVES ? next.slice(next.length - MAX_WAVES) : next;
+            const slot = tick % POOL_SIZE;
+            tick++;
+            SHELVES.forEach((shelf, colourIndex) => {
+                const box = boxRefs.current[colourIndex][slot];
+                if (!box) return;
+                box.position = new THREE.Vector3(...spawnPosition(shelf, slot));
+                box.velocity = new THREE.Vector3();
+                box.angularVelocity = new THREE.Vector3();
             });
-        }, WAVE_INTERVAL);
+        }, RECYCLE_INTERVAL);
         return () => clearInterval(id);
     }, []);
 
@@ -104,44 +133,47 @@ function Inner() {
                     </mesh>
                 </RigidBody>
             ))}
-            {/* remounted whenever the toggle flips, so a fresh wave falls and immediately shows
-                the current filtering rule instead of leaving already-settled boxes in place */}
+            {/* remounted whenever the toggle flips, so the whole pool immediately shows the
+                current filtering rule instead of leaving already-settled boxes in place */}
             <group key={String(filterByColor)}>
-                {SHELVES.map((shelf) => (
-                    <FallingBoxes key={`${shelf.subGroup}-initial`} shelf={shelf} grid={GRID} />
+                {SHELVES.map((shelf, colourIndex) => (
+                    <BoxPool
+                        key={shelf.subGroup}
+                        shelf={shelf}
+                        colourIndex={colourIndex}
+                        onRef={(slot, state) => {
+                            boxRefs.current[colourIndex][slot] = state;
+                        }}
+                    />
                 ))}
-                {waves.map((wave, i) =>
-                    i === 0 ? null : (
-                        <group key={wave}>
-                            {SHELVES.map((shelf) => (
-                                <FallingBoxes key={shelf.subGroup} shelf={shelf} grid={1} />
-                            ))}
-                        </group>
-                    )
-                )}
             </group>
         </>
     );
 }
 
-function FallingBoxes({ shelf, grid }: { shelf: (typeof SHELVES)[number]; grid: number }) {
-    const positions = useMemo(() => {
-        const offset = ((grid - 1) * SPACING) / 2;
-        const list: [number, number, number][] = [];
-        for (let x = 0; x < grid; x++)
-            for (let z = 0; z < grid; z++)
-                list.push([x * SPACING - offset, 14 + shelf.subGroup, z * SPACING - offset]);
-        return list;
-    }, [shelf.subGroup, grid]);
+function BoxPool({
+    shelf,
+    colourIndex,
+    onRef
+}: {
+    shelf: (typeof SHELVES)[number];
+    colourIndex: number;
+    onRef: (slot: number, state: BodyState | null | undefined) => void;
+}) {
+    const positions = useMemo(
+        () => Array.from({ length: POOL_SIZE }, (_, slot) => spawnPosition(shelf, slot)),
+        [shelf]
+    );
 
     return (
         <>
-            {positions.map((position, i) => (
+            {positions.map((position, slot) => (
                 <RigidBody
-                    key={i}
+                    key={slot}
+                    ref={(state) => onRef(slot, state)}
                     position={position}
                     group={0}
-                    subGroup={shelf.subGroup + BOX_ID_OFFSET}
+                    subGroup={boxSubGroup(colourIndex, slot)}
                 >
                     <mesh castShadow>
                         <boxGeometry args={[0.5, 0.5, 0.5]} />
