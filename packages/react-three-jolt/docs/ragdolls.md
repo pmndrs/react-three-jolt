@@ -84,27 +84,53 @@ names/shapes/constraints - nothing else ever reads a pose's skeleton back) for i
 and lets destroying the pose free that private copy.
 
 **Spawning a second ragdoll on the same `PhysicsSystem`, after a previous one has been destroyed,
-does not work - this contradicts "RagdollSettings is a reusable template" below, which was only
-verified by heap byte count.** Re-tested here with the exact `buildRagdollSettings()` helper from
-`test/ragdoll-spike.test.ts`, looping
-`CreateRagdoll -> AddToPhysicsSystem -> step -> RemoveFromPhysicsSystem -> destroy(ragdoll)` on one
-settings object: the first `CreateRagdoll()` produces a working 4-body ragdoll
-(`GetBodyCount()` 4, valid `GetBodyID()`s); every `CreateRagdoll()` call *after* a prior ragdoll
-built from the same settings has been destroyed produces an **empty** one -
-`GetBodyCount()` 0, `GetBodyID(0).GetIndexAndSequenceNumber()` 0 (Jolt's invalid-body sentinel) -
-even though the heap-byte accounting still looks perfectly clean, which is exactly why the
-original spike's stress test (byte-count only) missed it. A fresh settings object built per spawn
-fares only slightly better: two cycles succeed and the third corrupts the heap for real, matching
-this file's own "rebuilding settings" finding below precisely - rebuilding was never a working
-alternative either. **Net effect: nothing in this package can safely spawn a second ragdoll
-instance, ever, on the same `PhysicsSystem`, whether or not the settings are reused.** Two ragdolls
-spawned and kept alive *simultaneously* (no destroy in between) were fine in testing - it is
-specifically spawn -> destroy -> spawn again that breaks. This is a `jolt-physics` 1.1
-WASM-binder-level issue this package cannot fix from JS; `test/ragdoll-system.test.ts` spawns at
-most once per `PhysicsSystem` for exactly this reason (each test builds its own world), the same
-way this file's "RemoveFromPhysicsSystem is not optional" finding below was backed by a standalone
-reproduction never added to the committed suite. **Needs the maintainer's attention, and probably
-an upstream jolt-physics bug report, before #253's demos lean on recycling ragdolls.**
+used to silently fail - fixed for issue #275, see below.** `CreateRagdoll -> AddToPhysicsSystem ->
+step -> RemoveFromPhysicsSystem -> destroy(ragdoll)` looped on one settings object used to produce
+a working first ragdoll (`GetBodyCount()` 4) and an **empty** one on every call after - `GetBodyCount()`
+0, `GetBodyID(0).GetIndexAndSequenceNumber()` 0 (Jolt's invalid-body sentinel) - even though the
+heap-byte accounting looked perfectly clean, which is exactly why the original spike's stress test
+(byte-count only) missed it.
+
+**Root cause (#275): `RagdollSettings` is itself a Jolt `RefTarget`, and `Ragdoll` holds an
+internal back-reference to it that gets released when the `Ragdoll` is destroyed.** The issue's own
+lead hypothesis - that `RagdollPart.SetShape()`/`mToParent`'s setters skip `AddRef()` on the
+*shape*/*constraint-settings* objects - is **refuted**: artificially padding a shape's
+`GetRefCount()` to 1000+ before a spawn/destroy cycle does not fix the empty second ragdoll, so
+those objects are not what gets freed prematurely. What's actually being freed is `settings`
+itself: a JS-constructed `RagdollSettings` starts at refcount 0 (same convention as a freshly
+`new`-ed `Shape`), `CreateRagdoll()` gives the returned `Ragdoll` the settings' only reference, and
+the JS/WASM binder exposes **no** `AddRef`/`Release`/`GetRefCount` on `RagdollSettings` at all
+(confirmed both by grepping `node_modules/jolt-physics/dist/types.d.ts` and at runtime -
+`settings.AddRef` is `undefined`), so nothing in JS could ever compensate directly. Destroying the
+first spawned `Ragdoll` therefore drops `settings`' refcount to zero, and Jolt's own
+`RefTarget::Release()` frees it immediately - confirmed directly: `settings.mParts.size()` reads
+`0` (was `1`) and `settings.GetSkeleton().GetJointCount()` reads a garbage value right after that
+first `destroy(ragdoll)` call, even in the single-spawn-then-teardown sequence every test in this
+package used before this fix. The *previous* `RagdollTemplate.destroy()` then called
+`Raw.module.destroy(settings)` unconditionally, which was **always** a double free once any
+instance had been spawned - it just happened not to trap for a single spawn/destroy/teardown
+sequence (see "what the fix looks like" below for when it does trap). Two ragdolls kept alive
+*simultaneously* (no destroy in between) were always fine, since neither one's reference ever hit
+zero - it is specifically spawn -> destroy -> spawn again that broke.
+
+**The fix: `RagdollSystem.buildTemplate()` now creates one extra, permanent "keeper" `Ragdoll`**
+right after building `settings` (`AddToPhysicsSystem` + `RemoveFromPhysicsSystem` immediately,
+never activated, never stepped, never handed to a caller) purely to hold a reference on `settings`
+for the template's whole lifetime, no matter how many real instances get spawned and destroyed.
+`RagdollTemplate.destroy()` now destroys **only** the keeper - `Raw.module.destroy(settings)` is
+never called directly any more, because the keeper's own teardown is what makes Jolt's native
+refcounting free `settings` (still cascading to `mSkeleton`, every part's shape and every part's
+`mToParent`, exactly as before). Calling `jolt.destroy(settings)` in addition to destroying the
+keeper **does** trap with "memory access out of bounds" once a template has real constraints
+(`mToParent`) and has been through more than a couple of spawn/destroy cycles - confirmed while
+building this fix, which is how the double free was pinned down precisely. Verified with a real
+5-cycle spawn/AddToPhysicsSystem/step/RemoveFromPhysicsSystem/destroy stress test (4-joint,
+swingTwist-constrained template): every cycle produces the correct body count, and
+`sGetFreeMemory()` is back at the pre-cycle baseline once the keeper (not `settings`) is destroyed
+- see `test/ragdoll-system.test.ts`'s "spawn -> destroy -> spawn again... 5 times" test. A
+`RefTarget` subclass with no `AddRef`/`Release`/`GetRefCount` exposed to JS, and a `Ragdoll` that
+silently frees its own `RagdollSettings`, are both still worth an upstream jolt-physics report -
+but this package no longer needs one to support recycling ragdolls.
 
 Nothing here was taken from documentation - there isn't any. `jolt-physics/dist/types.d.ts` has
 signatures but zero ownership notes, and the only working example code is
@@ -254,7 +280,8 @@ of a plain capsule/box/sphere ragdoll limb.
 | `RagdollPart.SetShape(shape)` | method call | takes a `RefConst<Shape>` reference | **no** - freed when the owning `RagdollSettings` is destroyed |
 | `RagdollPart.mToParent = constraintSettings` | property assignment | takes a `Ref<ConstraintSettings>` reference | **no** - same as above |
 | `RagdollSettings.mSkeleton = skeleton` | property assignment | takes a reference (Skeleton has no exposed `AddRef`/`Release`, but the assignment still transfers ownership at the C++ level) | **no** - freed when `RagdollSettings` is destroyed. **Destroying it separately after `destroy(settings)` was not tested and should be assumed unsafe** (see "what was not tested") |
-| `Raw.module.destroy(ragdollSettings)` | - | frees `mSkeleton`, every part's shape, every part's `mToParent`, in one call | verified: after `destroy(settings)`, `sGetFreeMemory()` was back within 64 bytes of the pre-build baseline, and the allocator's live-object tracker showed exactly the skeleton/shapes/constraint-settings as the only "never separately destroyed" objects - i.e. they really were freed by `RagdollSettings`'s own destructor, not leaked |
+| `RagdollSettings.CreateRagdoll(...)` | method call | the returned `Ragdoll` takes an internal reference **on `RagdollSettings` itself** - `RagdollSettings` is a Jolt `RefTarget`, released when that `Ragdoll` is destroyed (issue #275) | **no exposed API to manage this directly** - `RagdollSettings` has no `AddRef`/`Release`/`GetRefCount` in the JS binder at all (confirmed at runtime). See "`RagdollSettings` is a reusable template" below for how `RagdollSystem` compensates (a permanent internal "keeper" `Ragdoll`) |
+| `Raw.module.destroy(ragdollSettings)` | - | frees `mSkeleton`, every part's shape, every part's `mToParent`, in one call, **but only if no `Ragdoll` was ever created from it** | Safe (verified: `sGetFreeMemory()` back within 64 bytes of baseline) only when `CreateRagdoll()` was never called on this settings object. Once any `Ragdoll` has been spawned from it, its refcount is no longer 0 at the "no Ragdoll ever created" baseline - destroying the last such `Ragdoll` already frees `RagdollSettings` via Jolt's own refcounting (see the row above), and calling `Raw.module.destroy(settings)` afterward is a **double free** (traps with "memory access out of bounds" once the template has real constraints and has been through a few spawn/destroy cycles - see issue #275) |
 | `Ragdoll` bodies + constraints | created by `CreateRagdoll()` | owned by the live simulation | `ragdoll.RemoveFromPhysicsSystem()` **then** `Raw.module.destroy(ragdoll)` - **both, in that order, every time** |
 
 ### `RemoveFromPhysicsSystem()` is not optional
@@ -271,12 +298,24 @@ destroy" as a hard invariant, the same way `docs/Memory.md` already treats
 ### `RagdollSettings` is a reusable template - and rebuilding it repeatedly is unsafe
 
 `RagdollSettings.CreateRagdoll()` can be called many times on the **same** settings object to
-spawn independent `Ragdoll` instances (pass a different `collisionGroup` per spawn). This was
-stress-tested: build one `RagdollSettings` once, then `CreateRagdoll` → `AddToPhysicsSystem` →
-step → `RemoveFromPhysicsSystem` → `destroy(ragdoll)` **six times in a row** on the same
-`PhysicsSystem`, and the WASM heap was byte-for-byte identical after every single spawn. This is
-the pattern `SkeletonSystem` should use: build the skeleton/settings once per character *type*,
-cache it, and call `CreateRagdoll` per *instance*.
+spawn independent `Ragdoll` instances (pass a different `collisionGroup` per spawn) - **including
+after a previously spawned instance has been destroyed**, fixed for issue #275. This is the pattern
+`RagdollSystem` uses: build the skeleton/settings once per character *type* (`buildTemplate()`),
+cache it, and call `CreateRagdoll` (via `spawn()`) per *instance*, any number of times, in any
+order relative to destroying previous instances.
+
+Making respawn safe requires `buildTemplate()` to also create one internal "keeper" `Ragdoll` (see
+the ownership table's `CreateRagdoll` row above) that is never exposed to callers and lives for the
+template's whole lifetime, specifically to hold `RagdollSettings`' own reference count above zero
+regardless of how many real instances get spawned and destroyed. Without a keeper, destroying the
+*first* spawned `Ragdoll` alone is enough to free `RagdollSettings` out from under the template -
+this was previously stress-tested as "six spawn/destroy cycles, byte-for-byte identical heap after
+every spawn" and looked completely safe, because that test only checked heap *byte counts*, never
+the spawned ragdoll's actual body count. It wasn't: every `CreateRagdoll()` call after the first
+returned an empty `Ragdoll` (`GetBodyCount()` 0) while still leaving the heap byte-accounting
+clean, which is exactly why byte-count-only verification missed a real bug for as long as it did.
+See `RagdollSystem.buildTemplate()`'s module doc in `src/systems/ragdoll-system.ts` for the fix
+itself.
 
 The pattern that is **not** safe: rebuilding a fresh `Skeleton` + `RagdollSettings` from scratch
 on every spawn (instead of reusing one template) corrupted the WASM heap after two full

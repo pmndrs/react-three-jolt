@@ -9,16 +9,17 @@
 //  - `RemoveFromPhysicsSystem()` before `destroy()` is mandatory, every time
 //  - `SetShape`/`mToParent`/`mSkeleton` transfer ownership on assignment; `Vec3`/`Quat` fields copy
 //
-// Every test that spawns a ragdoll gets its OWN `PhysicsSystem`, spawns AT MOST ONCE, and tears
-// that world down before the next test runs. This is deliberate, not incidental style: building
-// this file's tests surfaced a real jolt-physics 1.1 limitation (documented at length in
-// src/systems/ragdoll-system.ts's module doc and in docs/ragdolls.md) where calling `spawn()`
-// again on ANY template, after a previously spawned instance on the SAME `PhysicsSystem` has been
-// destroyed, reliably produces a `Ragdoll` with zero bodies - even reusing the exact
-// `buildRagdollSettings()` helper from test/ragdoll-spike.test.ts reproduces it. One spawn per
-// world is the boundary that was verified to work reliably, so that is what every test here stays
-// inside of, the same way docs/ragdolls.md's "RemoveFromPhysicsSystem is not optional" finding was
-// backed by a standalone reproduction and deliberately kept out of the committed suite.
+// Every test that spawns a ragdoll gets its OWN `PhysicsSystem` and tears that world down before
+// the next test runs - that part is still deliberate (keeps each test's heap assertions isolated),
+// but tests are no longer restricted to spawning at most once. That restriction was working around
+// a real bug (issue #275): `RagdollSettings` is itself a Jolt RefTarget with no AddRef/Release/
+// GetRefCount exposed to JS, and destroying a spawned `Ragdoll` released the template's only
+// reference to its own settings, silently freeing them and corrupting every later `spawn()` call
+// on the same template - `GetBodyCount()` 0, `GetBodyID(0)` Jolt's invalid-body sentinel. Fixed in
+// `RagdollSystem.buildTemplate()` (a permanent internal "keeper" Ragdoll instance holds that
+// reference for the template's whole lifetime - see the module doc in
+// src/systems/ragdoll-system.ts). "spawn -> destroy -> spawn again... 5 times" below is the
+// regression test for that fix.
 
 import * as THREE from 'three';
 import { assert, test } from 'vitest';
@@ -155,7 +156,13 @@ test('buildTemplate builds one capsule + one swingTwist constraint per non-root 
 
     // RagdollSettings' destructor cascades: mSkeleton, every part's CapsuleShape, and every
     // non-root part's SwingTwistConstraintSettings. None of those were destroyed separately -
-    // exactly the ownership table in docs/ragdolls.md.
+    // exactly the ownership table in docs/ragdolls.md. `RagdollSettings` itself is ALSO in this
+    // list now (issue #275): it's a Jolt RefTarget with no AddRef/Release/GetRefCount exposed to
+    // JS, so `buildTemplate()` keeps it alive via an internal "keeper" Ragdoll instead of ever
+    // calling `jolt.destroy(settings)` directly - destroying the keeper is what frees it, via
+    // Jolt's own refcounting, not a direct destroy() call this tracker would see. `Ragdoll` (the
+    // keeper) never appears here itself: it's built by `RagdollSettings.CreateRagdoll()`, not a
+    // tracked `new jolt.Ragdoll()` call, so this proxy never sees its construction either.
     assert.deepEqual(
         spy
             .liveDetails()
@@ -166,6 +173,7 @@ test('buildTemplate builds one capsule + one swingTwist constraint per non-root 
             'CapsuleShape',
             'CapsuleShape',
             'CapsuleShape',
+            'RagdollSettings',
             'Skeleton',
             'SwingTwistConstraintSettings',
             'SwingTwistConstraintSettings',
@@ -232,6 +240,23 @@ test('spawn() builds a live ragdoll, registers one BodyState per part, and tears
     // docs/ragdolls.md. This is the one assertion in this file that would surface that as a hard
     // failure rather than a byte-counting mismatch.
     assert.doesNotThrow(() => step(ps, 5), 'the world corrupted after tearing the ragdoll down');
+
+    // spawn() again on the SAME template, after the previous instance was destroyed - issue #275's
+    // regression case at the unit level (see "spawn -> destroy -> spawn again... 5 times" below
+    // for the dedicated stress test).
+    const instance2 = ps.ragdollSystem.spawn(template);
+    assert.equal(
+        instance2.ragdoll.GetBodyCount(),
+        4,
+        'respawning on the same template produced an empty ragdoll'
+    );
+    assert.equal(instance2.bodyStates.length, 4);
+    step(ps, 5);
+    instance2.destroy();
+    assert.doesNotThrow(
+        () => step(ps, 5),
+        'the world corrupted after tearing the respawned ragdoll down'
+    );
 
     template.destroy();
     ps.destroy();
@@ -402,5 +427,51 @@ test('activate=false spawns a ragdoll that starts asleep', async () => {
 
     instance.destroy();
     template.destroy();
+    ps.destroy();
+});
+
+test('spawn -> destroy -> spawn again on the same template and PhysicsSystem, 5 times (issue #275)', async () => {
+    const ps = await newWarmedWorld('ragdoll-respawn-stress');
+    const mesh = buildSkinnedMesh(buildBoneChain(20));
+    const template = ps.ragdollSystem.buildTemplate(mesh.skeleton, { layer: Layer.RIG });
+
+    // baseline is taken AFTER buildTemplate() (which now creates its own internal "keeper"
+    // Ragdoll - see the module doc) so the keeper's one-time cost isn't mistaken for a per-cycle
+    // leak, matching newWarmedWorld's own warmup rationale above.
+    const before = freeMemory();
+
+    for (let cycle = 1; cycle <= 5; cycle++) {
+        const instance = ps.ragdollSystem.spawn(template);
+        assert.equal(
+            instance.ragdoll.GetBodyCount(),
+            4,
+            `cycle ${cycle}: spawn() produced an empty ragdoll - issue #275 regressed`
+        );
+        assert.notEqual(
+            instance.ragdoll.GetBodyID(0).GetIndexAndSequenceNumber(),
+            0,
+            `cycle ${cycle}: body 0 is Jolt's invalid-body sentinel`
+        );
+        assert.equal(instance.bodyStates.length, 4);
+        for (const state of instance.bodyStates) assert.isFalse(state.disposed);
+
+        step(ps, 5);
+
+        instance.destroy();
+        for (const state of instance.bodyStates) assert.isTrue(state.disposed);
+        assert.doesNotThrow(
+            () => step(ps, 3),
+            `cycle ${cycle}: the world corrupted after tearing the ragdoll down`
+        );
+    }
+
+    template.destroy();
+
+    assert.isAtLeast(
+        freeMemory(),
+        before - 128,
+        '5 spawn/destroy cycles + template.destroy() did not return the wasm heap'
+    );
+
     ps.destroy();
 });
