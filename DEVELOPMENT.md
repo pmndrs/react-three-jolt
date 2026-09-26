@@ -206,17 +206,25 @@ A github action will create a PR for bumping the version based on changesets.
 
 ## Linting and formatting
 
-This project uses [Biome](https://biomejs.dev/) for both linting and formatting (it replaced
-ESLint + Prettier).
+This project uses [ESLint](https://eslint.org/) (flat config, `eslint.config.mjs`) for linting
+and [Prettier](https://prettier.io/) for formatting - the same split drei and react-three-fiber
+use. It used Biome for both from mid-2024 through the 1.0 alpha; see [`LINTING.md`](./LINTING.md)
+for what that migration changed and why.
 
 ```sh
-> yarn lint    # biome check .
-> yarn format  # biome format --write .
+> yarn lint           # eslint .
+> yarn format         # prettier --write .
+> yarn format:check   # prettier --check .
 ```
 
-`yarn lint` runs in CI and must exit 0. A handful of rules are currently downgraded to
-`warn` rather than fixed outright - see [`LINTING.md`](./LINTING.md) for the list and
-the plan to re-enable them one by one.
+`yarn lint` and `yarn format:check` both run in CI and must exit 0. Formatting and linting are
+separate commands and separate CI steps on purpose: this repo does not use
+`eslint-plugin-prettier`, so a formatting problem is always reported by `format:check`, never by
+`lint`. A handful of lint rules are currently downgraded to `warn` rather than fixed outright -
+see [`LINTING.md`](./LINTING.md) for the list and the plan to re-enable them one by one.
+
+Import order is not enforced. Neither is Biome's `assist.organizeImports`, which this repo used
+to rely on - see [`LINTING.md`](./LINTING.md#import-sorting-dropped) if you're used to it.
 
 ## Continuous Integration
 
