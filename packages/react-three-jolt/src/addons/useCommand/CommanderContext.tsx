@@ -1,7 +1,7 @@
 // `React` is used as a value by the classic JSX transform this package compiles with
 // React stays a *value* import: this package compiles JSX with the classic runtime, so the
-// emitted `React.createElement` calls need it at runtime (biome's useImportType will offer to
-// make it `import type` - don't).
+// emitted `React.createElement` calls need it at runtime (an autofixer for eslint's
+// @typescript-eslint/consistent-type-imports would offer to make it `import type` - don't).
 import React, { createContext, useEffect, useState } from 'react';
 import { Commander } from './Commander';
 

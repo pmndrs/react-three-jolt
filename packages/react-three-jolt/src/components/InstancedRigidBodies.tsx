@@ -261,7 +261,7 @@ export const InstancedRigidBodies = memo(function InstancedRigidBodies({
         return () => {
             for (const off of offs) off();
         };
-        // biome-ignore lint/correctness/useExhaustiveDependencies: `subscribed` stands in for which handlers are present, `count` for the instance set
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- `subscribed` stands in for which handlers are present, `count` for the instance set
     }, [count, subscribed]);
 
     // cleanup: remove every body this component created, and release the InstancedMesh (and
@@ -290,7 +290,7 @@ export const InstancedRigidBodies = memo(function InstancedRigidBodies({
                 ownedMaterialRef.current = null;
             }
         };
-        // biome-ignore lint/correctness/useExhaustiveDependencies: unmount-only teardown.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount-only teardown.
     }, []);
 
     return (

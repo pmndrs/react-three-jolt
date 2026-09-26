@@ -131,11 +131,7 @@ const nextAutoUserData = () => AUTO_USER_DATA_BASE + (autoUserDataCounter++ % 0x
 
 /** The contact events a `<Shape>` can scope to itself. */
 type ShapeEvent =
-    | 'collisionEnter'
-    | 'collisionPersist'
-    | 'collisionExit'
-    | 'sensorEnter'
-    | 'sensorExit';
+    'collisionEnter' | 'collisionPersist' | 'collisionExit' | 'sensorEnter' | 'sensorExit';
 
 /** What a `<Shape>` ref exposes: the description it built and the shape it owns. */
 export type ShapeHandle = {
@@ -273,8 +269,7 @@ export const Shape = memo(function Shape(props: ShapeProps) {
     // our own (leaf) description. Memoised because the convex/trimesh paths walk the geometry
     const localDescriptor = useMemo(
         () => describeShapeFromOptions(type, options as ShapeOptions),
-        // biome-ignore lint/correctness/useExhaustiveDependencies: propsKey is the content
-        // hash of `type` + `options`, which is exactly what this depends on
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- propsKey is the content hash of `type` + `options`, which is exactly what this depends on
         [propsKey]
     );
 
@@ -293,8 +288,7 @@ export const Shape = memo(function Shape(props: ShapeProps) {
                 number
             ]
         };
-        // biome-ignore lint/correctness/useExhaustiveDependencies: transformKey is the
-        // content hash of `position` + `rotation`
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- transformKey is the content hash of `position` + `rotation`
     }, [transformKey]);
 
     // read through refs so the runtime edit path below can compose a descriptor without
@@ -341,9 +335,7 @@ export const Shape = memo(function Shape(props: ShapeProps) {
 
     const resolveDescriptor = useCallback(
         () => composeDescriptor(),
-        // biome-ignore lint/correctness/useExhaustiveDependencies: this wrapper exists only
-        // to change identity when the content behind `composeDescriptor`'s refs changes, so
-        // the effects below re-run - `subShapeVersion` is how a child change reaches us
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- this wrapper exists only to change identity when the content behind `composeDescriptor`'s refs changes, so the effects below re-run - `subShapeVersion` is how a child change reaches us
         [composeDescriptor, localDescriptor, transform, subShapeVersion, shapeUserData, name]
     );
 
