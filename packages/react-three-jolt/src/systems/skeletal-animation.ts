@@ -67,7 +67,10 @@ export function createSkeletalAnimation(
         jolt.destroy(jointName);
 
         // Collect keyframes for this joint from position and quaternion tracks
-        const keyframeMap = new Map<number, { time: number; position?: THREE.Vector3; quaternion?: THREE.Quaternion }>();
+        const keyframeMap = new Map<
+            number,
+            { time: number; position?: THREE.Vector3; quaternion?: THREE.Quaternion }
+        >();
 
         // Process position track
         const positionTrack = clip.tracks.find((t) => t.name === `${boneName}.position`);

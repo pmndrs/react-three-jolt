@@ -5,11 +5,7 @@
 import type Jolt from 'jolt-physics';
 import * as THREE from 'three';
 import { assert, beforeAll, test } from 'vitest';
-import {
-    createJoltSkeleton,
-    createSkeletalAnimation,
-    sampleTo
-} from '../src/systems';
+import { createJoltSkeleton, createSkeletalAnimation, sampleTo } from '../src/systems';
 import { initJolt, Raw } from '../src/raw';
 
 let jolt: typeof Jolt;
@@ -100,11 +96,7 @@ test('createSkeletalAnimation maps position and quaternion tracks by bone name',
     assert.isFalse(animation.IsLooping(), 'isLooping should default to false');
 
     const animatedJoints = animation.GetAnimatedJoints();
-    assert.equal(
-        animatedJoints.size(),
-        3,
-        'should have animated joints for root, spine, and arm'
-    );
+    assert.equal(animatedJoints.size(), 3, 'should have animated joints for root, spine, and arm');
 
     // Check that keyframes were built correctly
     let foundRoot = false;
@@ -196,7 +188,12 @@ test('sampleTo interpolates keyframes correctly on a synthetic clip', () => {
     // At t=1, spine should be at y=1.5 (linear interpolation from 1 to 2)
     sampleTo(joltAnimation, joltPose, 1);
     const spine1 = joltPose.GetJoint(1);
-    assert.approximately(spine1.mTranslation.GetY(), 1.5, epsilon, 'spine at t=1 should be at y=1.5');
+    assert.approximately(
+        spine1.mTranslation.GetY(),
+        1.5,
+        epsilon,
+        'spine at t=1 should be at y=1.5'
+    );
 
     // At t=2, spine should be at y=2
     sampleTo(joltAnimation, joltPose, 2);
@@ -206,12 +203,22 @@ test('sampleTo interpolates keyframes correctly on a synthetic clip', () => {
     // At t=0.5, spine should be at y=1.25 (interpolation at 1/4 of the range)
     sampleTo(joltAnimation, joltPose, 0.5);
     const spine05 = joltPose.GetJoint(1);
-    assert.approximately(spine05.mTranslation.GetY(), 1.25, epsilon, 'spine at t=0.5 should be at y=1.25');
+    assert.approximately(
+        spine05.mTranslation.GetY(),
+        1.25,
+        epsilon,
+        'spine at t=0.5 should be at y=1.25'
+    );
 
     // At t=1.5, spine should be at y=1.75 (interpolation at 3/4 of the range)
     sampleTo(joltAnimation, joltPose, 1.5);
     const spine15 = joltPose.GetJoint(1);
-    assert.approximately(spine15.mTranslation.GetY(), 1.75, epsilon, 'spine at t=1.5 should be at y=1.75');
+    assert.approximately(
+        spine15.mTranslation.GetY(),
+        1.75,
+        epsilon,
+        'spine at t=1.5 should be at y=1.75'
+    );
 
     // Verify arm rotation is interpolated: should go from identity to 90 degrees around Y
     sampleTo(joltAnimation, joltPose, 0);
@@ -219,15 +226,30 @@ test('sampleTo interpolates keyframes correctly on a synthetic clip', () => {
     assert.approximately(arm0.mRotation.GetX(), 0, epsilon, 'arm at t=0 rotation.x should be ~0');
     assert.approximately(arm0.mRotation.GetY(), 0, epsilon, 'arm at t=0 rotation.y should be ~0');
     assert.approximately(arm0.mRotation.GetZ(), 0, epsilon, 'arm at t=0 rotation.z should be ~0');
-    assert.approximately(arm0.mRotation.GetW(), 1, epsilon, 'arm at t=0 rotation.w should be ~1 (identity)');
+    assert.approximately(
+        arm0.mRotation.GetW(),
+        1,
+        epsilon,
+        'arm at t=0 rotation.w should be ~1 (identity)'
+    );
 
     // At t=2, arm should be at 90 degrees (sin(45deg) ≈ 0.707, cos(45deg) ≈ 0.707)
     sampleTo(joltAnimation, joltPose, 2);
     const arm2 = joltPose.GetJoint(2);
     const sin45 = Math.sin(Math.PI / 4);
     const cos45 = Math.cos(Math.PI / 4);
-    assert.approximately(arm2.mRotation.GetY(), sin45, epsilon, 'arm at t=2 rotation.y should be ~sin(45deg)');
-    assert.approximately(arm2.mRotation.GetW(), cos45, epsilon, 'arm at t=2 rotation.w should be ~cos(45deg)');
+    assert.approximately(
+        arm2.mRotation.GetY(),
+        sin45,
+        epsilon,
+        'arm at t=2 rotation.y should be ~sin(45deg)'
+    );
+    assert.approximately(
+        arm2.mRotation.GetW(),
+        cos45,
+        epsilon,
+        'arm at t=2 rotation.w should be ~cos(45deg)'
+    );
 
     jolt.destroy(joltPose);
     jolt.destroy(joltAnimation);
