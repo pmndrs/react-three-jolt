@@ -235,25 +235,82 @@ export function buildSoftBodySharedSettings(
 }
 
 /**
- * `geometry` run through `mergeVertices` so shared positions become one Jolt vertex - required
- * before {@link buildSoftBodySharedSettings}, since an un-merged geometry (every three.js
- * primitive that isn't already indexed, or one duplicated for flat shading) would otherwise give
- * a seam's vertices separate, unconnected Jolt vertices.
+ * `geometry` welded so shared positions become one Jolt vertex - required before
+ * {@link buildSoftBodySharedSettings}, since an un-welded geometry (every three.js primitive
+ * that isn't already indexed, or one duplicated for flat shading/UV seams) would otherwise give
+ * a seam's vertices separate, unconnected Jolt vertices - the physics mesh has an actual gap
+ * there, which pressure/tension then pulls open (QA: "the ball is split open on the side").
+ *
+ * Welds on **position only**, not three's `mergeVertices(geometry)` directly - that only merges
+ * vertices whose *every* attribute matches, and every UV-mapped closed shape (a `SphereGeometry`,
+ * for one) duplicates a column of vertices along the UV seam (and the poles) that share a
+ * position but differ in `uv`, so they never merge and the seam never closes. Instead this welds
+ * a position-only clone (so distinct-uv/normal duplicates at the same position still collapse to
+ * one vertex), then rebuilds the render geometry's other attributes (uv, color, ...) around that
+ * same deduplicated vertex set, taking each attribute's value from whichever original vertex
+ * happened to weld first into a given slot - fine for uv/color, where an exact seam match isn't
+ * required the way it is for position.
  *
  * Returns a **new** geometry; the caller (`SoftBodySystem.addBody`) swaps it onto the mesh so the
  * rendered vertex order matches the simulated one exactly - `SoftBodyState.syncGeometry` writes
- * simulated positions back into this same buffer by index.
+ * simulated positions back into this same buffer by index, and recomputes normals every frame
+ * (so a stale/absent `normal` attribute here doesn't matter).
  */
 export function prepareSoftBodyGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-    const merged = mergeVertices(geometry);
-    if (!merged.index)
+    const posAttr = geometry.attributes.position as THREE.BufferAttribute | undefined;
+    if (!posAttr) throw new Error('r3/jolt: SoftBody geometry must have a position attribute.');
+
+    const positionOnly = new THREE.BufferGeometry();
+    positionOnly.setAttribute('position', posAttr);
+    if (geometry.index) positionOnly.setIndex(geometry.index);
+    const merged = mergeVertices(positionOnly);
+    const mergedIndex = merged.index;
+    if (!mergedIndex) {
         // mergeVertices always indexes its result; this would only happen against a future three
         // version that changed that contract.
         devWarn(
             'r3/jolt: SoftBody - mergeVertices returned a non-indexed geometry; this is ' +
                 'unexpected and the soft body will fail to build.'
         );
-    return merged;
+        return merged;
+    }
+
+    const weldedVertexCount = merged.attributes.position.count;
+    const cornerCount = mergedIndex.count;
+    const originalIndex = geometry.index;
+
+    // For every corner (original vertex reference) find which welded slot it landed in, and
+    // record the FIRST original vertex seen for each slot - that's the source for every
+    // non-position attribute on that welded vertex.
+    const firstCorner = new Int32Array(weldedVertexCount).fill(-1);
+    for (let c = 0; c < cornerCount; c++) {
+        const welded = mergedIndex.getX(c);
+        if (firstCorner[welded] === -1)
+            firstCorner[welded] = originalIndex ? originalIndex.getX(c) : c;
+    }
+
+    const result = new THREE.BufferGeometry();
+    result.setIndex(mergedIndex);
+    for (const name of Object.keys(geometry.attributes)) {
+        const attr = geometry.attributes[name] as THREE.BufferAttribute;
+        if (name === 'position') {
+            result.setAttribute('position', merged.attributes.position);
+            continue;
+        }
+        const itemSize = attr.itemSize;
+        const newArray = new (attr.array.constructor as new (length: number) => typeof attr.array)(
+            weldedVertexCount * itemSize
+        );
+        const newAttr = new THREE.BufferAttribute(newArray, itemSize, attr.normalized);
+        const getters = ['getX', 'getY', 'getZ', 'getW'] as const;
+        const setters = ['setX', 'setY', 'setZ', 'setW'] as const;
+        for (let v = 0; v < weldedVertexCount; v++) {
+            const source = firstCorner[v];
+            for (let k = 0; k < itemSize; k++) newAttr[setters[k]](v, attr[getters[k]](source));
+        }
+        result.setAttribute(name, newAttr);
+    }
+    return result;
 }
 
 /** One live soft body: the Jolt body, the mesh whose geometry it drives, and its shared settings. */
