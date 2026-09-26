@@ -308,7 +308,6 @@ function trackAllocations() {
     const restoreCtors: Array<() => void> = [];
     for (const key of Object.getOwnPropertyNames(proto)) {
         if (!/^[A-Z]/.test(key)) continue;
-        // biome-ignore lint/suspicious/noExplicitAny: embind constructor, no shared base type
         const original = proto[key] as any;
         if (typeof original !== 'function' || !original.prototype) continue;
         const wrapped = new Proxy(original, {
