@@ -11,7 +11,15 @@ import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Layer } from '../constants';
 import { castObject, Raw } from '../raw';
+import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
 import { devWarn, quat, vec3 } from '../utils';
+
+// Scale component for `syncGeometry`'s compose/decompose round trip - a soft body has no
+// independent "shape scale" the way a `<RigidBody>`'s `activeScale` does, so this is always
+// identity; decompose still needs somewhere to put the scale it derives from the composed
+// matrix, which is discarded (never written to `object.scale`) exactly like `BodyState`'s own
+// per-frame sync discards its `_scale` output. Never mutated - safe to share.
+const UNIT_SCALE = new THREE.Vector3(1, 1, 1);
 
 /**
  * How `CreateConstraints` builds the extra constraints on top of the structural (triangle-edge)
@@ -322,6 +330,18 @@ export class SoftBodyState {
     /** Owns one reference, released in {@link destroy}. See {@link buildSoftBodySharedSettings}. */
     private sharedSettings: Jolt.SoftBodySharedSettings | undefined;
     private readonly bodyInterface: Jolt.BodyInterface;
+    /**
+     * The space `syncGeometry` writes the synced pose into: the object's **parent**, captured
+     * once here (not re-read every frame) exactly like `BodyState`'s own field of the same name
+     * (issue #300) - `body.GetPosition()`/`GetRotation()` are always in Jolt's world space, but
+     * `object.position`/`.quaternion` are local to whatever three.js parent the mesh sits under,
+     * which is the scene root (identity) for every shipped demo today but not guaranteed in
+     * general (nesting a `<SoftBody>`/`<Cloth>` under a positioned/rotated `<group>`, say).
+     * Deliberately the PARENT's `matrixWorld`, never the object's own - taking the object's own
+     * was #300's bug: it only reads as identity before the object has ever rendered, and once a
+     * frame has run, it already holds the spawn pose, so every sync would subtract it again.
+     */
+    private readonly invertedWorldMatrix: THREE.Matrix4;
     disposed = false;
 
     constructor(
@@ -337,6 +357,12 @@ export class SoftBodyState {
         this.bodyInterface = bodyInterface;
         this.vertexCount = vertexCount;
         this.handle = body.GetID().GetIndexAndSequenceNumber();
+
+        const parent = object.parent;
+        parent?.updateWorldMatrix(true, false);
+        this.invertedWorldMatrix = parent
+            ? parent.matrixWorld.clone().invert()
+            : new THREE.Matrix4();
     }
 
     /**
@@ -348,8 +374,10 @@ export class SoftBodyState {
      * `JoltInterface.sGetFreeMemory()` unchanged across 500 frames of reads. Vertices are in the
      * body's **local** space (relative to an origin Jolt re-centers on the simulated shape when
      * `updatePosition` is true, the default) - the object's position/rotation are synced from the
-     * body's pose exactly like `BodyState.readPose`, so world space comes from the two combined,
-     * the same way a `<RigidBody>`'s object and its collision shape do.
+     * body's pose, converted from Jolt's world space into the object's parent's space via
+     * {@link invertedWorldMatrix} exactly like `BodyState`'s own per-frame sync, so world space
+     * comes from the two combined, the same way a `<RigidBody>`'s object and its collision shape
+     * do.
      */
     syncGeometry(): void {
         if (this.disposed) return;
@@ -369,8 +397,20 @@ export class SoftBodyState {
         geometry.computeBoundingSphere();
 
         // `GetPosition`/`GetRotation` return static by-value temporaries - read, never destroy.
-        vec3.joltToThree(this.body.GetPosition(), this.object.position);
-        quat.joltToThree(this.body.GetRotation(), this.object.quaternion);
+        // World space pose -> _vector3/_quaternion, then converted into the object's PARENT
+        // space via `invertedWorldMatrix` (issue #300's fix, applied here too) exactly like
+        // `PhysicsSystem`'s own `syncBodyToObject` does for a `<RigidBody>` - `object.position`/
+        // `.quaternion` are local to the parent, not world, so writing Jolt's world pose into
+        // them directly (as this used to) is only correct while that parent is the identity
+        // (every shipped demo today, but not guaranteed in general).
+        vec3.joltToThree(this.body.GetPosition(), _vector3);
+        quat.joltToThree(this.body.GetRotation(), _quaternion);
+        _matrix4.compose(_vector3, _quaternion, UNIT_SCALE).premultiply(this.invertedWorldMatrix);
+        // `_scale` is discarded, same as `BodyState`'s own per-frame sync - this object's scale
+        // is whatever it was already set to (there is no per-body "shape scale" to reapply).
+        _matrix4.decompose(_position, _rotation, _scale);
+        this.object.position.copy(_position);
+        this.object.quaternion.copy(_rotation);
     }
 
     /**
