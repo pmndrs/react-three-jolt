@@ -22,19 +22,26 @@ import {
 import { NavLink, type NavLinkProps, Route, Routes, useLocation } from 'react-router';
 import { BallBox } from './examples/BallBox';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
+import { CollisionFiltering } from './examples/CollisionFiltering';
 import { Constraints } from './examples/Constraints';
+import { ContactEvents } from './examples/ContactEvents';
 import { CubeHeap } from './examples/CubeHeap';
 import { FloatingPlatforms } from './examples/FloatingPlatforms';
 import { FooterFunnel } from './examples/FooterFunnel';
 import { FourWheelDemo } from './examples/FourWheelsWithHeightmap';
+import { Friction } from './examples/Friction';
 import { HeightfieldDemo } from './examples/Heightfield';
 import { Impulses } from './examples/Impulses';
 import { JustBoxes } from './examples/JustBoxes';
+import { Motors } from './examples/Motors';
 import { MotionSources } from './examples/motionSources';
 import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
+import { Sensors } from './examples/Sensors';
+import { Shapecast } from './examples/Shapecast';
+import { SleepWake } from './examples/SleepWake';
 import { JoltMemoryReadout } from './JoltMemoryReadout';
 import {
     getJoltFactory,
@@ -135,6 +142,12 @@ const routes: RouteMap = {
         background: '#3d405b',
         element: <RaycastManyDemo />
     },
+    Shapecast: {
+        position: [0, 6, 20],
+        target: [0, 2, 0],
+        background: '#22223b',
+        element: <Shapecast />
+    },
     Heightfield: {
         position: [150, 110, 150],
         target: [0, 0, 0],
@@ -161,6 +174,20 @@ const routes: RouteMap = {
         background: '#1d3557',
         element: <OneWayPlatform />
     },
+    SleepWake: {
+        label: 'Sleep and Wake',
+        position: [0, 12, 8],
+        target: [0, 3, 0],
+        background: '#3d405b',
+        element: <SleepWake />
+    },
+    ContactEvents: {
+        label: 'Contact Events',
+        position: [0, 8, 20],
+        target: [0, 3, 0],
+        background: '#22333b',
+        element: <ContactEvents />
+    },
     Vehicle: {
         position: [2, 25, 51],
         target: [0, 1, 10],
@@ -172,6 +199,13 @@ const routes: RouteMap = {
         target: [0, 1, 10],
         background: '#3d405b',
         element: <CharacterVirtualDemo />
+    },
+    CollisionFiltering: {
+        label: 'Collision Filtering',
+        position: [13, 12, 13],
+        target: [0, 6, 0],
+        background: '#22223b',
+        element: <CollisionFiltering />
     },
     // just for current dev purposes
     Boxes: {
@@ -206,6 +240,13 @@ const routes: RouteMap = {
         background: '#3d405b',
         element: <Constraints />
     },
+    Motors: {
+        label: 'Motors',
+        position: [0, 10, 28],
+        target: [0, 6, 0],
+        background: '#22223b',
+        element: <Motors />
+    },
     FooterFunnel: {
         label: 'Footer Funnel',
         position: [0, 2, 40],
@@ -213,6 +254,18 @@ const routes: RouteMap = {
         transition: false,
         background: '#141622',
         element: <FooterFunnel />
+    },
+    Friction: {
+        position: [0, 10, 22],
+        target: [0, 3, 0],
+        background: '#2a4d3a',
+        element: <Friction />
+    },
+    Sensors: {
+        position: [0, 20, 20],
+        target: [0, 5, 0],
+        background: '#2c3e50',
+        element: <Sensors />
     }
 };
 

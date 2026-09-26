@@ -1206,20 +1206,55 @@ export class BodyState {
     //* Force Manipulation ----------------------------------
     // Every one of these takes its vector by value and accumulates it into the body, so the
     // shared scratch objects are safe and these stay allocation free in the frame loop.
-    // apply a force to the body
-    applyForce(force: Vector3) {
+    /**
+     * Apply a continuous force to the body's center of mass, accumulated until the next step
+     * (issue #299).
+     *
+     * `Body.AddForce` (no `BodyInterface`) never activates a sleeping body - the force sits in
+     * the accumulator and is simply dropped when the body is removed from the active list at
+     * the end of the step, so nothing ever happens. `BodyInterface.AddForce` takes an
+     * `EActivation` mode directly, so - unlike {@link setVelocity}/{@link addImpulse}, which
+     * pick between a `body`/`bodyInterface` call - this always goes through the body interface
+     * and the mode alone decides whether it wakes the body.
+     *
+     * @param options.activate override {@link activateOnChange} for this call (issue #167's
+     * pattern, applied here for #299).
+     */
+    applyForce(force: Vector3, options?: { activate?: boolean }) {
         if (this.checkDisposed()) return;
-        this.body.AddForce(joltScratch.vec3(force));
+        this.bodyInterface.AddForce(
+            this.BodyID,
+            joltScratch.vec3(force),
+            this.resolveActivation(options?.activate)
+        );
     }
-    // apply a torque to the body
-    applyTorque(torque: Vector3) {
+    /** {@link applyForce}'s torque counterpart - see it for why this goes through `BodyInterface`. */
+    applyTorque(torque: Vector3, options?: { activate?: boolean }) {
         if (this.checkDisposed()) return;
-        this.body.AddTorque(joltScratch.vec3(torque));
+        this.bodyInterface.AddTorque(
+            this.BodyID,
+            joltScratch.vec3(torque),
+            this.resolveActivation(options?.activate)
+        );
     }
-    // add impulse to the body
-    addImpulse(impulse: Vector3) {
+    /**
+     * Add an instantaneous impulse to the body's center of mass (issue #299).
+     *
+     * `Body.AddImpulse` (no `BodyInterface`) never activates a sleeping body, same failure as
+     * `Body.AddForce` above - this is what made clicking a sleeping box in the SleepWake demo do
+     * nothing. `BodyInterface.AddImpulse` has no `EActivation` parameter at all: like
+     * `SetLinearVelocity`, it always activates unconditionally. So, exactly like
+     * {@link setVelocity}, which call runs is what implements the `{ activate }` override.
+     *
+     * @param options.activate override {@link activateOnChange} for this call.
+     */
+    addImpulse(impulse: Vector3, options?: { activate?: boolean }) {
         if (this.checkDisposed()) return;
-        this.body.AddImpulse(joltScratch.vec3(impulse));
+        if (this.shouldActivate(options?.activate)) {
+            this.bodyInterface.AddImpulse(this.BodyID, joltScratch.vec3(impulse));
+        } else {
+            this.body.AddImpulse(joltScratch.vec3(impulse));
+        }
     }
     //* Kinematic motion ----------------------------------
     /**
