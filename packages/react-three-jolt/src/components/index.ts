@@ -1,4 +1,6 @@
 export * from './Attractor';
+export * from './Balloon';
+export * from './Cloth';
 export * from './Debug';
 export * from './FrameStepper';
 export * from './Heightfield';

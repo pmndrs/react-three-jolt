@@ -22,8 +22,11 @@ import { SoftBody } from '@react-three/jolt';
 
 This is new (issue #243) and considerably rawer than `<RigidBody>`: one mesh in, one body out, no
 compound shapes, no collider components, no volume (tetrahedra) constraints, and no reactive
-props — everything is read once, when the body is created. Demo pages are a follow-up
-([#244](https://github.com/pmndrs/react-three-jolt/issues/244)).
+props — everything is read once, when the body is created.
+
+`<Cloth>` and `<Balloon>` (below) are convenience wrappers around it for the two shapes that come
+up over and over — a pinned plane and a pressurized sphere — plus `apps/examples`' `Cloth` and
+`SoftBodies` demo pages ([#244](https://github.com/pmndrs/react-three-jolt/issues/244)).
 
 ## How the geometry becomes a body
 
@@ -160,6 +163,90 @@ function LogSoftBodies() {
 
 `softBodySystem.addBody(mesh, options)` / `.removeBody(handle)` / `.getBody(handle)` are the same
 calls `<SoftBody>` makes for you, for building one outside a component.
+
+## `<Cloth>`
+
+A convenience wrapper around `<SoftBody>` for the common case of a flat, pinned plane — a flag, a
+banner, a curtain. It builds the geometry and the pin predicate for you from a few numbers instead
+of a hand-written `<mesh>` and `fixed` function.
+
+```tsx
+import { Cloth } from '@react-three/jolt';
+
+<Cloth width={4} height={4} segmentsX={12} segmentsY={12} pinned="top" position={[0, 8, 0]}>
+    <meshStandardMaterial color="tomato" side={2 /* THREE.DoubleSide */} />
+</Cloth>;
+```
+
+| prop | type | notes |
+| --- | --- | --- |
+| `width` / `height` | `number` | world size of the generated plane. Default `4` |
+| `segmentsX` / `segmentsY` | `number` | grid resolution — more segments drape more convincingly, at a steeper per-frame cost (every vertex is read back every rendered frame, see [Performance](#performance)). Default `10` |
+| `pinned` | `'top' \| 'corners' \| number[]` | which vertices to anchor — see below. Default `'top'` |
+| `position` / `rotation` | | the generated `<mesh>`'s own pose, exactly like any three.js/JSX props — `<SoftBody>` itself has none, see [Props](#props) above |
+| `children` | `ReactNode` | material(s) for the generated mesh. Defaults to a double-sided `<meshStandardMaterial>` |
+| everything else | | passed straight through to `<SoftBody>` (`pressure`, `compliance`, `friction`, `mass`, `ref`, …) |
+
+`pinned`:
+
+- `'top'` — the whole top edge (a curtain rod, a flagpole's crossbar).
+- `'corners'` — the four corners only. Remember the [pinning note](#pinning-vertices) above: at
+  `compliance: 0` (the default) this leaves the sheet with no slack at all, dead flat. Raise
+  `compliance` if you want visible sag/billow with corners pinned.
+- `number[]` — explicit vertex indices, straight through to `<SoftBody fixed>`. An empty array
+  (`[]`) pins nothing at all — useful for a cloth that's meant to just fall and drape over
+  something through ordinary collision, not hang from an anchor (see `SoftBodies.tsx`'s table-drape
+  demo).
+
+`createClothGeometry(width, height, segmentsX, segmentsY)` (from `@react-three/jolt`) is the plain
+`THREE.PlaneGeometry` factory `<Cloth>` builds on, if you want the geometry without the component —
+it does no rotation, so it's already the right orientation to hang vertically with no rotation
+prop at all (gravity along -Y does the rest); rotate the `<mesh>`/`<Cloth rotation>` to lay one
+flat instead. `resolveClothFixed(pinned, width, height)` is the matching pin-predicate builder.
+
+### Wind
+
+Neither `<SoftBody>` nor `<Cloth>` has a built-in wind prop — a demo builds it out of
+`useBeforePhysicsStep` (not `useFrame`: a force means a fixed amount of momentum only when it's
+applied once per physics *substep*, exactly like `<Attractor>`) and `Jolt.Body.AddForce`, applied
+directly to `SoftBodyState.body`:
+
+```tsx
+useBeforePhysicsStep(() => {
+    const state = clothRef.current;
+    if (!state || state.disposed) return;
+    state.body.AddForce(joltScratch.vec3(0, 0, windStrength));
+});
+```
+
+`AddForce` does affect soft bodies (this isn't documented anywhere in jolt-physics's own typings —
+verified empirically), but it has to push mostly **out of the sheet's own rest plane** to visibly
+do anything: a sheet pinned rigidly along a straight edge (`pinned="top"`, `compliance` near `0`)
+can only bend out of that plane, not shear within it — a force parallel to the pinned edge, or
+in-plane with an unrotated vertical sheet, is almost inert. See `apps/examples/src/examples/Cloth.tsx`
+for a full flag-with-wind scene.
+
+## `<Balloon>`
+
+The other common shape — a closed, pressurized sphere, wrapping `<SoftBody pressure>` around a
+`THREE.SphereGeometry`:
+
+```tsx
+import { Balloon } from '@react-three/jolt';
+
+<Balloon radius={1} pressure={2500} position={[0, 5, 0]}>
+    <meshStandardMaterial color="hotpink" />
+</Balloon>;
+```
+
+| prop | type | notes |
+| --- | --- | --- |
+| `radius` | `number` | default `1` |
+| `widthSegments` / `heightSegments` | `number` | `THREE.SphereGeometry`'s own segment counts. Default `16`/`12` |
+| `pressure` | `number` | default `2500` — comfortably above what a body its own size landing on it needs to resist collapsing, see `test/soft-body.test.ts`'s pressurized-sphere test |
+| `position` | | the generated `<mesh>`'s pose |
+| `children` | `ReactNode` | material(s) for the generated mesh. Defaults to a `<meshStandardMaterial>` |
+| everything else | | passed straight through to `<SoftBody>` |
 
 ## Lifecycle & memory
 

@@ -22,6 +22,7 @@ import {
 import { NavLink, type NavLinkProps, Route, Routes, useLocation } from 'react-router';
 import { BallBox } from './examples/BallBox';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
+import { ClothDemo } from './examples/Cloth';
 import { Constraints } from './examples/Constraints';
 import { CubeHeap } from './examples/CubeHeap';
 import { FloatingPlatforms } from './examples/FloatingPlatforms';
@@ -35,6 +36,7 @@ import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
+import { SoftBodiesDemo } from './examples/SoftBodies';
 import { JoltMemoryReadout } from './JoltMemoryReadout';
 import {
     getJoltFactory,
@@ -213,6 +215,19 @@ const routes: RouteMap = {
         transition: false,
         background: '#141622',
         element: <FooterFunnel />
+    },
+    Cloth: {
+        position: [0, 12, 22],
+        target: [0, 8, 0],
+        background: '#457b9d',
+        element: <ClothDemo />
+    },
+    SoftBodies: {
+        label: 'Soft Bodies',
+        position: [0, 14, 26],
+        target: [0, 3, 0],
+        background: '#2a9d8f',
+        element: <SoftBodiesDemo />
     }
 };
 
