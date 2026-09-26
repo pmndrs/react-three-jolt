@@ -1,0 +1,27 @@
+**/dist
+**/node_modules
+**/coverage
+apps/examples/public
+.yarn
+yarn.lock
+**/*.glsl
+README.md
+docs/out
+
+# Biome never had a Markdown/MDX or YAML printer, so none of these were ever
+# reformatted. Prettier does support them, but its printers don't share this
+# repo's style: Markdown tables get column-padded and *em* is rewritten to
+# _em_ (verified against LINTING.md/DEVELOPMENT.md and the docs/*.mdx pages),
+# and YAML is reindented to this config's tabWidth: 4 regardless of the
+# file's own 2-space convention (verified against .github/workflows/ci.yml).
+# Both would rewrite dozens of files - the changesets backlog, every docs
+# page, all four workflow files - that this PR does not otherwise touch, on
+# top of the 28 PRs already stacked on this branch. Keep formatting scoped to
+# what Biome actually covered: JS/TS/JSX/TSX and JSON. The same is true of
+# apps/examples/index.html: Biome has no HTML printer either, and Prettier's
+# default 2-space HTML output does not match this repo's tabWidth: 4.
+*.md
+*.mdx
+*.yml
+*.yaml
+*.html
