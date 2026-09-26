@@ -77,8 +77,8 @@
     "scripts": {
         "test": "tsc -p tsconfig.test.json --noEmit && vitest run --coverage",
         "build": "tsc --noEmit && tsc -p tsconfig.build.json --emitDeclarationOnly --declarationMap && rollup --config rollup.config.mjs",
-        "format": "biome format --write .",
-        "lint": "biome check ."
+        "format": "prettier --write .",
+        "lint": "eslint ."
     },
     "peerDependencies": {
         "@react-three/fiber": ">=10.0.0-0",
@@ -96,7 +96,6 @@
         "suspend-react": "^0.1.3"
     },
     "devDependencies": {
-        "@biomejs/biome": "^2.5.14",
         "@react-three/fiber": "10.0.0-alpha.5",
         "@react-three/test-renderer": "10.0.0-alpha.5",
         "@rollup/plugin-commonjs": "^29.0.3",
