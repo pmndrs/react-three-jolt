@@ -22,7 +22,6 @@ export const useJolt = () => {
  * `fn` may be undefined, in which case the returned callback is a no-op; callers gate on the
  * prop being present, not on the callback's identity.
  */
-// biome-ignore lint/suspicious/noExplicitAny: passthrough wrapper for arbitrary handlers
 export function useEventCallback<T extends (...args: any[]) => any>(
     fn: T | undefined
 ): (...args: Parameters<T>) => ReturnType<T> | undefined {

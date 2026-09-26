@@ -66,7 +66,7 @@ export interface GenerateBodyOptions {
 // When debugging we need to create a three debug object
 // initially pulled from Jolt Demo,
 export function getThreeObjectForBody(body: Jolt.Body, color = '#E07A5F') {
-    let shape = body.GetShape();
+    const shape = body.GetShape();
     // lets see if we can get the material color by the shape
     // TODO this isn't in Jolt.js yet.
 
