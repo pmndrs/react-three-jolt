@@ -98,7 +98,12 @@ export function CharacterVirtualDemo() {
 
                 <BoundBoxes />
                 <CharacterController debug position={[0, 0, 0]}>
-                    <CameraRig />
+                    {/* Before the CameraRig options refactor (#86) the rig's camera was hard
+                        coded at (4,4,4) in rig space - an elevated, angled third-person view every
+                        `<CameraRig>` got automatically. #86 turned that into the `cameraPosition`
+                        option, whose own default is a flat (0,0,0), so this example lost its
+                        framing when it was never updated to ask for it explicitly (issue #301). */}
+                    <CameraRig cameraPosition={[4, 4, 4]} />
                 </CharacterController>
                 <Floor size={150} position={[0, -0.5, 0]} />
             </Physics>

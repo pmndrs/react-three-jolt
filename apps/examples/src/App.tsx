@@ -118,6 +118,16 @@ type RouteMap = {
         background?: string;
         element: JSX.Element;
         label?: string;
+        /**
+         * The demo mounts its own camera (a `<CameraRig>`, a vehicle chase cam, ...) and swaps it
+         * into `state.camera` once it attaches. `<ControlWrapper>`'s `<CameraControls makeDefault>`
+         * reactively rebinds to whatever `state.camera` is - so left mounted here it builds a
+         * second, fully live orbit-camera-controls instance around the *same* camera object the
+         * rig owns, and its unconditional per-frame `camera.position`/`.lookAt` write (not gated by
+         * `enabled`) fights the rig for that object every frame (issue #301). Skip `ControlWrapper`
+         * entirely for these routes instead.
+         */
+        ownsCamera?: boolean;
     };
 };
 
@@ -171,6 +181,8 @@ const routes: RouteMap = {
         position: [2, 25, 51],
         target: [0, 1, 10],
         background: '#3d405b',
+        // <CharacterVirtualDemo>'s <CameraRig> owns the camera - see `ownsCamera` above (#301)
+        ownsCamera: true,
         element: <CharacterVirtualDemo />
     },
     // just for current dev purposes
@@ -249,6 +261,9 @@ export const App = () => {
         transition: boolean;
     } | null>(null);
     const location = useLocation();
+    // synchronous with `location`, unlike `cameraProps` below - only gates whether
+    // `<ControlWrapper>` mounts at all, so it needs no transition of its own (#301)
+    const ownsCamera = Boolean(routes[location.pathname.replace('/', '')]?.ownsCamera);
 
     // this triggers a reset of the physics world
     const updatePhysicsKey = () => {
@@ -283,11 +298,16 @@ export const App = () => {
                 >
                     <color attach="background" args={[background]} />
 
-                    <ControlWrapper
-                        position={cameraProps?.position}
-                        target={cameraProps?.target}
-                        transition={cameraProps?.transition}
-                    />
+                    {/* Routes whose demo owns the camera (e.g. <CameraRig>) skip this entirely -
+                        `makeDefault` would otherwise rebind to whatever camera the demo swaps in
+                        and fight it for that object every frame (issue #301). */}
+                    {!ownsCamera && (
+                        <ControlWrapper
+                            position={cameraProps?.position}
+                            target={cameraProps?.target}
+                            transition={cameraProps?.transition}
+                        />
+                    )}
                     <demoContext.Provider
                         value={{ debug, paused, interpolate, physicsKey, module: joltModule }}
                     >
