@@ -1,11 +1,9 @@
-// Demo: <Water> volumes (issue #240).
+// Demo: <Water> volumes (issue #240) with per-body buoyancy overrides (issue #260).
 //
-// A single pool footprint carries *two* overlapping <Water> volumes, one per collision group:
-// a buoyant one for the "corks" (group 1) and an under-buoyant one for the "rocks" (group 2).
-// `volume.buoyancy` is a ratio to gravity, not an object density (see docs/api/buoyancy.mdx) -
-// there is no per-body density knob on `ApplyBuoyancyImpulse` itself, so this is how the library
-// simulates "boxes of different densities dropped into a pool": give each density its own volume
-// and let `group` pick which bodies each one affects.
+// A single <Water> volume with a default buoyancy, and bodies that override it with their own
+// `buoyancy` prop. This lets corks and rocks fall into the same pool and behave differently
+// without stacking overlapping volumes or collision groups.
+// `volume.buoyancy` is a ratio to gravity, not an object density (see docs/api/buoyancy.mdx).
 import { type BodyState, InstancedRigidBodies, Physics, RigidBody, Water } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt/addons';
 import { button, useControls } from 'leva';
@@ -22,13 +20,15 @@ const SPAWN_Y_RANGE = 5;
 export function Buoyancy() {
     const { debug, paused, interpolate, physicsKey, module } = useDemo();
 
-    const { flow, floatBuoyancy, sinkBuoyancy, linearDrag, angularDrag } = useControls('Water', {
-        flow: { value: 0, min: -4, max: 4, step: 0.25 },
-        floatBuoyancy: { value: 1.8, min: 1, max: 3, step: 0.1 },
-        sinkBuoyancy: { value: 0.35, min: 0, max: 0.9, step: 0.05 },
-        linearDrag: { value: 0.3, min: 0, max: 2, step: 0.05 },
-        angularDrag: { value: 0.05, min: 0, max: 1, step: 0.05 }
-    });
+    const { flow, defaultBuoyancy, corkBuoyancy, rockBuoyancy, linearDrag, angularDrag } =
+        useControls('Water', {
+            flow: { value: 0, min: -4, max: 4, step: 0.25 },
+            defaultBuoyancy: { value: 1.5, min: 0.5, max: 2.5, step: 0.1 },
+            corkBuoyancy: { value: 1.8, min: 1, max: 3, step: 0.1 },
+            rockBuoyancy: { value: 0.35, min: 0, max: 0.9, step: 0.05 },
+            linearDrag: { value: 0.3, min: 0, max: 2, step: 0.05 },
+            angularDrag: { value: 0.05, min: 0, max: 1, step: 0.05 }
+        });
 
     return (
         <Physics
@@ -41,8 +41,9 @@ export function Buoyancy() {
         >
             <BuoyancyInner
                 flow={flow}
-                floatBuoyancy={floatBuoyancy}
-                sinkBuoyancy={sinkBuoyancy}
+                defaultBuoyancy={defaultBuoyancy}
+                corkBuoyancy={corkBuoyancy}
+                rockBuoyancy={rockBuoyancy}
                 linearDrag={linearDrag}
                 angularDrag={angularDrag}
             />
@@ -63,18 +64,21 @@ export function Buoyancy() {
 
 function BuoyancyInner({
     flow,
-    floatBuoyancy,
-    sinkBuoyancy,
+    defaultBuoyancy,
+    corkBuoyancy,
+    rockBuoyancy,
     linearDrag,
     angularDrag
 }: {
     flow: number;
-    floatBuoyancy: number;
-    sinkBuoyancy: number;
+    defaultBuoyancy: number;
+    corkBuoyancy: number;
+    rockBuoyancy: number;
     linearDrag: number;
     angularDrag: number;
 }) {
-    // corks (group 1, boxes) float; rocks (group 2, spheres) sink - see the file header.
+    // corks (boxes) float; rocks (spheres) sink - per-body buoyancy overrides let them share
+    // the same water volume without needing separate collision groups or stacked volumes.
     const corksRef = useRef<BodyState[]>(null);
     const rocksRef = useRef<BodyState[]>(null);
     const previousCorkCount = useRef(0);
@@ -87,13 +91,12 @@ function BuoyancyInner({
         'spawn 10 rocks': button(() => setRockCount((count) => count + 10))
     });
 
-    // give every newly spawned instance its group and a random drop position, same fountain
-    // pattern CubeHeap.tsx / FloatingPlatforms.tsx use for their own spawners
+    // give every newly spawned instance its buoyancy override and a random drop position
     useEffect(() => {
         if (!corksRef.current) return;
         for (let i = previousCorkCount.current; i < corksRef.current.length; i++) {
             const body = corksRef.current[i];
-            body.group = 1;
+            body.buoyancy = corkBuoyancy;
             body.position = new THREE.Vector3(
                 Math.random() * 10 - 5,
                 SPAWN_Y_MIN + Math.random() * SPAWN_Y_RANGE,
@@ -101,13 +104,13 @@ function BuoyancyInner({
             );
         }
         previousCorkCount.current = corkCount;
-    }, [corkCount]);
+    }, [corkCount, corkBuoyancy]);
 
     useEffect(() => {
         if (!rocksRef.current) return;
         for (let i = previousRockCount.current; i < rocksRef.current.length; i++) {
             const body = rocksRef.current[i];
-            body.group = 2;
+            body.buoyancy = rockBuoyancy;
             body.position = new THREE.Vector3(
                 Math.random() * 10 - 5,
                 SPAWN_Y_MIN + Math.random() * SPAWN_Y_RANGE,
@@ -115,34 +118,22 @@ function BuoyancyInner({
             );
         }
         previousRockCount.current = rockCount;
-    }, [rockCount]);
+    }, [rockCount, rockBuoyancy]);
 
     return (
         <>
-            {/* the buoyant volume: only group 1 (corks) */}
+            {/* one water volume with a default buoyancy; bodies override it with their own */}
             <Water
                 position={POOL_POSITION}
                 size={POOL_SIZE}
                 surfaceHeight={SURFACE_HEIGHT}
-                buoyancy={floatBuoyancy}
+                buoyancy={defaultBuoyancy}
                 linearDrag={linearDrag}
                 angularDrag={angularDrag}
                 flow={[flow, 0, 0]}
-                group={1}
                 visible
                 color="#2f7dc4"
                 opacity={0.55}
-            />
-            {/* the under-buoyant volume, same footprint: only group 2 (rocks) */}
-            <Water
-                position={POOL_POSITION}
-                size={POOL_SIZE}
-                surfaceHeight={SURFACE_HEIGHT}
-                buoyancy={sinkBuoyancy}
-                linearDrag={linearDrag}
-                angularDrag={angularDrag}
-                flow={[flow, 0, 0]}
-                group={2}
             />
 
             <InstancedRigidBodies
@@ -150,6 +141,7 @@ function BuoyancyInner({
                 count={corkCount}
                 color="#f4d35e"
                 position={[0, SPAWN_Y_MIN, 0]}
+                buoyancy={corkBuoyancy}
             >
                 <boxGeometry args={[1, 1, 1]} />
                 <meshStandardMaterial color="#f4d35e" />
@@ -160,20 +152,20 @@ function BuoyancyInner({
                 count={rockCount}
                 color="#5c5c5c"
                 position={[0, SPAWN_Y_MIN, 0]}
+                buoyancy={rockBuoyancy}
             >
                 <sphereGeometry args={[0.5, 16, 16]} />
                 <meshStandardMaterial color="#5c5c5c" />
             </InstancedRigidBodies>
 
-            {/* a couple of bodies dropped straight in so the pool isn't empty on load - `group`
-                is what routes each one to its own volume above */}
-            <RigidBody position={[-3, 6, 2]} group={1}>
+            {/* a couple of bodies dropped straight in so the pool isn't empty on load */}
+            <RigidBody position={[-3, 6, 2]} buoyancy={corkBuoyancy}>
                 <mesh castShadow>
                     <boxGeometry args={[1.2, 1.2, 1.2]} />
                     <meshStandardMaterial color="#f4d35e" />
                 </mesh>
             </RigidBody>
-            <RigidBody position={[3, 6, -2]} group={2}>
+            <RigidBody position={[3, 6, -2]} buoyancy={rockBuoyancy}>
                 <mesh castShadow>
                     <sphereGeometry args={[0.6, 16, 16]} />
                     <meshStandardMaterial color="#5c5c5c" />

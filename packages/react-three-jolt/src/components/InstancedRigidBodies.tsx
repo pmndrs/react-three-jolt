@@ -29,6 +29,14 @@ export interface InstancedRigidBodiesProps {
     onIntersectionExit?: BodyEventMap['sensorExit'];
     onSleep?: BodyEventMap['sleep'];
     onWake?: BodyEventMap['wake'];
+
+    //* Buoyancy overrides (issue #260) ======================
+    /** Per-body buoyancy override for water volumes. */
+    buoyancy?: number;
+    /** Per-body linear drag override for water volumes. */
+    linearDrag?: number;
+    /** Per-body angular drag override for water volumes. */
+    angularDrag?: number;
 }
 
 // Disposes an InstancedMesh that's being discarded: it's a plain object (not part of the
@@ -57,7 +65,10 @@ export const InstancedRigidBodies = memo(function InstancedRigidBodies({
     onIntersectionEnter,
     onIntersectionExit,
     onSleep,
-    onWake
+    onWake,
+    buoyancy,
+    linearDrag,
+    angularDrag
 }: InstancedRigidBodiesProps) {
     // the "template" mesh, used only to read geometry/material off of - it's detached from
     // the scene graph as soon as it mounts and never actually renders.
@@ -163,7 +174,12 @@ export const InstancedRigidBodies = memo(function InstancedRigidBodies({
             index: index
         });
         // we just added this handle ourselves, so it is guaranteed to resolve
-        return bodySystem.getBody(handle)!;
+        const bodyState = bodySystem.getBody(handle)!;
+        // apply buoyancy overrides if provided (issue #260)
+        if (buoyancy !== undefined) bodyState.buoyancy = buoyancy;
+        if (linearDrag !== undefined) bodyState.linearDrag = linearDrag;
+        if (angularDrag !== undefined) bodyState.angularDrag = angularDrag;
+        return bodyState;
     };
 
     const manageInstances = (count: number) => {
@@ -192,6 +208,16 @@ export const InstancedRigidBodies = memo(function InstancedRigidBodies({
         // update the instance states
         instanceStates.current = instances;
     };
+
+    // Update buoyancy overrides when they change (issue #260)
+    useEffect(() => {
+        const instances = instanceStates.current;
+        for (const instance of instances) {
+            if (buoyancy !== undefined) instance.buoyancy = buoyancy;
+            if (linearDrag !== undefined) instance.linearDrag = linearDrag;
+            if (angularDrag !== undefined) instance.angularDrag = angularDrag;
+        }
+    }, [buoyancy, linearDrag, angularDrag]);
     //* Events -------------------------------------------
     // Runs after the effect above, so the instance bodies exist. One subscription per
     // instance body, all dropped together when `count` changes or the mesh unmounts. The

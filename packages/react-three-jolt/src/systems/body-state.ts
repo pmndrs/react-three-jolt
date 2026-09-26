@@ -138,6 +138,24 @@ export class BodyState {
      */
     surfaceMaterials?: SurfaceMaterialTable;
 
+    //* Buoyancy overrides (issue #260) ======================
+    /**
+     * Per-body buoyancy override for when this body is in a water volume. When set, this value
+     * is used instead of the volume's default buoyancy. Only meaningful on a dynamic body that
+     * overlaps a water volume.
+     */
+    buoyancy?: number;
+    /**
+     * Per-body linear drag override for when this body is in a water volume. When set, this
+     * value is used instead of the volume's default linearDrag.
+     */
+    linearDrag?: number;
+    /**
+     * Per-body angular drag override for when this body is in a water volume. When set, this
+     * value is used instead of the volume's default angularDrag.
+     */
+    angularDrag?: number;
+
     get isSleeping() {
         if (this.checkDisposed()) return false;
         return !this.body.IsActive();

@@ -240,20 +240,27 @@ export class BuoyancySystem {
             // scratch immediately rather than handing the binder's own temporary to another call.
             // The *world's* gravity, not scaled by this body's own `gravityFactor` - verified
             // empirically (see buoyancy.test.ts): `ApplyBuoyancyImpulse`'s resulting velocity
-            // change does not depend on the body's mass at all, only on `volume.buoyancy` (a
+            // change does not depend on the body's mass at all, only on the buoyancy value (a
             // ratio to standard gravity - 1.0 is neutrally buoyant, >1 floats, <1 sinks) and the
-            // submerged fraction Jolt derives from the shape. There is no per-body density knob:
-            // give bodies that should behave differently different `<Water buoyancy>` volumes
-            // (with `group`/`filter` to pick who each one affects), same as the demo does.
+            // submerged fraction Jolt derives from the shape. Issue #260: allow per-body overrides
+            // so a cork and a rock in the same volume can behave differently without stacking
+            // volumes and groups.
             const gravity = this.physicsSystem.joltPhysicsSystem.GetGravity();
             this.gravityScratch.Set(gravity.GetX(), gravity.GetY(), gravity.GetZ());
+
+            // Use body's per-body overrides when set, otherwise fall back to volume defaults
+            const bodyBuoyancy = body.buoyancy !== undefined ? body.buoyancy : volume.buoyancy;
+            const bodyLinearDrag =
+                body.linearDrag !== undefined ? body.linearDrag : volume.linearDrag;
+            const bodyAngularDrag =
+                body.angularDrag !== undefined ? body.angularDrag : volume.angularDrag;
 
             jBody.ApplyBuoyancyImpulse(
                 surfacePosition,
                 this.normalScratch,
-                volume.buoyancy,
-                volume.linearDrag,
-                volume.angularDrag,
+                bodyBuoyancy,
+                bodyLinearDrag,
+                bodyAngularDrag,
                 this.fluidScratch,
                 this.gravityScratch,
                 this.deltaTime
