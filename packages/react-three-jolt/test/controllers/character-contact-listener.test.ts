@@ -46,7 +46,6 @@ beforeAll(async () => {
 
 test('jolt only calls the character contact callbacks the controller implements', () => {
     const cc = new CharacterControllerSystem(ps);
-    // biome-ignore lint/suspicious/noExplicitAny: the listener is deliberately untyped
     const listener = (cc as any).characterContactListener;
 
     const called = new Set<string>();
@@ -60,7 +59,6 @@ test('jolt only calls the character contact callbacks the controller implements'
         // Stays an own property either way, which is what the glue checks. For the unassigned
         // ones this stands in for the throw so the test reports the name instead of dying
         // inside WASM with a string exception.
-        // biome-ignore lint/suspicious/noExplicitAny: passthrough
         listener[name] = (...args: any[]) => {
             called.add(name);
             if (!own) {

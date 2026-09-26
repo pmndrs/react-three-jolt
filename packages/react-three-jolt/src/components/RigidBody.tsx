@@ -40,11 +40,10 @@ import { shapeContext as shapeReactContext } from './shape/context';
  * extended type and redeclared below with their real shape. `key` is dropped entirely: it isn't
  * a real prop (React reserves it), and `key?: number` used to shadow it.
  */
-interface RigidBodyProps
-    extends Omit<
-        ThreeElements['object3D'],
-        'position' | 'rotation' | 'scale' | 'quaternion' | 'ref' | 'children'
-    > {
+interface RigidBodyProps extends Omit<
+    ThreeElements['object3D'],
+    'position' | 'rotation' | 'scale' | 'quaternion' | 'ref' | 'children'
+> {
     /** Optional so `createElement(RigidBody, props, ...children)` typechecks as JSX does. */
     children?: ReactNode;
     position?: number[];
@@ -587,8 +586,7 @@ export const RigidBody = memo(function RigidBody(props: RigidBodyProps) {
             composedKey.current = undefined;
             composedDescriptor.current = undefined;
         };
-        // biome-ignore lint/correctness/useExhaustiveDependencies: unmount-only teardown,
-        // deliberately not reactive - see the comment above.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount-only teardown, deliberately not reactive - see the comment above.
     }, []);
 
     //*/ Debugging -------------------------------------
