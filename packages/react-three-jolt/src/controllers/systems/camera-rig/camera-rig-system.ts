@@ -240,12 +240,16 @@ export class CameraRigManager {
             // an externally supplied camera becomes `main`; otherwise build one at the requested
             // rig-space position and let the boom derive its length/pitch/yaw from it
             let camera = options.camera;
-            if (camera) this.addCamera('main', camera, 'base');
+            // `forBoom: true` skips `addCamera()`'s `lookAt()` bake (issue #301 follow-up): this
+            // camera is about to be handed to `CameraBoom.camera`, which is the only thing that
+            // should ever decide its orientation (see that setter's own comment).
+            if (camera) this.addCamera('main', camera, 'base', true);
             else
-                camera = this.createCamera('main', {
-                    space: 'base',
-                    position: vec3.three(options.cameraPosition ?? ORIGIN)
-                });
+                camera = this.createCamera(
+                    'main',
+                    { space: 'base', position: vec3.three(options.cameraPosition ?? ORIGIN) },
+                    true
+                );
             this.controls.initialize({ ...options, camera });
         } else {
             this.controls.setOptions(options);
@@ -339,7 +343,7 @@ export class CameraRigManager {
 
     //* Cameras ========================================
     // create a camera
-    createCamera(name: string, options?: CameraOptions) {
+    createCamera(name: string, options?: CameraOptions, forBoom = false) {
         //TODO: not sure aspect ratio needs to be here
         const camera = new THREE.PerspectiveCamera(
             75,
@@ -360,7 +364,7 @@ export class CameraRigManager {
             }
         }
         // add to list
-        this.addCamera(name, camera, options?.space);
+        this.addCamera(name, camera, options?.space, forBoom);
         // if there is no active camera set this to it
         // TODO: Determine if we should set the camera if there isn't one
         // I worry it will cause a flash
@@ -371,14 +375,25 @@ export class CameraRigManager {
     addCamera(
         name: string,
         camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
-        space?: string
+        space?: string,
+        /**
+         * A camera about to be handed to `CameraBoom.camera` (the rig's `main` camera): skip the
+         * `lookAt()` bake below. It was computed in whichever space this camera happens to be
+         * parented into *right now* (usually `base`), which is not where it ends up living - the
+         * boom reparents it into `cameraSpace` a moment later without ever touching its rotation,
+         * so this stale, wrong-frame quaternion used to ride along and compound with the boom's
+         * own pivot/cameraSpace yaw and pitch (issue #301 follow-up: the "rotated and askew"
+         * report). `CameraBoom.camera`'s setter is the only thing that should decide a boom
+         * camera's orientation - see its own comment.
+         */
+        forBoom = false
     ) {
         this.cameras.set(name, camera);
         if (space) this.addCameraToSpace(camera, space);
         else this.scene.add(camera);
 
         //look at the target
-        camera.lookAt(this.target);
+        if (!forBoom) camera.lookAt(this.target);
     }
     // set the active camera
     setActiveCamera(name: string) {
