@@ -567,6 +567,11 @@ export class ConstraintSystem {
      * Motors live on the constraint, not the settings. Hinges measure their target in
      * radians/rad-per-second and sliders in meters/meters-per-second, which is why the two
      * have differently named setters.
+     *
+     * Also wakes the two bodies this constraint connects (issue #299): setting a motor's target
+     * angle/position/state while both bodies happen to be asleep does nothing until something
+     * else wakes them, since Jolt's constraint solver skips inactive bodies entirely - see
+     * {@link activateConstraintBodies}.
      */
     private applyMotorState<T extends ConstraintType>(
         type: T,
@@ -592,6 +597,7 @@ export class ConstraintSystem {
                 hinge.SetMotorState(Raw.module.EMotorState_Position);
                 if (motor.target !== undefined) hinge.SetTargetAngle(motor.target);
             }
+            this.activateConstraintBodies(constraint);
             return;
         }
 
@@ -604,6 +610,70 @@ export class ConstraintSystem {
             // target is a float along the axis
             if (motor.target !== undefined) slider.SetTargetPosition(motor.target);
         }
+        this.activateConstraintBodies(constraint);
+    }
+
+    /**
+     * Wake the two bodies a `TwoBodyConstraint` connects (issue #299).
+     *
+     * `HingeConstraint`/`SliderConstraint`'s own `SetTargetAngle`/`SetTargetPosition`/
+     * `SetTargetAngularVelocity`/`SetTargetVelocity`/`SetMotorState` write straight into the
+     * constraint and, unlike `BodyInterface`, have no `EActivation` parameter to speak of - they
+     * don't touch either body's active state at all. Jolt's constraint solver only visits active
+     * bodies, so a motor target pushed at a sleeping pair (the common case: the rig settled at
+     * its previous target and went to sleep, then a leva control or an animated sweep pushes a
+     * new one) is silently discarded until something unrelated wakes the bodies up.
+     *
+     * A static body is left alone - activating one asserts inside Jolt and means nothing, since a
+     * static is never simulated (same rule as `BodyState`'s setters, #61/#208).
+     */
+    private activateConstraintBodies(constraint: Jolt.Constraint): void {
+        const twoBody = constraint as Partial<Jolt.TwoBodyConstraint>;
+        if (typeof twoBody.GetBody1 !== 'function' || typeof twoBody.GetBody2 !== 'function')
+            return;
+        const bodyInterface = this.joltPhysicsSystem.GetBodyInterface();
+        const body1 = twoBody.GetBody1();
+        const body2 = twoBody.GetBody2();
+        if (body1 && !body1.IsStatic()) bodyInterface.ActivateBody(body1.GetID());
+        if (body2 && !body2.IsStatic()) bodyInterface.ActivateBody(body2.GetID());
+    }
+
+    //* Runtime motor updates =========================================
+    // Public wrappers around the raw Jolt motor setters (issue #299): call these - not
+    // `hinge.SetTargetAngle`/`slider.SetTargetPosition`/etc directly - whenever a motor's
+    // target or state changes after the constraint was created (a leva control, an animated
+    // sweep driven from `useFrame`, anything). They wake the constrained bodies the same way
+    // `applyMotorState` does at creation time, which the raw setters do not.
+
+    /** Push a new position-motor target angle at a hinge and wake the bodies it connects. */
+    setHingeTargetAngle(hinge: Jolt.HingeConstraint, angle: number): void {
+        hinge.SetTargetAngle(angle);
+        this.activateConstraintBodies(hinge);
+    }
+    /** Push a new velocity-motor target at a hinge and wake the bodies it connects. */
+    setHingeTargetAngularVelocity(hinge: Jolt.HingeConstraint, velocity: number): void {
+        hinge.SetTargetAngularVelocity(velocity);
+        this.activateConstraintBodies(hinge);
+    }
+    /** Push a new position-motor target at a slider and wake the bodies it connects. */
+    setSliderTargetPosition(slider: Jolt.SliderConstraint, position: number): void {
+        slider.SetTargetPosition(position);
+        this.activateConstraintBodies(slider);
+    }
+    /** Push a new velocity-motor target at a slider and wake the bodies it connects. */
+    setSliderTargetVelocity(slider: Jolt.SliderConstraint, velocity: number): void {
+        slider.SetTargetVelocity(velocity);
+        this.activateConstraintBodies(slider);
+    }
+    /** Switch a hinge/slider motor between velocity and position mode, waking its bodies. */
+    setMotorState(
+        constraint: Jolt.HingeConstraint | Jolt.SliderConstraint,
+        state: 'velocity' | 'position'
+    ): void {
+        constraint.SetMotorState(
+            state === 'velocity' ? Raw.module.EMotorState_Velocity : Raw.module.EMotorState_Position
+        );
+        this.activateConstraintBodies(constraint);
     }
 
     //* Registry ======================================================
