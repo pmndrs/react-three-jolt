@@ -327,9 +327,7 @@ export interface TrackedVehicleSettings extends VehicleSettingsBase {
 
 /** Anything `<Vehicle vehicleSettings={...}>` / `useVehicle({ settings })` accepts. */
 export type VehicleSettings =
-    | FourWheelVehicleSettings
-    | TwoWheelVehicleSettings
-    | TrackedVehicleSettings;
+    FourWheelVehicleSettings | TwoWheelVehicleSettings | TrackedVehicleSettings;
 
 /** @deprecated renamed to `FourWheelVehicleSettings` (issue #10) */
 export type VehicleFourWheelSettings = FourWheelVehicleSettings;
