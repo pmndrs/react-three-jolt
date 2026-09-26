@@ -32,6 +32,7 @@ import { Impulses } from './examples/Impulses';
 import { JustBoxes } from './examples/JustBoxes';
 import { MotionSources } from './examples/motionSources';
 import { OneWayPlatform } from './examples/OneWayPlatform';
+import { PathConstraint } from './examples/PathConstraint';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
@@ -205,6 +206,13 @@ const routes: RouteMap = {
         target: [0, 8, -8],
         background: '#3d405b',
         element: <Constraints />
+    },
+    PathConstraint: {
+        label: 'Path Constraint',
+        position: [0, 40, 60],
+        target: [0, 8, 0],
+        background: '#3d405b',
+        element: <PathConstraint />
     },
     FooterFunnel: {
         label: 'Footer Funnel',

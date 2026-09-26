@@ -1,0 +1,118 @@
+---
+title: Constraints
+description: useConstraint, addConstraint, every constraint type, and the path constraint's curve-riding rail.
+nav: 5.5
+---
+
+A constraint joins two bodies. `useConstraint` builds one for the lifetime of a component and
+removes it on unmount; `physicsSystem.constraintSystem.addConstraint` is the imperative form it
+calls.
+
+```tsx
+import { type BodyStateRef, RigidBody, useConstraint } from '@react-three/jolt';
+import { useRef } from 'react';
+
+function Hinge() {
+    const anchorRef = useRef(null);
+    const bodyRef = useRef(null);
+    useConstraint('hinge', anchorRef, bodyRef, { point1: [0, 5, 0], axis: [0, 0, 1] });
+
+    return (
+        <>
+            <RigidBody ref={anchorRef} type="static" position={[0, 5, 0]} />
+            <RigidBody ref={bodyRef} position={[3, 5, 0]} mass={1} />
+        </>
+    );
+}
+```
+
+`type` is one of `fixed | point | distance | hinge | slider | cone | swingTwist | sixDOF | path`
+(`revolute`/`prismatic` are aliases for `hinge`/`slider`). Every type shares one `ConstraintOptions`
+object; which fields apply depends on `type` - see the source for the full field list
+(`packages/react-three-jolt/src/systems/constraint-system.ts`). This page covers `path` in
+detail, since it works differently enough from the rest to need one.
+
+## Path constraint
+
+`path` rides a body along a curve - a rail, a roller coaster track, a patrol route. `body1` is
+the rail's anchor (usually a static body); `body2` is the thing riding it.
+
+```tsx
+import { type BodyStateRef, RigidBody, useConstraint } from '@react-three/jolt';
+import { useRef } from 'react';
+import * as THREE from 'three';
+
+const track = new THREE.CatmullRomCurve3(
+    [
+        new THREE.Vector3(5, 0, 0),
+        new THREE.Vector3(0, 0, 5),
+        new THREE.Vector3(-5, 0, 0),
+        new THREE.Vector3(0, 0, -5)
+    ],
+    true // closed
+);
+
+function Cart() {
+    const railRef = useRef(null);
+    const cartRef = useRef(null);
+    const constraint = useConstraint('path', railRef, cartRef, {
+        path: track,
+        closed: true,
+        motor: { type: 'velocity', velocity: 3 }
+    });
+
+    return (
+        <>
+            <RigidBody ref={railRef} type="static" position={[0, 0, 0]} />
+            <RigidBody ref={cartRef} position={[5, 0, 0]} mass={1} />
+        </>
+    );
+}
+```
+
+### Options
+
+| option | type | notes |
+| --- | --- | --- |
+| `path` | `THREE.Curve<Vector3> \| anyVec3[]` | the rail. An array of points is upgraded to a `CatmullRomCurve3` |
+| `closed` | `boolean` | loops the path end-to-start. Default `false` |
+| `pathPosition` | `anyVec3` | path frame origin, **local to body 1**. Default `(0,0,0)` - the curve's own coordinates |
+| `pathRotation` | `anyQuat` | path frame rotation, local to body 1. Default identity |
+| `pathFraction` | `number` | initial position along the path - world-space arc length, not `0..1`. Default `0` |
+| `rotationConstraintType` | `'free' \| 'constrainAroundTangent' \| 'constrainAroundNormal' \| 'constrainAroundBinormal' \| 'constrainToPath' \| 'fullyConstrained'` | how much of body 2's rotation the rail controls |
+| `maxFrictionForce` | `number` | resists motion along the path |
+| `motor` | `ConstraintMotorOptions` | drives body 2 along the path - `type: 'velocity'` + `velocity`, or `type: 'position'` + `target` |
+| `pathResolution` | `number` | how many samples back the curve's Frenet frames / closest-point search. Default `200` |
+
+The returned handle is a native `Jolt.PathConstraint`: `constraint.current?.GetPathFraction()`
+reads the current position, `SetTargetVelocity(v)` / `SetTargetPathFraction(f)` push the motor's
+target live (same pattern as a hinge's `SetTargetAngularVelocity` - see
+[Constraints demo](/) for the live-slider version) without tearing the constraint down.
+
+**"Fraction" is arc length in world units**, not a normalised `0..1` - `GetPathFraction()` on a
+10-meter loop counts from `0` to `10`, and a `motor.velocity` of `3` moves the body roughly 3
+meters of track per second. This is also why `pathResolution` exists: it is not a rendering
+detail, it is how finely `GetClosestPoint`/`GetPointOnPath` sample the curve for the physics
+solver.
+
+### Why this isn't `PathConstraintPathHermite`
+
+Jolt's C++ API builds a path constraint's rail from a `PathConstraintPathHermite`, fed points one
+at a time via `AddPoint(position, tangent, normal)`. jolt-physics 1.1.0's WASM binder does not
+expose a constructor for that class - `new Jolt.PathConstraintPathHermite()` throws `cannot
+construct a PathConstraintPathHermite, no constructor in IDL` (checked against the real wasm
+module, not just the `.d.ts`). The binder does let JS construct `PathConstraintPathJS`, a
+`PathConstraintPath` meant to have `GetPathMaxFraction`/`GetClosestPoint`/`GetPointOnPath`
+implemented in JavaScript and called back into by the C++ solver - the same mechanism
+`ContactListenerJS`/`BodyActivationListenerJS` use elsewhere in this library. `path` builds one of
+those around your curve instead: `GetPointOnPath` reads the position/tangent straight off
+`THREE.Curve.getPointAt`/`getTangentAt` (its own arc-length parameterisation) and the normal/
+binormal off `computeFrenetFrames`, sampled at `pathResolution` points. In practice this tracks
+an arbitrary curve *more* accurately than re-fitting a Hermite spline to sampled points would -
+there's no spline-fit error to accumulate - the only cost is the closest-point search being an
+`O(pathResolution)` scan per step instead of Jolt's native segment lookup.
+
+> [!NOTE]
+> `pathPosition` composes with body 1's own world transform: `worldPoint = body1.transform *
+> (pathRotation * curvePoint + pathPosition)`. If your curve is already authored in world space
+> and body 1 sits at the origin with no rotation, leave both at their defaults.
