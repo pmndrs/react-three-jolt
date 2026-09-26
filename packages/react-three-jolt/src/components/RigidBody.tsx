@@ -8,7 +8,7 @@ import React, {
     type ReactNode,
     useCallback,
     useEffect,
-    //  useLayoutEffect,
+    useLayoutEffect,
     useMemo,
     useRef
 } from 'react';
@@ -353,6 +353,29 @@ export const RigidBody = memo(function RigidBody(props: RigidBodyProps) {
     //TODO: Figure out way to put BodyState type on this ref
     const rigidBodyRef = useForwardedRef(forwardedRef ?? null);
 
+    // #300: apply the spawn transform to the object3D itself synchronously, before the browser
+    // ever paints. The body-creation effect below (a passive `useEffect`) also copies
+    // `position`/`rotation`/`scale` onto this object, but it only runs once `bodySystem` (and,
+    // for a compound body, every `<Shape>` child) is ready - which can be a render or more after
+    // this component first mounts, and even when it isn't, a passive effect still fires on a
+    // later task *after* the browser has already painted the mounted-but-untransformed object3D
+    // at the identity transform. That one painted frame at the origin, before the real pose
+    // lands, is exactly the flicker reported in #300. A `useLayoutEffect` with an empty
+    // dependency array runs once, synchronously, right after this object3D commits and before
+    // paint - fixing the flicker without making position/rotation/scale reactive here: later
+    // changes are handled by the "Prop Updates" effect further down (which moves the *body*, not
+    // this object3D directly) and, once the body exists, by the physics frame sync. A body with
+    // no `position`/`rotation`/`scale` prop - one whose transform is meant to come from a parent
+    // - is left untouched, exactly as before.
+    useLayoutEffect(() => {
+        if (!objectRef.current) return;
+        if (position) objectRef.current.position.copy(vec3.three(position));
+        if (rotation) objectRef.current.rotation.setFromVector3(vec3.three(rotation));
+        if (scale) objectRef.current.scale.copy(vec3.three(scale));
+        // biome-ignore lint/correctness/useExhaustiveDependencies: mount-time only, deliberately
+        // not reactive - see the comment above.
+    }, []);
+
     // state refs allow us to track if inputs have changed without triggering a re-render
     const prevPosition = useRef<THREE.Vector3 | undefined>(undefined);
     const prevRotation = useRef<THREE.Quaternion | undefined>(undefined);
@@ -532,7 +555,11 @@ export const RigidBody = memo(function RigidBody(props: RigidBodyProps) {
                 // above already converted any trimesh, so this has nothing left to do there.
                 dynamicMeshStrategy
             };
-            //put the initial position, rotation, scale, and quaternion in the options
+            // put the initial position, rotation, scale, and quaternion in the options. The
+            // layout effect above already applied these to `objectRef.current` before the first
+            // paint (#300); repeating it here is redundant but harmless, and keeps this block
+            // correct on its own if the body ever needs to be (re)created without the object
+            // remounting.
             if (position) objectRef.current.position.copy(vec3.three(position));
             if (rotation) objectRef.current.rotation.setFromVector3(vec3.three(rotation));
 

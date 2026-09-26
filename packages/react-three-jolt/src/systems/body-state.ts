@@ -235,7 +235,13 @@ export class BodyState {
 
         // Instance properties
         this.meshType = object instanceof InstancedMesh ? 'instancedMesh' : 'mesh';
-        this.invertedWorldMatrix = object.matrixWorld.clone().invert();
+        // The space synced poses are written into: an instance's transform lives in its
+        // InstancedMesh's space; a plain object's lives in its parent's. This used to take the
+        // object's OWN matrixWorld, which only worked while that was still identity at body
+        // creation - once it already held the spawn pose, every sync subtracted it again.
+        const space = index !== undefined ? object : object.parent;
+        space?.updateWorldMatrix(true, false);
+        this.invertedWorldMatrix = space ? space.matrixWorld.clone().invert() : new Matrix4();
         if (index !== undefined) this.index = index;
 
         // not sure this is a good idea here

@@ -31,6 +31,10 @@ export interface InstancedRigidBodiesProps {
     onWake?: BodyEventMap['wake'];
 }
 
+// Scratch for #300 below - reused across every instance creation, never retained.
+const _instancePosition = new THREE.Vector3();
+const _instanceRotation = new THREE.Quaternion();
+
 // Disposes an InstancedMesh that's being discarded: it's a plain object (not part of the
 // three-fiber tree), so nothing else releases its own instanceMatrix/instanceColor GPU buffers.
 const destroyInstancedMesh = (mesh: THREE.InstancedMesh) => {
@@ -163,7 +167,15 @@ export const InstancedRigidBodies = memo(function InstancedRigidBodies({
             index: index
         });
         // we just added this handle ourselves, so it is guaranteed to resolve
-        return bodySystem.getBody(handle)!;
+        const state = bodySystem.getBody(handle)!;
+        // #300: a fresh InstancedMesh slot starts at the identity matrix, and the physics frame
+        // sync only writes this instance's real (jittered) spawn pose into it on the next tick -
+        // otherwise this instance would sit visible at the origin for at least one rendered
+        // frame, the same flicker `<RigidBody>` had. Write it immediately instead, reusing the
+        // same `update()` the frame sync itself calls every tick.
+        state.readPose(_instancePosition, _instanceRotation);
+        state.update(_instancePosition, _instanceRotation);
+        return state;
     };
 
     const manageInstances = (count: number) => {
