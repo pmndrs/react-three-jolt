@@ -25,6 +25,9 @@ export interface ConstraintTypeMap {
     cone: Jolt.ConeConstraint;
     swingTwist: Jolt.SwingTwistConstraint;
     sixDOF: Jolt.SixDOFConstraint;
+    pulley: Jolt.PulleyConstraint;
+    gear: Jolt.GearConstraint;
+    rackAndPinion: Jolt.RackAndPinionConstraint;
 }
 export type ConstraintType = keyof ConstraintTypeMap;
 
@@ -92,6 +95,43 @@ export interface ConstraintOptions {
     /** per-axis friction, in `SixDOFConstraintSettings::EAxis` order */
     friction?: number[];
     limitShape?: 'cone' | 'pyramid';
+    // pulley only ---
+    /** world-space anchor on body 1, e.g. the pulley wheel it runs over. Required. */
+    fixedPoint1?: anyVec3;
+    /** world-space anchor on body 2. Required. */
+    fixedPoint2?: anyVec3;
+    /** attachment point on body 1 the "rope" runs from. Defaults to body 1's position */
+    bodyPoint1?: anyVec3;
+    /** attachment point on body 2 the "rope" runs from. Defaults to body 2's position */
+    bodyPoint2?: anyVec3;
+    /**
+     * how far body 2's segment moves for every meter body 1's segment moves. Shared with
+     * `gear`/`rackAndPinion`, which use it the same way (or derive it from tooth counts)
+     */
+    ratio?: number;
+    // gear only ---
+    /** the second hinge axis (`mHingeAxis2`). Defaults to `axis` */
+    axis2?: anyVec3;
+    /**
+     * the two existing `HingeConstraint`s (the `useConstraint`/`addConstraint` return value,
+     * not settings) this gear synchronizes. Required
+     */
+    hinge1?: Jolt.HingeConstraint;
+    hinge2?: Jolt.HingeConstraint;
+    /** tooth counts; when both are set they replace `ratio` via `SetRatio` */
+    numTeeth1?: number;
+    numTeeth2?: number;
+    // rackAndPinion only ---
+    /** the slider's axis of travel (`mSliderAxis`). Defaults to `[0, 0, 1]` */
+    sliderAxis?: anyVec3;
+    /** the existing hinge (pinion) constraint. Required */
+    hinge?: Jolt.HingeConstraint;
+    /** the existing slider (rack) constraint. Required */
+    slider?: Jolt.SliderConstraint;
+    /** tooth/length counts; when all three are set they replace `ratio` via `SetRatio` */
+    numTeethRack?: number;
+    rackLength?: number;
+    numTeethPinion?: number;
 }
 
 /** what the system tracks for every live constraint */
@@ -211,6 +251,8 @@ export class ConstraintSystem {
             this.joltPhysicsSystem.AddConstraint(constraint);
 
             const casted = this.castConstraint(type, constraint);
+            // gear/rackAndPinion only reference their hinge(s)/slider once they exist
+            this.applyConstraintLinkage(type, casted, options);
             // now that the constraint exists we can drive its motor
             this.applyMotorState(type, casted, options);
 
@@ -381,6 +423,88 @@ export class ConstraintSystem {
                 return settings;
             }
 
+            //* Pulley -------------------------------------
+            // a "rope" of fixed total length over two fixed points (e.g. pulley wheels),
+            // with `ratio` sharing how much each side pays out per meter the other side does
+            case 'pulley': {
+                if (!options?.fixedPoint1 || !options?.fixedPoint2)
+                    throw new Error(
+                        'r3/jolt: pulley constraint needs options.fixedPoint1 and options.fixedPoint2'
+                    );
+                const settings = new Raw.module.PulleyConstraintSettings();
+                settings.mBodyPoint1 = options?.bodyPoint1
+                    ? temps.track(ownedRVec3(options.bodyPoint1))
+                    : this.bodyPosition(body1, temps);
+                settings.mBodyPoint2 = options?.bodyPoint2
+                    ? temps.track(ownedRVec3(options.bodyPoint2))
+                    : this.bodyPosition(body2, temps);
+                settings.mFixedPoint1 = temps.track(ownedRVec3(options.fixedPoint1));
+                settings.mFixedPoint2 = temps.track(ownedRVec3(options.fixedPoint2));
+                if (options?.ratio !== undefined) settings.mRatio = options.ratio;
+                // jolt defaults mMinLength to 0 and mMaxLength to -1 (auto-computed from the
+                // bodies' positions when the constraint is created) - only override those when
+                // asked to, same as `distance`'s mMaxDistance
+                if (options?.min !== undefined) settings.mMinLength = options.min;
+                if (options?.max !== undefined) settings.mMaxLength = options.max;
+                this.applySpace(settings, options);
+                return settings;
+            }
+
+            //* Gear ----------------------------------------
+            // couples two bodies that are *already* hinged to (their own) anchors, so their
+            // rotation stays locked to `ratio`. `SetConstraints` (below, after creation) is
+            // what actually wires it to those hinges - the settings only carry axes/ratio.
+            case 'gear': {
+                if (!options?.hinge1 || !options?.hinge2)
+                    throw new Error(
+                        'r3/jolt: gear constraint needs options.hinge1 and options.hinge2 (the HingeConstraints returned by useConstraint)'
+                    );
+                const settings = new Raw.module.GearConstraintSettings();
+                const axis1 = options?.axis ?? [1, 0, 0];
+                settings.mHingeAxis1 = temps.track(ownedVec3(axis1));
+                settings.mHingeAxis2 = temps.track(ownedVec3(options?.axis2 ?? axis1));
+                if (options?.numTeeth1 !== undefined && options?.numTeeth2 !== undefined) {
+                    settings.SetRatio(options.numTeeth1, options.numTeeth2);
+                } else if (options?.ratio !== undefined) {
+                    settings.mRatio = options.ratio;
+                }
+                this.applySpace(settings, options);
+                return settings;
+            }
+
+            //* RackAndPinion ---------------------------------
+            // same idea as `gear` but couples a hinge (the pinion) to a slider (the rack)
+            case 'rackAndPinion': {
+                if (!options?.hinge || !options?.slider)
+                    throw new Error(
+                        'r3/jolt: rackAndPinion constraint needs options.hinge and options.slider (the constraints returned by useConstraint)'
+                    );
+                const settings = new Raw.module.RackAndPinionConstraintSettings();
+                settings.mHingeAxis = temps.track(
+                    options?.axis ? ownedVec3(options.axis) : new Raw.module.Vec3(1, 0, 0)
+                );
+                settings.mSliderAxis = temps.track(
+                    options?.sliderAxis
+                        ? ownedVec3(options.sliderAxis)
+                        : new Raw.module.Vec3(0, 0, 1)
+                );
+                if (
+                    options?.numTeethRack !== undefined &&
+                    options?.rackLength !== undefined &&
+                    options?.numTeethPinion !== undefined
+                ) {
+                    settings.SetRatio(
+                        options.numTeethRack,
+                        options.rackLength,
+                        options.numTeethPinion
+                    );
+                } else if (options?.ratio !== undefined) {
+                    settings.mRatio = options.ratio;
+                }
+                this.applySpace(settings, options);
+                return settings;
+            }
+
             default:
                 throw new Error(`r3/jolt: unknown constraint type "${type}"`);
         }
@@ -527,6 +651,12 @@ export class ConstraintSystem {
                 return jolt.ConeConstraint as unknown as BinderClass;
             case 'swingTwist':
                 return jolt.SwingTwistConstraint as unknown as BinderClass;
+            case 'pulley':
+                return jolt.PulleyConstraint as unknown as BinderClass;
+            case 'gear':
+                return jolt.GearConstraint as unknown as BinderClass;
+            case 'rackAndPinion':
+                return jolt.RackAndPinionConstraint as unknown as BinderClass;
             // jolt has no `FixedConstraint` binding, the base class is all there is
             default:
                 return null;
@@ -603,6 +733,32 @@ export class ConstraintSystem {
             slider.SetMotorState(Raw.module.EMotorState_Position);
             // target is a float along the axis
             if (motor.target !== undefined) slider.SetTargetPosition(motor.target);
+        }
+    }
+
+    /**
+     * `gear`/`rackAndPinion` only carry axes/ratio in their settings - jolt requires
+     * `SetConstraints` be called on the *constraint* (not the settings) once it exists,
+     * wiring it to the hinge(s)/slider it keeps in sync. `createSettings` already validated
+     * these options are present for these two types, so they are known non-null here.
+     */
+    private applyConstraintLinkage<T extends ConstraintType>(
+        type: T,
+        casted: ConstraintTypeMap[T],
+        options: ConstraintOptions | undefined
+    ): void {
+        if (type === 'gear') {
+            const gear = casted as unknown as Jolt.GearConstraint;
+            gear.SetConstraints(
+                options?.hinge1 as Jolt.Constraint,
+                options?.hinge2 as Jolt.Constraint
+            );
+        } else if (type === 'rackAndPinion') {
+            const rackAndPinion = casted as unknown as Jolt.RackAndPinionConstraint;
+            rackAndPinion.SetConstraints(
+                options?.hinge as Jolt.Constraint,
+                options?.slider as Jolt.Constraint
+            );
         }
     }
 

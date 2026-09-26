@@ -1,0 +1,246 @@
+---
+title: Constraints
+description: useConstraint, addConstraint, and every constraint type they support.
+nav: 14
+---
+
+A constraint joins two [`RigidBody`](/api/rigid-body) bodies - a hinge, a slider, a rope, a pair
+of meshing gears. `useConstraint` creates one for the lifetime of the component that calls it and
+removes it on unmount; `ConstraintSystem.addConstraint`/`removeConstraint` is the same thing used
+imperatively, from a `PhysicsSystem` directly.
+
+```tsx
+import { RigidBody, useConstraint } from '@react-three/jolt';
+import { useRef } from 'react';
+
+function Hinge() {
+    const anchorRef = useRef(null);
+    const doorRef = useRef(null);
+    useConstraint('hinge', anchorRef, doorRef, { point1: [0, 2, 0], axis: [0, 0, 1] });
+    return (
+        <>
+            <RigidBody ref={anchorRef} type="static" position={[0, 2, 0]}>
+                <mesh>
+                    <sphereGeometry args={[0.3]} />
+                </mesh>
+            </RigidBody>
+            <RigidBody ref={doorRef} position={[1, 2, 0]} mass={1}>
+                <mesh>
+                    <boxGeometry args={[2, 3, 0.2]} />
+                </mesh>
+            </RigidBody>
+        </>
+    );
+}
+```
+
+`body1`/`body2` are refs to a `BodyState` - a `<RigidBody ref={...}>` works directly, since it
+exposes its `BodyState` as the ref value. Both bodies must exist before the effect runs; if either
+ref is still empty `useConstraint` skips creation (and warns in `debug` mode) rather than throwing.
+
+```ts
+const useConstraint: <T extends ConstraintType>(
+    type: T,
+    body1: BodyStateRef,
+    body2: BodyStateRef,
+    options?: ConstraintOptions
+) => React.RefObject<ConstraintTypeMap[T] | null>;
+```
+
+The returned ref holds the live `Jolt.Constraint` subclass once created - a `Jolt.HingeConstraint`
+for `'hinge'`, a `Jolt.SliderConstraint` for `'slider'`, and so on (see `ConstraintTypeMap`). Use it
+to drive a motor (`SetTargetAngularVelocity`, `SetTargetPosition`, ...) or to read the joint's
+current state (`GetCurrentAngle`, `GetCurrentPosition`, ...) imperatively, e.g. from a `useFrame`
+loop. Changing `type`, either body ref, or an **option value** (compared by `JSON.stringify`, not
+identity - an inline object literal is fine) tears the old constraint down and creates a new one.
+
+`removeConstraint` is idempotent: removing an already-removed, unknown, or `null`/`undefined`
+constraint is a safe no-op instead of a throw, which is what makes StrictMode's double-invoked
+effects and a body-removal cascade (below) both safe.
+
+## Constraint types
+
+| `type` | wraps | needs |
+| --- | --- | --- |
+| `'fixed'` | `Jolt.TwoBodyConstraint` | nothing - auto-detects the anchor from the bodies' current transforms if `point1`/`point2` are omitted |
+| `'point'` | `Jolt.PointConstraint` | `point1` (fixes position, not rotation) |
+| `'distance'` | `Jolt.DistanceConstraint` | `min`/`max`, optional `spring` |
+| `'hinge'` / `'revolute'` | `Jolt.HingeConstraint` | `point1`, `axis`, optional `normal`/`min`/`max`/`motor` |
+| `'slider'` / `'prismatic'` | `Jolt.SliderConstraint` | `point1`, `axis`, optional `min`/`max`/`motor` |
+| `'cone'` | `Jolt.ConeConstraint` | `point1`, `twistAxis`, `angle` |
+| `'swingTwist'` | `Jolt.SwingTwistConstraint` | `position`, `twistAxis`, `planeAxis`, cone/twist angles |
+| `'sixDOF'` | `Jolt.SixDOFConstraint` | `position`, per-axis `fixed`/`limited` axis lists |
+| `'pulley'` | `Jolt.PulleyConstraint` | `fixedPoint1`, `fixedPoint2`, `ratio` - see [below](#pulley) |
+| `'gear'` | `Jolt.GearConstraint` | `hinge1`, `hinge2` - see [below](#gear) |
+| `'rackAndPinion'` | `Jolt.RackAndPinionConstraint` | `hinge`, `slider` - see [below](#rackandpinion) |
+
+`revolute`/`prismatic` are aliases for `hinge`/`slider`, kept for parity with other physics
+libraries. See the [Constraints demo](https://github.com/pmndrs/react-three-jolt) for every type
+side by side, including a motorised hinge/slider, a hinge chain, and the pulley/gear set pieces
+below.
+
+### Shared options
+
+`point1`/`point2` are world-space anchors (or local-to-body-COM, see `space` below); most types
+default `point2` to `point1`, or default an omitted point to the body's own position. `min`/`max`
+are meters for `distance`/`slider`, radians for `hinge`. `motor` drives a `hinge` or `slider`:
+
+```ts
+useConstraint('hinge', anchorRef, doorRef, {
+    point1: [0, 2, 0],
+    axis: [0, 0, 1],
+    min: 0,
+    max: Math.PI / 2,
+    motor: { type: 'velocity', velocity: 1.5, maxTorque: 50 }
+});
+```
+
+Read a motor's live target back with `SetTargetAngularVelocity`/`SetTargetAngle` (hinge) or
+`SetTargetVelocity`/`SetTargetPosition` (slider) on the returned constraint - baking a changing
+target into `options` instead would tear the constraint down and rebuild it every frame.
+
+`space: 'local'` switches the anchor points to `EConstraintSpace_LocalToBodyCOM`. This is an
+advanced, easy-to-misuse option - see [Memory](/advanced/memory) - most demos never need it.
+
+## Pulley
+
+`PulleyConstraintSettings` couples two bodies through two independent "rope" segments: body 1 runs
+from `bodyPoint1` (defaults to body 1's position) to the fixed world-space anchor `fixedPoint1`
+(e.g. a pulley wheel), and body 2 the same way through `bodyPoint2`/`fixedPoint2`. `ratio` scales
+how much segment 2 pays out per meter segment 1 does.
+
+```tsx
+useConstraint('pulley', heavyRef, lightRef, {
+    fixedPoint1: [0, 10, 0],
+    fixedPoint2: [0, 10, 4],
+    ratio: 1
+});
+```
+
+`min`/`max` bound the combined length (`distance1 + ratio * distance2`), exactly like `distance`'s
+`min`/`max`. Left unset, jolt uses its own defaults: `min` is `0` and `max` is **auto-computed from
+the bodies' positions when the constraint is created** - i.e. the rope starts taut at its current
+length and can only get *shorter* combined, not longer, which is what makes one side descending
+pull the other one up. Pass `min: 0, max: 0` (or any two equal values) for a rigid rope that locks
+the instant it is created.
+
+`fixedPoint1`/`fixedPoint2` are required; `addConstraint` throws before allocating anything if
+either is missing.
+
+## Gear
+
+A `gear` constraint doesn't create a joint on its own - it locks the rotation of two **existing**
+`hinge` constraints together at `ratio`. Both hinges (each pins one of the two "wheel" bodies to
+its own static anchor) have to exist *before* the gear is created, which rules out composing three
+separate `useConstraint` calls: `useConstraint`'s `options` argument is read once, during render,
+so a hinge ref's `.current` captured into an options object is always the value from *before* that
+hinge's own creation effect has run - there is no ordering of hook calls that fixes this, since the
+whole tree renders before any effect runs.
+
+Build the linked set together instead, imperatively, through
+`physicsSystem.constraintSystem.addConstraint` directly - reading each body ref lazily, inside a
+single effect, the same way `useConstraint` itself reads its body refs:
+
+```tsx
+import { useJolt } from '@react-three/jolt';
+
+function GearPair({ enabled }: { enabled: boolean }) {
+    const { physicsSystem } = useJolt();
+    const hub1Ref = useRef<BodyState | null>(null);
+    const hub2Ref = useRef<BodyState | null>(null);
+    const wheel1Ref = useRef<BodyState | null>(null);
+    const wheel2Ref = useRef<BodyState | null>(null);
+
+    useEffect(() => {
+        if (!enabled) return;
+        const hub1 = hub1Ref.current;
+        const hub2 = hub2Ref.current;
+        const wheel1 = wheel1Ref.current;
+        const wheel2 = wheel2Ref.current;
+        if (!hub1 || !hub2 || !wheel1 || !wheel2) return;
+
+        const { constraintSystem } = physicsSystem;
+        const hinge1 = constraintSystem.addConstraint('hinge', hub1, wheel1, {
+            point1: [0, 0, 0],
+            axis: [0, 0, 1],
+            motor: { type: 'velocity' }
+        });
+        const hinge2 = constraintSystem.addConstraint('hinge', hub2, wheel2, {
+            point1: [3, 0, 0],
+            axis: [0, 0, 1]
+        });
+        const gear = constraintSystem.addConstraint('gear', wheel1, wheel2, {
+            hinge1,
+            hinge2,
+            ratio: 2,
+            axis: [0, 0, 1]
+        });
+
+        // the gear references both hinges, so remove it first
+        return () => {
+            constraintSystem.removeConstraint(gear);
+            constraintSystem.removeConstraint(hinge2);
+            constraintSystem.removeConstraint(hinge1);
+        };
+    }, [enabled, physicsSystem]);
+
+    // ...RigidBody hubs and wheels, `ref={hub1Ref}` etc.
+}
+```
+
+This works because the effect only runs after this component's own `<RigidBody>` children (earlier
+siblings, so their own creation effects already ran) have populated the body refs, and everything
+after that - creating both hinges, then the gear, then wiring it up - is plain synchronous code
+with no React scheduling involved. `addConstraint` throws immediately (before allocating anything)
+if `hinge1`/`hinge2` are missing, so a mistake here fails loudly rather than building a broken gear.
+
+`ratio` (set directly, `mRatio`) is how many radians hinge 2 turns *away* from its start per
+radian hinge 1 turns, in the opposite direction - `ratio: 2` turns hinge 2 at half hinge 1's speed,
+reversed. Pass `numTeeth1`/`numTeeth2` instead to have jolt compute it via
+`GearConstraintSettings::SetRatio` (`mRatio = numTeeth2 / numTeeth1`). `axis`/`axis2` are the two
+hinges' rotation axes (`axis2` defaults to `axis`) - they need not match the axis each hinge itself
+was built with, but the demo above always keeps them in sync. A motor's live target (as in
+`hinge1` above) is still best driven imperatively via `SetTargetAngularVelocity`/`SetTargetAngle`
+from a separate effect, exactly as for a standalone motorised hinge - see the [Constraints
+demo](https://github.com/pmndrs/react-three-jolt/blob/main/apps/examples/src/examples/Constraints.tsx)'s
+`Gear` component for the full, motor-driven version of this pattern.
+
+## RackAndPinion
+
+Same idea as `gear`, but couples a `hinge` (the pinion) to a `slider` (the rack) instead of two
+hinges - build all three (hinge, slider, rackAndPinion) the same way, in one effect:
+
+```tsx
+const { constraintSystem } = physicsSystem;
+const hinge = constraintSystem.addConstraint('hinge', pinionAnchor, pinionWheel, {
+    point1: [0, 0, 0],
+    axis: [0, 0, 1],
+    motor: { type: 'velocity' }
+});
+const slider = constraintSystem.addConstraint('slider', rackAnchor, rackBody, {
+    axis: [0, 1, 0],
+    min: -10,
+    max: 10
+});
+const rackAndPinion = constraintSystem.addConstraint('rackAndPinion', pinionWheel, rackBody, {
+    hinge,
+    slider,
+    ratio: 1,
+    axis: [0, 0, 1],
+    sliderAxis: [0, 1, 0]
+});
+```
+
+`ratio` is radians of pinion rotation per meter of rack travel; pass
+`numTeethRack`/`rackLength`/`numTeethPinion` instead to have jolt compute it via
+`RackAndPinionConstraintSettings::SetRatio` (`mRatio = 2π · numTeethRack / (rackLength ·
+numTeethPinion)`).
+
+## Memory
+
+Every constraint type's settings, and every scratch `Vec3`/`RVec3`/`SpringSettings`/`MotorSettings`
+built while creating one, are freed inside `addConstraint` - callers never see or own them. The
+constraint object itself is reference-counted by jolt: `removeConstraint` (which `useConstraint`
+calls on unmount) is what actually frees it, and calling it twice - or on a constraint jolt already
+tore down because one of its bodies was removed - is always safe. See
+[Memory](/advanced/memory) for the underlying WASM ownership rules.
