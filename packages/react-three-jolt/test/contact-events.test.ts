@@ -195,8 +195,7 @@ describe('sub shape identity (#13)', () => {
             const boxState = ps.bodySystem.getBody(ps.bodySystem.addBody(box))!;
 
             let resolved:
-                | { index: number; userData: number; name?: string; id: number }
-                | undefined;
+                { index: number; userData: number; name?: string; id: number } | undefined;
             boxState.onCollisionEnter((e) => {
                 const sub = e.otherSubShape;
                 resolved = {

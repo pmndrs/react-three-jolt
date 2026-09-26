@@ -1421,11 +1421,10 @@ describe('dynamic trimesh bodies', () => {
         // ...and a dynamic body whose shape is asked for as a trimesh, the #112 case
         const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1));
         mesh.position.set(0, 8, 0);
-        const { result: body, warnings } = withWarnings(
-            () =>
-                system.bodySystem.getBody(
-                    system.bodySystem.addBody(mesh, { shapeType: 'trimesh', bodyType: 'dynamic' })
-                )!
+        const { result: body, warnings } = withWarnings(() =>
+            system.bodySystem.getBody(
+                system.bodySystem.addBody(mesh, { shapeType: 'trimesh', bodyType: 'dynamic' })
+            )!
         );
 
         assert.isTrue(
@@ -1480,12 +1479,11 @@ describe('dynamic trimesh bodies', () => {
             describeShape(new THREE.BoxGeometry(2, 2, 2), { type: 'trimesh' })
         );
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2));
-        const { result: body } = withWarnings(
-            () =>
-                system.bodySystem.getBody(
-                    // `mass` makes generateBodySettings read the hull's real mass properties
-                    system.bodySystem.addBody(mesh, { shape, bodyType: 'dynamic', mass: 12 })
-                )!
+        const { result: body } = withWarnings(() =>
+            system.bodySystem.getBody(
+                // `mass` makes generateBodySettings read the hull's real mass properties
+                system.bodySystem.addBody(mesh, { shape, bodyType: 'dynamic', mass: 12 })
+            )!
         );
 
         assert.equal(body.body.GetShape().GetSubType(), Raw.module.EShapeSubType_ConvexHull);
