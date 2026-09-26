@@ -4,18 +4,19 @@ description: useCommand, useLookCommand and the commander — input mapped to na
 nav: 9
 ---
 
-```bash
-npm install @react-three/jolt-addons
+```ts
+import { useCommand } from '@react-three/jolt/addons';
 ```
 
-The addons package is input handling, plus a couple of helper components. Its centrepiece is the
+Addons are input handling, plus a couple of helper components. They ship inside
+`@react-three/jolt` — nothing extra to install. Its centrepiece is the
 **commander**: you bind behaviour to a *command* ("jump", "move"), not to a key, and keyboard,
 mouse and gamepad all feed the same command.
 
 ## `useCommand`
 
 ```tsx
-import { useCommand } from '@react-three/jolt-addons';
+import { useCommand } from '@react-three/jolt/addons';
 
 function Player() {
     useCommand(
@@ -123,7 +124,7 @@ Look and zoom from **mouse, touch and gamepad** — all three on by default, eac
 own effect with a full cleanup.
 
 ```tsx
-import { useLookCommand } from '@react-three/jolt-addons';
+import { useLookCommand } from '@react-three/jolt/addons';
 
 useLookCommand(
     (look) => rig.moveBoom(look), // THREE.Vector2 of movement deltas
@@ -176,7 +177,7 @@ By default every hook shares one lazily created commander. `<CommanderProvider>`
 subtree instead — a `<Canvas>`, a `<Physics>` world, one scene of a game:
 
 ```tsx
-import { CommanderProvider } from '@react-three/jolt-addons';
+import { CommanderProvider } from '@react-three/jolt/addons';
 
 <CommanderProvider>
     <Player />
@@ -203,7 +204,7 @@ Gamepad support is in-house now; the `gamepad.js` dependency is gone. `Commander
 consumer retains the commander, and stops when the last one lets go.
 
 ```tsx
-import { Commander, CommanderProvider } from '@react-three/jolt-addons';
+import { Commander, CommanderProvider } from '@react-three/jolt/addons';
 
 const commander = new Commander({
     gamepad: { deadzone: 0.2, axisThreshold: 0.02, buttonThreshold: 0.01 }
@@ -228,7 +229,7 @@ detail: { index, button | axis, value, pressed } }` — so anything written agai
 standard-mapping name, which is what `commonCommands` binds its indices against.
 
 ```ts
-import { gamepadButtonName, standardGamepadButtons, standardGamepadSticks } from '@react-three/jolt-addons';
+import { gamepadButtonName, standardGamepadButtons, standardGamepadSticks } from '@react-three/jolt/addons';
 
 standardGamepadButtons; // ['A', 'B', 'X', 'Y', 'LeftBumper', …, 'DPadRight', 'Home'] as const
 gamepadButtonName(12); // 'DPadUp'
@@ -246,7 +247,7 @@ Drives a drei `CameraControls` instance from a gamepad stick:
 
 ```tsx
 import { CameraControls } from '@react-three/drei';
-import { useGamepadForCameraControls } from '@react-three/jolt-addons';
+import { useGamepadForCameraControls } from '@react-three/jolt/addons';
 
 function Rig({ controls }: { controls: CameraControls }) {
     useGamepadForCameraControls('look', controls, { sensitivity: 0.03 });
@@ -263,7 +264,7 @@ drei is not a dependency of this package. The `controls` parameter is typed as
 A static box floor, because every scene needs one:
 
 ```tsx
-import { Floor } from '@react-three/jolt-addons';
+import { Floor } from '@react-three/jolt/addons';
 
 <Floor size={40} position={[0, -1, 0]} />;
 ```

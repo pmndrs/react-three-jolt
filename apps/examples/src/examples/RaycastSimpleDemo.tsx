@@ -2,8 +2,8 @@ import { Environment } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
 import {
     Physics,
-    Raycaster,
-    RaycastHit,
+    type Raycaster,
+    type RaycastHit,
     RigidBody,
     useMouseRaycaster,
     useMulticaster,
@@ -11,7 +11,7 @@ import {
     useSetTimeout,
     useUnmount
 } from '@react-three/jolt';
-import { Floor } from '@react-three/jolt-addons';
+import { Floor } from '@react-three/jolt/addons';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useDemo } from '../App';

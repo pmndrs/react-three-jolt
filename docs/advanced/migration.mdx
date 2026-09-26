@@ -77,7 +77,7 @@ deprecated aliases of `onCollisionEnter` / `onCollisionExit` / `onCollisionPersi
 receive the new payload — their declared type never matched what was actually dispatched, so
 nothing that worked before breaks.
 
-### `@react-three/jolt-addons`
+### `@react-three/jolt/addons`
 
 | what | before | now |
 | --- | --- | --- |
@@ -85,7 +85,7 @@ nothing that worked before breaks.
 | **`gamepad.js`** | a dependency | removed; gamepads are polled in-house. `GamepadInputEvent` and its payload are unchanged |
 | **`Commander.getSnapsot`** | the only spelling | deprecated in favour of `getSnapshot` |
 
-### `@react-three/jolt-controllers`
+### `@react-three/jolt/controllers`
 
 | what | before | now |
 | --- | --- | --- |
@@ -129,7 +129,7 @@ from only the first channel.
 | `heightField/generators-save.ts`, `utils/heightmap.ts`, `utils/psrddnoise3.ts` | — |
 | the `camera-controls`-based camera rig (`camera-rig-system-camera-controls.ts`) | the default [`CameraRigManager`](/api/controllers#camerarigmanager) |
 | `use-character-controller.ts` (empty), `tmp.ts` | — |
-| the `camera-controls` runtime dependency of `@react-three/jolt-controllers` | — |
+| the `camera-controls` runtime dependency of `@react-three/jolt/controllers` | — |
 | `packages/react-three-jolt/types/gamepad.js.d.ts` | — (the dependency is gone) |
 | `apps/examples/src/jolt/` (vendored Jolt builds, ~1 GB) | the `jolt-physics` package |
 
@@ -219,7 +219,7 @@ from only the first channel.
 - **Unlimited concurrent worlds**, gated by the real WASM heap instead of a fixed cap of three —
   see [the heap check](/advanced/memory#reaching-the-module).
 
-### `@react-three/jolt-addons`
+### `@react-three/jolt/addons`
 
 - **[Gamepads](/api/addons#gamepads).** An in-house poller with `CommanderOptions.gamepad`
   (`deadzone`, `axisThreshold`, `buttonThreshold`), the `standardGamepadButtons` /
@@ -235,7 +235,7 @@ from only the first channel.
   `info.isInitial` needed a `@ts-ignore`. **Delete those.** `CommandValue`, `CommandOptions`,
   `CommandEvent`, `CommandState` and `VectorBinding` are exported too.
 
-### `@react-three/jolt-controllers`
+### `@react-three/jolt/controllers`
 
 - **[`<Vehicle>` / `useVehicle`](/api/controllers#vehicle).** One component for both vehicle types,
   a typed `vehicleSettings` prop, injectable chassis (`bodyObject`, children-as-chassis) and
@@ -406,7 +406,7 @@ values change. New: `constraintSystem.constraints`, `removeConstraintsForBody()`
   `addHeightfield`'s centring offset derived from the same numbers and the depth of a non-square
   plane honoured on z. See [Generation](/api/shapes#generation).
 
-### Input (`@react-three/jolt-addons`)
+### Input (`@react-three/jolt/addons`)
 
 - **`useCommand` tears itself down.** The commander was a module-level singleton that attached
   four `window` listeners and a gamepad poll on first use and never released them. It is

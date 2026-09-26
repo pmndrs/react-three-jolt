@@ -7,7 +7,7 @@ import {
     useMount,
     useSetInterval
 } from '@react-three/jolt';
-import { Floor } from '@react-three/jolt-addons';
+import { Floor } from '@react-three/jolt/addons';
 import { useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useDemo } from '../App';

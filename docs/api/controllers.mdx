@@ -1,17 +1,17 @@
 ---
 title: Controllers
-description: CharacterController, CameraRig and Vehicle from @react-three/jolt-controllers.
+description: CharacterController, CameraRig and Vehicle from @react-three/jolt/controllers.
 nav: 8
 ---
 
-```bash
-npm install @react-three/jolt-controllers
+```ts
+import { CharacterController } from '@react-three/jolt/controllers';
 ```
 
 Characters, cameras and vehicles are things Jolt does well and physics wrappers usually don't.
-They live in their own package because they are opinionated, they bring input handling with them
-(via [`@react-three/jolt-addons`](/api/addons)), and they are the least settled part of the
-library.
+They sit behind their own subpath because they are opinionated, they bring input handling with
+them (via [`@react-three/jolt/addons`](/api/addons)), and they are the least settled part of the
+library — but they ship inside `@react-three/jolt`, so there is nothing extra to install.
 
 > [!WARNING]
 > These components work, but they are the roughest corner of the API: several props are not
@@ -25,7 +25,7 @@ slides — driven by keyboard/gamepad commands out of the box.
 
 ```tsx
 import { Physics } from '@react-three/jolt';
-import { CameraRig, CharacterController } from '@react-three/jolt-controllers';
+import { CameraRig, CharacterController } from '@react-three/jolt/controllers';
 
 export function Player() {
     return (
@@ -101,7 +101,7 @@ The component creates one and shares it through `CharacterControllerContext`:
 import {
     CharacterControllerContext,
     type CharacterControllerSystem
-} from '@react-three/jolt-controllers';
+} from '@react-three/jolt/controllers';
 import { useContext } from 'react';
 
 function Stamina() {
@@ -142,7 +142,7 @@ Actions, and what they carry:
 | `'exausted'` | `false` — the spelling is a bug in the source; it is a *different* string from `'exhausted'` |
 
 ```ts
-import type { CharacterControllerSystem } from '@react-three/jolt-controllers';
+import type { CharacterControllerSystem } from '@react-three/jolt/controllers';
 
 function watchJumps(characterSystem: CharacterControllerSystem) {
     const off = characterSystem.on('jump', (_action, count) => console.log('jump', count));
@@ -181,8 +181,8 @@ getting stuck under the ceiling for a beat too long (issue #88). `headAngle` and
 the fix:
 
 ```tsx
-import { CharacterController } from '@react-three/jolt-controllers';
-import type { HeadHitInfo } from '@react-three/jolt-controllers';
+import { CharacterController } from '@react-three/jolt/controllers';
+import type { HeadHitInfo } from '@react-three/jolt/controllers';
 
 <CharacterController
     headAngle={Math.PI / 6} // default: 30 degrees
@@ -213,7 +213,7 @@ and every one of them is *also* emitted as an `'action'` under the same name, so
 see the same things.
 
 ```tsx
-import { useCharacterEvent } from '@react-three/jolt-controllers';
+import { useCharacterEvent } from '@react-three/jolt/controllers';
 
 <CharacterController
     onMove={(speed) => console.log('moving', speed)}
@@ -233,8 +233,8 @@ built from — subscribe from your own component once you have a `CharacterContr
 `CharacterControllerContext`, or one you built yourself):
 
 ```tsx
-import { useCharacterEvent } from '@react-three/jolt-controllers';
-import type { CharacterControllerSystem } from '@react-three/jolt-controllers';
+import { useCharacterEvent } from '@react-three/jolt/controllers';
+import type { CharacterControllerSystem } from '@react-three/jolt/controllers';
 
 function Footsteps({ characterSystem }: { characterSystem?: CharacterControllerSystem }) {
     useCharacterEvent(characterSystem, 'move', (speed) => {
@@ -432,7 +432,7 @@ One component for every kind of vehicle: a Jolt vehicle constraint with engine, 
 differentials and suspension.
 
 ```tsx
-import { Vehicle } from '@react-three/jolt-controllers';
+import { Vehicle } from '@react-three/jolt/controllers';
 
 <Vehicle type="fourWheel" position={[0, 25, 0]} vehicleSettings={{ vehicleMass: 900 }} />;
 ```
@@ -475,7 +475,7 @@ detached on teardown and never disposed.
 ### `useVehicle`
 
 ```tsx
-import { useVehicle } from '@react-three/jolt-controllers';
+import { useVehicle } from '@react-three/jolt/controllers';
 import { useEffect } from 'react';
 
 function Car() {
@@ -604,7 +604,7 @@ running, so a listener that started a particle effect still gets its `skidEnd`.
 ### Readouts and events
 
 ```tsx
-import { useVehicle } from '@react-three/jolt-controllers';
+import { useVehicle } from '@react-three/jolt/controllers';
 import { useEffect } from 'react';
 
 function Dashboard() {

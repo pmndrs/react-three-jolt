@@ -9,7 +9,7 @@ import {
     RigidBody,
     useConstraint
 } from '@react-three/jolt';
-import { Floor } from '@react-three/jolt-addons';
+import { Floor } from '@react-three/jolt/addons';
 import { button, folder, useControls } from 'leva';
 import { useEffect, useRef, useState } from 'react';
 import { useDemo } from '../App';

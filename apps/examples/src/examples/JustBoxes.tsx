@@ -1,6 +1,6 @@
 import { Environment } from '@react-three/drei';
 import { Physics, RigidBody } from '@react-three/jolt';
-import { Floor } from '@react-three/jolt-addons';
+import { Floor } from '@react-three/jolt/addons';
 import { useDemo } from '../App';
 import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 export function JustBoxes() {

@@ -38,7 +38,8 @@
                 "useIterableCallbackReturn": "error"
             },
             "style": {
-                "noNonNullAssertion": "off"
+                "noNonNullAssertion": "off",
+                "useImportType": "off"
             }
         }
     },

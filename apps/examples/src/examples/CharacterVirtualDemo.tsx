@@ -1,8 +1,8 @@
 import { Environment } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
 import { Physics, RigidBody } from '@react-three/jolt';
-import { Floor } from '@react-three/jolt-addons';
-import { CameraRig, CharacterController } from '@react-three/jolt-controllers';
+import { Floor } from '@react-three/jolt/addons';
+import { CameraRig, CharacterController } from '@react-three/jolt/controllers';
 import { useDemo } from '../App';
 import { JoltMemoryRegistrar } from '../JoltMemoryReadout';
 import { Arch } from './Bodies/Arch';
