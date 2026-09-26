@@ -15,6 +15,17 @@ import { useDemo } from '../App';
 const IDENTITY_QUAT = new THREE.Quaternion();
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
+// t=0 centers of the five platforms below, used to spread the box pile's spawn points (#304:
+// they used to all drop at [0, 24, 0], straight above the disc, so the other four platforms
+// never caught anything).
+const PLATFORM_SPAWNS = [
+    { x: -16, z: -4 }, // liftA
+    { x: 16, z: 4 }, // liftB
+    { x: 0, z: -16 }, // conveyorA
+    { x: 0, z: 16 }, // conveyorB
+    { x: 0, z: 0 } // disc
+];
+
 export function FloatingPlatforms() {
     const { debug, paused, interpolate, physicsKey, module } = useDemo();
     // Riders are woken by the platforms on their own now (a driven kinematic body has a real
@@ -83,6 +94,21 @@ function FloatingPlatformsInner() {
         amplitude: { value: 5, min: 1, max: 10, step: 0.5 },
         'spawn 20': button(() => setBallCount((count) => count + 20))
     });
+
+    // spread the box pile across every platform's spawn zone (#304) instead of dropping the
+    // whole pile above the disc alone - a mount-only effect since, unlike the balls below, this
+    // pile has a fixed count.
+    useEffect(() => {
+        if (!boxesRef.current) return;
+        for (let i = 0; i < boxesRef.current.length; i++) {
+            const spawn = PLATFORM_SPAWNS[i % PLATFORM_SPAWNS.length];
+            boxesRef.current[i].position = new THREE.Vector3(
+                spawn.x + (Math.random() - 0.5) * 3,
+                22 + Math.random() * 4,
+                spawn.z + (Math.random() - 0.5) * 3
+            );
+        }
+    }, []);
 
     // reposition newly spawned balls above the platforms so they drop in and get carried
     useEffect(() => {

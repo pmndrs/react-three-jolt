@@ -46,7 +46,6 @@ export function BallBox() {
     }, []);
 
     const [gravity, setGravity] = useState([0, -9.8, 0]);
-    const [showPrompt, setShowPrompt] = useState(false);
 
     //* Attractor (issue #159) ----------------------------------
     // Off by default so the demo still opens as the gravity toy it has always been. Turn it on
@@ -83,20 +82,12 @@ export function BallBox() {
     }, []);
 
     //* Changing gravity with device ----------------------------
-
-    const promptUser = () => {
-        //@ts-expect-error iOS only, not in lib.dom
-        DeviceMotionEvent.requestPermission()
-            .then((permissionState: PermissionState) => {
-                console.log('Permission state', permissionState);
-                if (permissionState === 'granted') {
-                    console.log('*** Permission granted, adding event listener');
-                    window.addEventListener('devicemotion', updateGravityOnDevice);
-                    setShowPrompt(false);
-                }
-            })
-            .catch(console.error);
-    };
+    // #304: this used to gate iOS 13+ behind a giant (radius 10) sphere covering the whole
+    // scene, which you clicked to request `DeviceMotionEvent` permission - it then vanished on
+    // success. Removed rather than replaced: iOS requires that permission come from a user
+    // gesture, which this demo has no other UI for, so device-tilt gravity is simply a
+    // no-op there now; right-click-drag (`updateGravityOnMouse` above) and non-iOS device tilt
+    // still work.
 
     // detect device orientation and set gravity
     const updateGravityOnDevice = (e: DeviceMotionEvent) => {
@@ -108,15 +99,7 @@ export function BallBox() {
 
     // attach event listener to device orientation with removal on return
     useEffect(() => {
-        //@ts-expect-error iOS only, not in lib.dom
-        if (typeof DeviceMotionEvent.requestPermission === 'function') {
-            // we are on an iOS 13+ device
-            setShowPrompt(true);
-        } else {
-            // handle regular non iOS 13+ devices
-            window.addEventListener('devicemotion', updateGravityOnDevice);
-        }
-
+        window.addEventListener('devicemotion', updateGravityOnDevice);
         return () => {
             window.removeEventListener('devicemotion', updateGravityOnDevice);
         };
@@ -134,12 +117,6 @@ export function BallBox() {
                 defaultBodySettings={defaultBodySettings}
             >
                 <JoltMemoryRegistrar />
-                {showPrompt && (
-                    <mesh position={[0, -1, 0]} receiveShadow onClick={promptUser}>
-                        <sphereGeometry args={[10, 32, 32]} />
-                        <meshStandardMaterial color="#CE7B91" />
-                    </mesh>
-                )}
 
                 <BoxContainer />
 

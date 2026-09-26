@@ -128,7 +128,7 @@ function Inner() {
         rearConveyor.current.motionAsSurfaceVelocity = true;
         leftConveyor.current.activateMotionSource(new THREE.Vector3(-2.4, 0, 0));
         // setup the bouncer
-        angledBouncer.current!.activateMotionSource(new THREE.Vector3(0, 300, 0));
+        angledBouncer.current!.activateMotionSource(new THREE.Vector3(0, 200, 0));
         // setup the forcefield
         forcefield.current!.activateMotionSource(new THREE.Vector3(3.6, 10, -0.7));
         //disable auto rotation of field vector
