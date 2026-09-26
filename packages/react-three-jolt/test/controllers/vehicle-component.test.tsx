@@ -8,8 +8,8 @@
 
 import { create } from '@react-three/test-renderer';
 // React stays a *value* import: this package compiles JSX with the classic runtime, so the
-// emitted `React.createElement` calls need it at runtime (biome's useImportType will offer to
-// make it `import type` - don't).
+// emitted `React.createElement` calls need it at runtime (an autofixer for eslint's
+// @typescript-eslint/consistent-type-imports would offer to make it `import type` - don't).
 import React, { act, useEffect } from 'react';
 import * as THREE from 'three';
 import { assert, test } from 'vitest';

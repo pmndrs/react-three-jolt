@@ -1,7 +1,7 @@
 import { useThree } from '@react-three/fiber';
 // React stays a *value* import: this package compiles JSX with the classic runtime, so the
-// emitted `React.createElement` calls need it at runtime (biome's useImportType will offer to
-// make it `import type` - don't).
+// emitted `React.createElement` calls need it at runtime (an autofixer for eslint's
+// @typescript-eslint/consistent-type-imports would offer to make it `import type` - don't).
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { isCommandVector, useCommand } from '../../../addons/index';
@@ -137,7 +137,7 @@ export function Vehicle(props: VehicleProps) {
     // hand the manager to the caller (and take it back on teardown)
     useEffect(() => {
         onVehicle?.(vehicle);
-        // biome-ignore lint/correctness/useExhaustiveDependencies: onVehicle is a callback prop
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- onVehicle is a callback prop
     }, [vehicle]);
 
     //* Props triggering the class ========================

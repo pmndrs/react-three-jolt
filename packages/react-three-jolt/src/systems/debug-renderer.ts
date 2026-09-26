@@ -41,13 +41,7 @@ import { createMeshFromShape } from './shape-system';
 
 /** The categories the overlay colours bodies (and extras) by. */
 export type DebugColorKey =
-    | 'static'
-    | 'kinematic'
-    | 'dynamic'
-    | 'sleeping'
-    | 'sensor'
-    | 'constraint'
-    | 'contact';
+    'static' | 'kinematic' | 'dynamic' | 'sleeping' | 'sensor' | 'constraint' | 'contact';
 
 /** Grey static, blue kinematic, green dynamic, yellow sleeping, magenta sensor. */
 export const DEFAULT_DEBUG_COLORS: Record<DebugColorKey, THREE.ColorRepresentation> = {
@@ -470,8 +464,7 @@ export class DebugRenderer {
     private ensureExtraLines(key: 'constraint' | 'contact', vertices: number): THREE.LineSegments {
         const existing = key === 'constraint' ? this.constraintLines : this.contactLines;
         const attribute = existing?.geometry.getAttribute('position') as
-            | THREE.BufferAttribute
-            | undefined;
+            THREE.BufferAttribute | undefined;
         if (existing && attribute && attribute.count >= vertices) return existing;
 
         const geometry = new THREE.BufferGeometry();

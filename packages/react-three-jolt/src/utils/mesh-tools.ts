@@ -38,9 +38,9 @@ export function createMeshFloor(
                 const v1 = t.get_mV(0),
                     v2 = t.get_mV(1),
                     v3 = t.get_mV(2);
-                (v1.x = x1), (v1.y = height(x, z)), (v1.z = z1);
-                (v2.x = x1), (v2.y = height(x, z + 1)), (v2.z = z2);
-                (v3.x = x2), (v3.y = height(x + 1, z + 1)), (v3.z = z2);
+                ((v1.x = x1), (v1.y = height(x, z)), (v1.z = z1));
+                ((v2.x = x1), (v2.y = height(x, z + 1)), (v2.z = z2));
+                ((v3.x = x2), (v3.y = height(x + 1, z + 1)), (v3.z = z2));
             }
 
             {
@@ -48,9 +48,9 @@ export function createMeshFloor(
                 const v1 = t.get_mV(0),
                     v2 = t.get_mV(1),
                     v3 = t.get_mV(2);
-                (v1.x = x1), (v1.y = height(x, z)), (v1.z = z1);
-                (v2.x = x2), (v2.y = height(x + 1, z + 1)), (v2.z = z2);
-                (v3.x = x2), (v3.y = height(x + 1, z)), (v3.z = z1);
+                ((v1.x = x1), (v1.y = height(x, z)), (v1.z = z1));
+                ((v2.x = x2), (v2.y = height(x + 1, z + 1)), (v2.z = z2));
+                ((v3.x = x2), (v3.y = height(x + 1, z)), (v3.z = z1));
             }
         }
     const materials = new jolt.PhysicsMaterialList();
