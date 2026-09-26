@@ -914,7 +914,7 @@ export class BodySystem {
                   : undefined;
             if (source) {
                 const settings = jolt.wrapPointer(settingsPtr, jolt.ContactSettings);
-                source.handleMotionContact(handle1, handle2, settings);
+                source.handleMotionContact(handle1, handle2, settings, added);
             }
         }
 

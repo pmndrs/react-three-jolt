@@ -1362,11 +1362,21 @@ export class BodyState {
      *
      * `addImpulse` used to be called straight from the contact callback, which goes through
      * `BodyInterface` and is not allowed while Jolt owns the world.
+     *
+     * `added` distinguishes a fresh contact from one that has persisted since the substep
+     * before. The surface-velocity writes below are idempotent (`ContactSettings.Set` replaces
+     * the value every substep, so calling it on every persisted contact is what keeps a
+     * conveyor's belt speed constant while something rides it) but `addImpulse`/`applyTorque`
+     * are not: each call adds to the body's velocity, so applying it once per persisted substep
+     * as well as once on contact-added compounds for as long as the contact lasts (a bounce pad
+     * hit for 2-3 substeps launched things 2-3x harder than intended). Those two paths are
+     * therefore gated to `added` only, so a bump applies exactly once per touch.
      */
     handleMotionContact = (
         body1Handle: number,
         body2Handle: number,
-        settings: Jolt.ContactSettings
+        settings: Jolt.ContactSettings,
+        added: boolean
     ) => {
         // get the body states of the two bodies
         const body1 = this.bodySystem.getBody(body1Handle);
@@ -1419,9 +1429,12 @@ export class BodyState {
                     : new THREE.Vector3(0, 0, 0);
                 const v = body2LinearSurfaceVelocity.sub(body1LinearSurfaceVelocity);
                 settings.mRelativeLinearSurfaceVelocity.Set(v.x, v.y, v.z);
-            } else {
+            } else if (added) {
                 // Queued, not applied: AddImpulse goes through the body interface, which may
-                // not be touched while Jolt is inside Step().
+                // not be touched while Jolt is inside Step(). Unlike the surface-velocity write
+                // above, an impulse is additive, so this only runs on the contact's first
+                // substep - a bump that persists for several substeps must not re-add itself
+                // every one of them.
                 if (this.useRotation) linearVector.applyQuaternion(sourceBody.rotation);
                 this.bodySystem.createPendingAction('addImpulse', targetBody.handle, linearVector);
             }
@@ -1453,7 +1466,9 @@ export class BodyState {
                 settings.mRelativeLinearSurfaceVelocity.Set(rls.x, rls.y, rls.z);
                 const ras = body2AngularSurfaceVelocity.sub(body1AngularSurfaceVelocity);
                 settings.mRelativeAngularSurfaceVelocity.Set(ras.x, ras.y, ras.z);
-            } else {
+            } else if (added) {
+                // Same reasoning as the linear impulse above: torque is additive, so only queue
+                // it once per contact.
                 const angularVector =
                     body1.motionAngularVector?.clone() ||
                     body2.motionAngularVector?.clone() ||

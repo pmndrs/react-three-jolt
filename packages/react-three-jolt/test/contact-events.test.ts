@@ -578,12 +578,30 @@ describe('motion sources', () => {
             padState.activateMotionSource(new THREE.Vector3(0, 400, 0));
 
             const box = addBox(ps, 3, 0.5);
-            let peak = box.position.y;
+            // the pad's resting contact height (box half-size 0.25 on a 1-unit-tall pad
+            // centered at 0.5): once it settles here, the impulse is the only thing that can
+            // send it up again.
+            const restY = 1.25;
+            let landed = false;
+            let peakAfterLanding = 0;
             for (let i = 0; i < 120; i++) {
                 ps.onUpdate(STEP);
-                peak = Math.max(peak, box.position.y);
+                if (!landed && box.position.y <= restY + 0.05) landed = true;
+                if (landed) peakAfterLanding = Math.max(peakAfterLanding, box.position.y);
             }
-            assert.isAbove(peak, 3.5, 'the bounce pad never launched the box');
+            // #304: this used to assert `peak > 3.5` (higher than the box's own drop height),
+            // which only held because `handleMotionContact` fired the impulse once per
+            // persisted-contact substep as well as once on contact-added - 2-3x too much,
+            // exactly the "suddenly too strong" bounce pad bug in motionSources.tsx. A single,
+            // correct application of (0, 400, 0) on this box's mass is nowhere near enough to
+            // out-launch a 1.75m fall (it barely cancels the incoming velocity), so the
+            // meaningful assertion is just that the box left the pad again at all.
+            assert.isTrue(landed, 'the box never reached the pad');
+            assert.isAbove(
+                peakAfterLanding,
+                restY + 0.3,
+                'the bounce pad never launched the box back up'
+            );
         } finally {
             ps.destroy('contacts-bouncer');
         }
