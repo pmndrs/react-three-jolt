@@ -114,20 +114,27 @@ export interface ConstraintOptions {
     axis2?: anyVec3;
     /**
      * the two existing `HingeConstraint`s (the `useConstraint`/`addConstraint` return value,
-     * not settings) this gear synchronizes. Required
+     * not settings) this gear synchronizes. Required. Can be either the constraint itself or
+     * a ref to it; refs are dereferenced lazily inside `useConstraint`'s effect.
      */
-    hinge1?: Jolt.HingeConstraint;
-    hinge2?: Jolt.HingeConstraint;
+    hinge1?: Jolt.HingeConstraint | { readonly current: Jolt.HingeConstraint | null | undefined };
+    hinge2?: Jolt.HingeConstraint | { readonly current: Jolt.HingeConstraint | null | undefined };
     /** tooth counts; when both are set they replace `ratio` via `SetRatio` */
     numTeeth1?: number;
     numTeeth2?: number;
     // rackAndPinion only ---
     /** the slider's axis of travel (`mSliderAxis`). Defaults to `[0, 0, 1]` */
     sliderAxis?: anyVec3;
-    /** the existing hinge (pinion) constraint. Required */
-    hinge?: Jolt.HingeConstraint;
-    /** the existing slider (rack) constraint. Required */
-    slider?: Jolt.SliderConstraint;
+    /**
+     * the existing hinge (pinion) constraint. Required. Can be either the constraint itself or
+     * a ref to it; refs are dereferenced lazily inside `useConstraint`'s effect.
+     */
+    hinge?: Jolt.HingeConstraint | { readonly current: Jolt.HingeConstraint | null | undefined };
+    /**
+     * the existing slider (rack) constraint. Required. Can be either the constraint itself or
+     * a ref to it; refs are dereferenced lazily inside `useConstraint`'s effect.
+     */
+    slider?: Jolt.SliderConstraint | { readonly current: Jolt.SliderConstraint | null | undefined };
     /** tooth/length counts; when all three are set they replace `ratio` via `SetRatio` */
     numTeethRack?: number;
     rackLength?: number;

@@ -8,11 +8,9 @@ import {
     type ConstraintType,
     Physics,
     RigidBody,
-    useConstraint,
-    useJolt
+    useConstraint
 } from '@react-three/jolt';
 import { Floor } from '@react-three/jolt/addons';
-import type Jolt from 'jolt-physics';
 import { button, folder, useControls } from 'leva';
 import { useEffect, useRef, useState } from 'react';
 import { useDemo } from '../App';
@@ -669,60 +667,46 @@ const GEAR_HUB2: [number, number, number] = [56, 14, -14];
  * the problem entirely: it is plain synchronous code, not React scheduling.
  */
 function Gear({ enabled, velocity }: { enabled: boolean; velocity: number }) {
-    const { physicsSystem } = useJolt();
     const hub1Ref = useRef<BodyState | null>(null);
     const hub2Ref = useRef<BodyState | null>(null);
     const bar1Ref = useRef<BodyState | null>(null);
     const bar2Ref = useRef<BodyState | null>(null);
-    const hinge1Ref = useRef<Jolt.HingeConstraint | null>(null);
+
+    // Create the two hinges independently via useConstraint
+    const hinge1Ref = useConstraint(
+        'hinge',
+        hub1Ref,
+        bar1Ref,
+        enabled ? { point1: GEAR_HUB1, axis: [0, 0, 1], motor: { type: 'velocity' } } : undefined
+    );
+    const hinge2Ref = useConstraint(
+        'hinge',
+        hub2Ref,
+        bar2Ref,
+        enabled ? { point1: GEAR_HUB2, axis: [0, 0, 1] } : undefined
+    );
+
+    // Create the gear, passing the hinge refs. useConstraint dereferences them inside its
+    // effect, after both hinges have been created.
+    useConstraint(
+        'gear',
+        bar1Ref,
+        bar2Ref,
+        enabled
+            ? {
+                  hinge1: hinge1Ref,
+                  hinge2: hinge2Ref,
+                  ratio: 2,
+                  axis: [0, 0, 1]
+              }
+            : undefined
+    );
 
     // driven imperatively (like `MotorHinge`) so dragging the leva slider doesn't tear the
     // whole gear set down and recreate it every frame
     useEffect(() => {
         hinge1Ref.current?.SetTargetAngularVelocity(velocity);
-    }, [velocity]);
-
-    useEffect(() => {
-        if (!enabled) return;
-        const hub1 = hub1Ref.current;
-        const hub2 = hub2Ref.current;
-        const bar1 = bar1Ref.current;
-        const bar2 = bar2Ref.current;
-        // the RigidBody refs above are this effect's siblings, declared earlier, so their own
-        // creation effects have already run and populated these by the time this fires
-        if (!hub1 || !hub2 || !bar1 || !bar2) return;
-
-        const { constraintSystem } = physicsSystem;
-        const hinge1 = constraintSystem.addConstraint('hinge', hub1, bar1, {
-            point1: GEAR_HUB1,
-            axis: [0, 0, 1],
-            motor: { type: 'velocity' }
-        });
-        hinge1Ref.current = hinge1;
-        hinge1.SetTargetAngularVelocity(velocity);
-
-        const hinge2 = constraintSystem.addConstraint('hinge', hub2, bar2, {
-            point1: GEAR_HUB2,
-            axis: [0, 0, 1]
-        });
-        const gear = constraintSystem.addConstraint('gear', bar1, bar2, {
-            hinge1,
-            hinge2,
-            ratio: 2,
-            axis: [0, 0, 1]
-        });
-
-        return () => {
-            // remove the gear before the hinges it references
-            constraintSystem.removeConstraint(gear);
-            constraintSystem.removeConstraint(hinge2);
-            constraintSystem.removeConstraint(hinge1);
-            hinge1Ref.current = null;
-        };
-        // `velocity` is applied to the already-created hinge by the effect above instead of
-        // being a dependency here, so dragging the leva slider doesn't rebuild the gear set
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [enabled, physicsSystem]);
+    }, [velocity, hinge1Ref]);
 
     return (
         <>
