@@ -20,7 +20,6 @@ import {
     useState
 } from 'react';
 import { NavLink, type NavLinkProps, Route, Routes, useLocation } from 'react-router';
-import { AddRemoveBodies } from './examples/AddRemoveBodies';
 import { BallBox } from './examples/BallBox';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
 import { CollisionFiltering } from './examples/CollisionFiltering';
@@ -137,13 +136,6 @@ const routes: RouteMap = {
         element: <RaycastSimpleDemo />
     },
 
-    AddRemoveBodies: {
-        label: 'Add/Remove Bodies',
-        position: [0, 20, 40],
-        target: [0, 5, 0],
-        background: '#264653',
-        element: <AddRemoveBodies />
-    },
     RaycastMany: {
         position: [0, 0, 5],
         target: [0, 0, 0],
