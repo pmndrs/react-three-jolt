@@ -129,6 +129,11 @@ interface RigidBodyProps
     // Collision groups: the "these two specific objects shouldn't collide" filter. Bodies only
     // consult it when their `group` matches; `bodySystem.disableCollision(subA, subB)` then turns
     // off that one sub group pair. Broad categories stay on the object layer. Both are reactive.
+    // IMPORTANT: Jolt hardcodes "same subGroup id never collides" - it is not a pair you can
+    // enable, and it is not affected by disableCollision/enableCollision. Give every body that
+    // should be able to touch another a DIFFERENT subGroup id, even bodies you think of as "the
+    // same colour"/"the same team"; use disableCollision to turn off the specific pairs of
+    // (different) ids that shouldn't touch. See issue #302.
     group?: number;
     subGroup?: number;
 

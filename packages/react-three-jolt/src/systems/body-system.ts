@@ -231,6 +231,14 @@ export class BodySystem {
     // when two bodies share a group id; within a group, a disabled sub group pair skips the
     // contact. Bodies with no collision group (the default) always collide.
     //
+    // Sharp edge (issue #302): Jolt hardcodes "two bodies with the SAME sub group id never
+    // collide" - this is not a table entry, disableCollision/enableCollision cannot touch it, and
+    // it is unconditional. So a sub group id is not a "team"/"colour" tag that things collide
+    // within by default - it is closer to a per-body-or-per-rigid-part identity. To let a set of
+    // bodies collide with one thing but not another, give each of them its OWN distinct sub group
+    // id and use disableCollision to turn off the specific (different-id) pairs that shouldn't
+    // touch; giving two bodies the same sub group guarantees they can never touch, full stop.
+    //
     // Each body owns its own `CollisionGroup` (created in createBody / on first use, destroyed in
     // removeBody). It used to be ONE shared instance handed to every body, so setting a group on
     // one body rewrote the settings every later body was created from (issue #95).
