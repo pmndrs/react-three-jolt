@@ -331,8 +331,7 @@ export type ResolvedTwoWheelVehicleSettings = TwoWheelVehicleSettings &
         >
     >;
 export type ResolvedVehicleSettings =
-    | ResolvedFourWheelVehicleSettings
-    | ResolvedTwoWheelVehicleSettings;
+    ResolvedFourWheelVehicleSettings | ResolvedTwoWheelVehicleSettings;
 
 export const defaultFourWheelVehicleSettings: ResolvedFourWheelVehicleSettings = {
     type: 'fourWheel',
