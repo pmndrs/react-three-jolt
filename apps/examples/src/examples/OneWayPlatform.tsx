@@ -59,8 +59,11 @@ function OneWayPlatformInner() {
                     return other.velocity.y <= 0;
                 }}
             >
+                {/* #304: this used to be 14 wide (half extent 7), narrower than the +/-8
+                    launchers below it, so the side balls' straight-up columns never touched it
+                    at all. Widened to 20 (half extent 10) so every launcher lands with margin. */}
                 <mesh receiveShadow>
-                    <boxGeometry args={[14, 0.4, 14]} />
+                    <boxGeometry args={[20, 0.4, 14]} />
                     <meshStandardMaterial color="#8ecae6" transparent opacity={0.65} />
                 </mesh>
             </RigidBody>
