@@ -13,6 +13,7 @@ import { Floor } from '@react-three/jolt/addons';
 import { button, folder, useControls } from 'leva';
 import { useEffect, useRef, useState } from 'react';
 import { useDemo } from '../App';
+import { Grabber } from '../shared/Grabber';
 
 // row layout ------------------------------------------------------------
 const ROW_Y = 14;
@@ -663,11 +664,14 @@ export function Constraints() {
             debug={debug}
             gravity={20}
         >
-            <ConstraintsScene
-                enabled={enabled as EnabledMap}
-                motorVelocity={motorVelocity}
-                doorTarget={doorTarget}
-            />
+            <Grabber>
+                <ConstraintsScene
+                    enabled={enabled as EnabledMap}
+                    motorVelocity={motorVelocity}
+                    doorTarget={doorTarget}
+                />
+            </Grabber>
+            <Label position={[-24, ROW_Y + 9, ROW_Z]}>drag bodies to test the constraints</Label>
             <directionalLight
                 castShadow
                 position={[10, 40, 30]}
