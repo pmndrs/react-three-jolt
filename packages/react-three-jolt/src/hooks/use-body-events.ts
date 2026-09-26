@@ -9,8 +9,9 @@
 
 import { useEffect } from 'react';
 import type { BodyState } from '../systems/body-state';
-import type { BodyEventMap, WorldEventMap } from '../systems/events';
+import type { BodyEventMap, SoftBodyEventMap, WorldEventMap } from '../systems/events';
 import type { PhysicsSystem } from '../systems/physics-system';
+import type { SoftBodyState } from '../systems/soft-body-system';
 import { useEventCallback, useJolt } from './hooks';
 
 /** Subscribe `handler` to one of `body`'s events for as long as both exist. */
@@ -26,6 +27,21 @@ export function useBodyEvent<K extends keyof BodyEventMap>(
     useEffect(() => {
         if (!body || !enabled) return;
         return body.on(type, callback as BodyEventMap[K]);
+    }, [body, enabled, type, callback]);
+}
+
+/** Subscribe `handler` to one of `body`'s events, for a `<SoftBody>` (issue #245). Same contract
+ * as {@link useBodyEvent}. */
+export function useSoftBodyEvent<K extends keyof SoftBodyEventMap>(
+    body: SoftBodyState | undefined,
+    type: K,
+    handler: SoftBodyEventMap[K] | undefined
+): void {
+    const callback = useEventCallback(handler);
+    const enabled = handler !== undefined;
+    useEffect(() => {
+        if (!body || !enabled) return;
+        return body.on(type, callback as SoftBodyEventMap[K]);
     }, [body, enabled, type, callback]);
 }
 

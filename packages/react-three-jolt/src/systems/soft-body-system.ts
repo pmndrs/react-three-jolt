@@ -13,6 +13,27 @@ import { Layer } from '../constants';
 import { castObject, Raw } from '../raw';
 import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
 import { devWarn, quat, vec3 } from '../utils';
+import type { BodySystem } from './body-system';
+import {
+    ContactEventQueue,
+    EventKind,
+    FLUSH_ORDER,
+    KIND_EVENT,
+    PayloadPool,
+    type PooledBasic,
+    type PooledEnter,
+    SoftBodyContactAccumulator,
+    type SoftPeerAccum
+} from './contact-events';
+import { Emitter, type Unsubscribe } from './emitter';
+import {
+    type CollisionTarget,
+    EventBit,
+    SOFT_BODY_EVENT_BITS,
+    type SoftBodyEventMap,
+    type SoftBodyValidatePayload,
+    type WorldEventMap
+} from './events';
 
 // Scale component for `syncGeometry`'s compose/decompose round trip - a soft body has no
 // independent "shape scale" the way a `<RigidBody>`'s `activeScale` does, so this is always
@@ -32,6 +53,15 @@ const UNIT_SCALE = new THREE.Vector3(1, 1, 1);
  *   behavior than the distance-based bend `CreateConstraints` derives from edges alone).
  */
 export type SoftBodyBendType = 'none' | 'distance' | 'dihedral';
+
+// Scratch for the contact listener (issue #245): the soft body's own COM pose, read once per
+// `OnSoftBodyContactAdded` call, and one point reused per vertex to bring `GetLocalContactPoint`/
+// `GetContactNormal` (both in the soft body's local frame) into world space before they are
+// written into the event queue. Module level so nothing is allocated per contact.
+const _softPose = new THREE.Vector3();
+const _softRotation = new THREE.Quaternion();
+const _softPoint = new THREE.Vector3();
+const _softNormal = new THREE.Vector3();
 
 /** Called once per (post-merge) vertex with its local rest position; return `true` to pin it. */
 export type SoftBodyPinPredicate = (position: THREE.Vector3, index: number) => boolean;
@@ -344,6 +374,48 @@ export class SoftBodyState {
     private readonly invertedWorldMatrix: THREE.Matrix4;
     disposed = false;
 
+    /**
+     * This soft body's events (issue #245). Same primitive and naming as `BodyState.events` - see
+     * `SoftBodyEventMap` for the payload shapes and `SoftBodySystem`'s `SoftBodyContactListenerJS`
+     * wiring for how they get filled in.
+     */
+    readonly events = new Emitter<SoftBodyEventMap>(SOFT_BODY_EVENT_BITS);
+    private static readonly NOOP_UNSUBSCRIBE: Unsubscribe = () => {};
+
+    /** What this body is listening for, as a bitfield - read inside the Jolt callback to decide
+     * whether a step's vertex contacts are worth walking at all. */
+    get eventMask(): number {
+        return this.events.mask;
+    }
+
+    /** Subscribe to one of this body's events. Returns the unsubscribe. */
+    on<K extends keyof SoftBodyEventMap>(type: K, fn: SoftBodyEventMap[K]): Unsubscribe {
+        if (this.disposed) return SoftBodyState.NOOP_UNSUBSCRIBE;
+        return this.events.on(type, fn);
+    }
+    /** Fires once when this soft body starts touching another body. */
+    onCollisionEnter(fn: SoftBodyEventMap['collisionEnter']): Unsubscribe {
+        return this.on('collisionEnter', fn);
+    }
+    /** Fires every step the contact is maintained. */
+    onCollisionPersist(fn: SoftBodyEventMap['collisionPersist']): Unsubscribe {
+        return this.on('collisionPersist', fn);
+    }
+    /** Fires once when this soft body stops touching another body. */
+    onCollisionExit(fn: SoftBodyEventMap['collisionExit']): Unsubscribe {
+        return this.on('collisionExit', fn);
+    }
+    onSensorEnter(fn: SoftBodyEventMap['sensorEnter']): Unsubscribe {
+        return this.on('sensorEnter', fn);
+    }
+    onSensorExit(fn: SoftBodyEventMap['sensorExit']): Unsubscribe {
+        return this.on('sensorExit', fn);
+    }
+    /** Synchronous, inside the step. Return `false` to reject the contact. See docs/events.md. */
+    onContactValidate(fn: SoftBodyEventMap['contactValidate']): Unsubscribe {
+        return this.on('contactValidate', fn);
+    }
+
     constructor(
         object: THREE.Mesh,
         body: Jolt.Body,
@@ -426,6 +498,7 @@ export class SoftBodyState {
         this.bodyInterface.DestroyBody(bodyID);
         this.sharedSettings?.Release();
         this.sharedSettings = undefined;
+        this.events.clear();
     }
 }
 
@@ -433,9 +506,42 @@ export class SoftBodyState {
 export class SoftBodySystem {
     readonly bodies = new Map<number, SoftBodyState>();
     private readonly bodyInterface: Jolt.BodyInterface;
+    private readonly joltPhysicsSystem: Jolt.PhysicsSystem;
+
+    //* Events (issue #245) ======================================
+    /** The Jolt listener object, kept so it can be freed. See {@link destroy}. */
+    contactListener?: Jolt.SoftBodyContactListenerJS;
+    /** Records written inside `Step()`, dispatched by {@link flushEvents} after it. Reuses the
+     * same buffer/pool primitives `BodySystem`'s rigid contact listener does. */
+    readonly eventQueue = new ContactEventQueue();
+    /** Reused event payloads - a pool of its own, independent of `BodySystem`'s. */
+    readonly payloads = new PayloadPool();
+    /** Derives enter/persist/exit for each (soft body, peer) pair from the per-vertex manifold -
+     * see {@link SoftBodyContactAccumulator}. */
+    private readonly accumulator = new SoftBodyContactAccumulator();
+    /** The world level emitter, wired up by `PhysicsSystem` - the same instance `BodySystem` uses,
+     * so a `<Physics onCollisionEnter>` sees soft body contacts too. */
+    worldEvents?: Emitter<WorldEventMap>;
+    /** Resolves a rigid `other` side of a soft body contact. Wired up by `PhysicsSystem`. */
+    bodySystem?: BodySystem;
+    /** Mirrors `PhysicsSystem.debug`: turns on payload poisoning after dispatch. */
+    debug = false;
+    /** Single reused payload for the synchronous, inside-the-step validate callback. */
+    private readonly validatePayload: SoftBodyValidatePayload = {
+        target: {
+            body: undefined,
+            object: undefined,
+            handle: 0,
+            subShapeId: -1,
+            softBody: undefined
+        },
+        other: { body: undefined, object: undefined, handle: 0, subShapeId: -1 }
+    };
 
     constructor(joltPhysicsSystem: Jolt.PhysicsSystem) {
+        this.joltPhysicsSystem = joltPhysicsSystem;
         this.bodyInterface = joltPhysicsSystem.GetBodyInterface();
+        this.initializeContactListener();
     }
 
     /**
@@ -500,6 +606,10 @@ export class SoftBodySystem {
     removeBody(handle: number): void {
         const state = this.bodies.get(handle);
         if (!state) return;
+        // Close open peer contacts BEFORE the body leaves the simulation and its handle is
+        // freed for reuse - Jolt gives us no "removed" callback for soft body contacts, so this
+        // is the only place a peer (and any world level listener) learns the contact ended.
+        this.closeContactsFor(handle, state);
         state.destroy();
         this.bodies.delete(handle);
     }
@@ -519,11 +629,356 @@ export class SoftBodySystem {
         this.bodies.forEach(syncOne);
     }
 
-    /** Remove and destroy every soft body. Idempotent. */
-    destroy(): void {
+    /**
+     * Free everything this system allocated on the Jolt heap that isn't a body, and drop all
+     * event state. Idempotent.
+     *
+     * Call order matters, same as `BodySystem.destroy()`: the `SoftBodyContactListenerJS` must
+     * outlive the `JoltInterface` it was registered on, so `PhysicsSystem.destroy()` calls
+     * {@link removeAllBodies} first (while the interface is still live), then {@link clearEvents},
+     * and only frees the listener here, after the interface itself is gone. Safe to call with
+     * bodies still registered too (removes them itself) - idempotent either way.
+     *
+     * @param freeListeners false when this world was sharing somebody else's JoltInterface.
+     */
+    destroy(freeListeners = true): void {
+        this.eventQueue.clear();
         this.removeAllBodies();
+        if (!freeListeners) return;
+        if (this.contactListener) {
+            Raw.module.destroy(this.contactListener);
+            this.contactListener = undefined;
+        }
+    }
+
+    /** Drop queued events without dispatching them (the world is going away). */
+    clearEvents(): void {
+        this.eventQueue.clear();
+    }
+
+    // Contact Listener ===================================
+    private initializeContactListener(): void {
+        // Emscripten's JSImplementation glue does a `hasOwnProperty` check per call site, so
+        // these have to be own properties of the instance (same requirement as BodySystem's
+        // ContactListenerJS).
+        const listener = new Raw.module.SoftBodyContactListenerJS();
+        listener.OnSoftBodyContactValidate = (
+            softBodyPtr: number,
+            otherBodyPtr: number,
+            _settingsPtr: number
+        ) => this.onSoftBodyContactValidate(softBodyPtr, otherBodyPtr);
+        listener.OnSoftBodyContactAdded = (softBodyPtr: number, manifoldPtr: number) =>
+            this.onSoftBodyContactAdded(softBodyPtr, manifoldPtr);
+        this.contactListener = listener;
+        this.joltPhysicsSystem.SetSoftBodyContactListener(listener);
+    }
+
+    /** Ors together everything anyone is listening for. Drives the zero-cost path. */
+    private get worldEventMask(): number {
+        return this.worldEvents?.mask ?? 0;
+    }
+
+    /**
+     * Called once per (soft body, other body) whose bounding boxes overlap - *before* any vertex
+     * contact is confirmed. Accepting doesn't mean anything actually touches this step; rejecting
+     * skips this pair for the step entirely.
+     */
+    private onSoftBodyContactValidate(softBodyPtr: number, otherBodyPtr: number): number {
+        const jolt = Raw.module;
+        const accept = jolt.SoftBodyValidateResult_AcceptContact;
+        const softBody = jolt.wrapPointer(softBodyPtr, jolt.Body);
+        const softHandle = softBody.GetID().GetIndexAndSequenceNumber();
+        const state = this.bodies.get(softHandle);
+        // Unlike rigid `contactValidate`, this one is not wired to `worldEvents`: the payload
+        // shape (`SoftBodyValidatePayload`) is deliberately not the same type as rigid's
+        // `ValidatePayload` (no `baseOffset`), so it does not share the world emitter's bit.
+        if (!state || !state.events.has('contactValidate')) return accept;
+
+        const otherBody = jolt.wrapPointer(otherBodyPtr, jolt.Body);
+        const otherHandle = otherBody.GetID().GetIndexAndSequenceNumber();
+
+        const payload = this.validatePayload;
+        fillSoftTarget(payload.target, softHandle, state);
+        fillOtherTarget(payload.other, otherHandle, this.bodySystem, this);
+
+        const accepted = state.events.emitVeto('contactValidate', payload);
+        return accepted ? accept : jolt.SoftBodyValidateResult_RejectContact;
+    }
+
+    /**
+     * Called once per soft body per step (not once per pair - see `SoftBodyContactAccumulator`'s
+     * doc comment), with a manifold covering every vertex's contact against every other body it
+     * touched this step.
+     */
+    private onSoftBodyContactAdded(softBodyPtr: number, manifoldPtr: number): void {
+        const jolt = Raw.module;
+        const softBody = jolt.wrapPointer(softBodyPtr, jolt.Body);
+        const softHandle = softBody.GetID().GetIndexAndSequenceNumber();
+        const state = this.bodies.get(softHandle);
+        if (!state) return;
+
+        const contactBits =
+            EventBit.collisionEnter | EventBit.collisionPersist | EventBit.collisionExit;
+        const sensorBits = EventBit.sensorEnter | EventBit.sensorExit;
+        const mask = state.eventMask | this.worldEventMask;
+        if ((mask & (contactBits | sensorBits)) === 0) return;
+
+        const manifold = jolt.wrapPointer(manifoldPtr, jolt.SoftBodyManifold);
+        this.accumulator.begin();
+
+        if (mask & contactBits) {
+            // The soft body's own pose, read once: `GetLocalContactPoint`/`GetContactNormal` are
+            // both expressed in the soft body's local (COM-relative) frame - see docs/events.md
+            // and this file's report for how that was verified against Jolt's source.
+            vec3.joltToThree(softBody.GetPosition(), _softPose);
+            quat.joltToThree(softBody.GetRotation(), _softRotation);
+
+            const vertices = manifold.GetVertices();
+            const vertexCount = vertices.size();
+            const wantPoints = this.eventQueue.pointCapacity > 0;
+            for (let i = 0; i < vertexCount; i++) {
+                const vertex = vertices.at(i);
+                if (!manifold.HasContact(vertex)) continue;
+                const peerHandle = manifold.GetContactBodyID(vertex).GetIndexAndSequenceNumber();
+
+                // `GetContactNormal` returns one static temporary: read it now, then rotate it
+                // (direction only, no translation) into world space. Verified empirically
+                // (real-WASM test) that Jolt's soft body normal points from the *soft body*
+                // toward the other surface - opposite of rigid's `ValidatePayload`/
+                // `CollisionEnterPayload.normal` convention ("from `other` toward `target`") -
+                // so it is negated here to match that convention. See this issue's report.
+                const rawNormal = manifold.GetContactNormal(vertex);
+                _softNormal.set(-rawNormal.GetX(), -rawNormal.GetY(), -rawNormal.GetZ());
+                _softNormal.applyQuaternion(_softRotation);
+
+                if (wantPoints) {
+                    // Another static temporary, read immediately - never held alongside the
+                    // normal's.
+                    const rawPoint = manifold.GetLocalContactPoint(vertex);
+                    _softPoint.set(rawPoint.GetX(), rawPoint.GetY(), rawPoint.GetZ());
+                    _softPoint.applyQuaternion(_softRotation).add(_softPose);
+                    this.accumulator.touch(
+                        peerHandle,
+                        false,
+                        _softNormal.x,
+                        _softNormal.y,
+                        _softNormal.z,
+                        _softPoint.x,
+                        _softPoint.y,
+                        _softPoint.z
+                    );
+                } else {
+                    this.accumulator.touch(
+                        peerHandle,
+                        false,
+                        _softNormal.x,
+                        _softNormal.y,
+                        _softNormal.z
+                    );
+                }
+            }
+        }
+
+        if (mask & sensorBits) {
+            const numSensors = manifold.GetNumSensorContacts();
+            for (let i = 0; i < numSensors; i++) {
+                const peerHandle = manifold.GetSensorContactBodyID(i).GetIndexAndSequenceNumber();
+                this.accumulator.touch(peerHandle, true);
+            }
+        }
+
+        this.accumulator.end(softHandle, (peer, accum, isNew, sensor) => {
+            this.queueSoftPeer(mask, softHandle, peer, accum, isNew, sensor);
+        });
+    }
+
+    /** Push one (soft body, peer) record from the accumulator's diff into {@link eventQueue}. */
+    private queueSoftPeer(
+        mask: number,
+        softHandle: number,
+        peerHandle: number,
+        accum: SoftPeerAccum | undefined,
+        isNew: boolean,
+        sensor: boolean
+    ): void {
+        if (accum) {
+            let kind: number;
+            let bit: number;
+            if (sensor) {
+                if (!isNew) return; // sensors have no persist channel, same as rigid
+                kind = EventKind.sensorEnter;
+                bit = EventBit.sensorEnter;
+            } else if (isNew) {
+                kind = EventKind.collisionEnter;
+                bit = EventBit.collisionEnter;
+            } else {
+                kind = EventKind.collisionPersist;
+                bit = EventBit.collisionPersist;
+            }
+            if ((mask & bit) === 0) return;
+            const index = this.eventQueue.push(
+                kind,
+                softHandle,
+                peerHandle,
+                -1,
+                -1,
+                accum.count,
+                accum.normalX,
+                accum.normalY,
+                accum.normalZ,
+                // Jolt's soft body manifold does not expose a per-vertex penetration depth the
+                // way `ContactManifold` does; see this issue's report.
+                0,
+                accum.pointCount
+            );
+            for (let i = 0; i < accum.pointCount; i++) {
+                const o = i * 3;
+                this.eventQueue.setPoint(
+                    index,
+                    i,
+                    accum.points[o],
+                    accum.points[o + 1],
+                    accum.points[o + 2]
+                );
+            }
+        } else {
+            const bit = sensor ? EventBit.sensorExit : EventBit.collisionExit;
+            if ((mask & bit) === 0) return;
+            this.eventQueue.push(
+                sensor ? EventKind.sensorExit : EventKind.collisionExit,
+                softHandle,
+                peerHandle,
+                -1,
+                -1,
+                0
+            );
+        }
+    }
+
+    /** See `removeBody`'s doc comment. */
+    private closeContactsFor(handle: number, state: SoftBodyState): void {
+        const previous = this.accumulator.forget(handle);
+        if (!previous || previous.size === 0) return;
+        const mask = state.eventMask | this.worldEventMask;
+        for (const [peer, sensor] of previous) {
+            const bit = sensor ? EventBit.sensorExit : EventBit.collisionExit;
+            if ((mask & bit) === 0) continue;
+            this.eventQueue.push(
+                sensor ? EventKind.sensorExit : EventKind.collisionExit,
+                handle,
+                peer,
+                -1,
+                -1,
+                0
+            );
+        }
+    }
+
+    // Dispatch ===========================================
+    /**
+     * Dispatch everything the step queued. Called from `PhysicsSystem.stepSimulation`, right
+     * after `BodySystem.flushEvents()`, between `Step()` and `afterStep`.
+     */
+    flushEvents(): void {
+        if (this.eventQueue.length === 0) return;
+        this.payloads.debug = this.debug;
+        this.payloads.reset();
+        this.eventQueue.drain(FLUSH_ORDER, this.dispatchEvent);
+    }
+
+    private dispatchEvent = (kind: number, index: number): void => {
+        const type = KIND_EVENT[kind] as
+            'collisionEnter' | 'collisionPersist' | 'collisionExit' | 'sensorEnter' | 'sensorExit';
+        const queue = this.eventQueue;
+        const softHandle = queue.handle1(index);
+        const peerHandle = queue.handle2(index);
+        const state = this.bodies.get(softHandle);
+        const world = this.worldEvents;
+
+        if (world?.has(type)) {
+            const payload = this.buildPayload(type, index, state, softHandle, peerHandle);
+            world.emit(type, payload);
+            this.payloads.poison(payload);
+        }
+        if (state?.events.has(type)) {
+            const payload = this.buildPayload(type, index, state, softHandle, peerHandle);
+            state.events.emit(type, payload);
+            this.payloads.poison(payload);
+        }
+    };
+
+    private buildPayload(
+        type: string,
+        index: number,
+        state: SoftBodyState | undefined,
+        softHandle: number,
+        peerHandle: number
+    ): PooledEnter | PooledBasic {
+        const queue = this.eventQueue;
+        const withManifold = type === 'collisionEnter' || type === 'collisionPersist';
+        const enter = withManifold ? this.payloads.acquireEnter() : undefined;
+        const payload: PooledEnter | PooledBasic = enter ?? this.payloads.acquireBasic();
+
+        if (state) fillSoftTarget(payload.target, softHandle, state);
+        else {
+            // The soft body was already removed by the time this dispatched (its own removal
+            // queued the exit) - world level listeners still get the handle.
+            payload.target.handle = softHandle;
+            payload.target.body = undefined;
+            payload.target.object = undefined;
+            payload.target.subShapeId = -1;
+            payload.target.index = undefined;
+            payload.target.softBody = undefined;
+        }
+        fillOtherTarget(payload.other, peerHandle, this.bodySystem, this);
+        // A soft body is always the side the callback fired on - there is no "body 2" the way a
+        // rigid pair has one, so this side is never the flipped one.
+        payload.flipped = false;
+        payload.contactCount = queue.contactCount(index);
+
+        if (enter) {
+            enter.normal.set(queue.normalX(index), queue.normalY(index), queue.normalZ(index));
+            enter.penetration = queue.penetration(index);
+            const points = queue.pointCount(index);
+            enter.pointCount = points;
+            this.payloads.sizePoints(enter, points);
+            for (let i = 0; i < points; i++) queue.readPoint(index, i, enter.points[i]);
+        }
+        return payload;
     }
 }
 
 // Hoisted so `syncAll`'s `forEach` does not allocate a fresh closure every frame.
 const syncOne = (state: SoftBodyState): void => state.syncGeometry();
+
+/** Fill the soft body's own side of a contact payload. */
+function fillSoftTarget(target: CollisionTarget, handle: number, state: SoftBodyState): void {
+    target.handle = handle;
+    target.body = undefined;
+    target.object = state.object;
+    target.subShapeId = -1;
+    target.index = undefined;
+    target.softBody = state;
+}
+
+/**
+ * Fill the `other` side of a soft body contact: a rigid body registered with `bodySystem`, another
+ * soft body registered with `softBodySystem`, or - like an unregistered rigid body in the rigid
+ * contact pipeline - neither, in which case `body`/`object`/`softBody` are all left blank and only
+ * `handle` is valid.
+ */
+function fillOtherTarget(
+    target: CollisionTarget,
+    handle: number,
+    bodySystem: BodySystem | undefined,
+    softBodySystem: SoftBodySystem
+): void {
+    const rigid = bodySystem?.getBody(handle);
+    const soft = rigid ? undefined : softBodySystem.bodies.get(handle);
+    target.handle = handle;
+    target.body = rigid;
+    target.object = rigid?.object ?? soft?.object;
+    target.subShapeId = -1;
+    target.index = rigid?.index;
+    target.softBody = soft;
+}
