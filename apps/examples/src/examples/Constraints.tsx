@@ -673,22 +673,33 @@ function Gear({ enabled, velocity }: { enabled: boolean; velocity: number }) {
     const bar2Ref = useRef<BodyState | null>(null);
 
     // Create the two hinges independently via useConstraint
-    const hinge1Ref = useConstraint('hinge', hub1Ref, bar1Ref,
+    const hinge1Ref = useConstraint(
+        'hinge',
+        hub1Ref,
+        bar1Ref,
         enabled ? { point1: GEAR_HUB1, axis: [0, 0, 1], motor: { type: 'velocity' } } : undefined
     );
-    const hinge2Ref = useConstraint('hinge', hub2Ref, bar2Ref,
+    const hinge2Ref = useConstraint(
+        'hinge',
+        hub2Ref,
+        bar2Ref,
         enabled ? { point1: GEAR_HUB2, axis: [0, 0, 1] } : undefined
     );
 
     // Create the gear, passing the hinge refs. useConstraint dereferences them inside its
     // effect, after both hinges have been created.
-    useConstraint('gear', bar1Ref, bar2Ref,
-        enabled ? {
-            hinge1: hinge1Ref,
-            hinge2: hinge2Ref,
-            ratio: 2,
-            axis: [0, 0, 1]
-        } : undefined
+    useConstraint(
+        'gear',
+        bar1Ref,
+        bar2Ref,
+        enabled
+            ? {
+                  hinge1: hinge1Ref,
+                  hinge2: hinge2Ref,
+                  ratio: 2,
+                  axis: [0, 0, 1]
+              }
+            : undefined
     );
 
     // driven imperatively (like `MotorHinge`) so dragging the leva slider doesn't tear the

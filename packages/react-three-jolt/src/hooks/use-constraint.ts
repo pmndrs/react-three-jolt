@@ -17,10 +17,7 @@ export type BodyStateRef = { readonly current: BodyState | null | undefined };
  * Can be either a ref or the constraint itself.
  */
 export type ConstraintRef<T = unknown> =
-    | { readonly current: T | null | undefined }
-    | T
-    | null
-    | undefined;
+    { readonly current: T | null | undefined } | T | null | undefined;
 
 /**
  * Dereference a constraint ref that may be either a ref object or the constraint itself.
@@ -69,11 +66,15 @@ export const useConstraint = <T extends ConstraintType>(
         delete other.hinge2;
         delete other.hinge;
         delete other.slider;
-        return JSON.stringify(other) + '_' + JSON.stringify(deps, (_, v) => {
-            // Mark refs by identity, not value
-            if (typeof v === 'object' && v !== null && 'current' in v) return '<<ref>>';
-            return v;
-        });
+        return (
+            JSON.stringify(other) +
+            '_' +
+            JSON.stringify(deps, (_, v) => {
+                // Mark refs by identity, not value
+                if (typeof v === 'object' && v !== null && 'current' in v) return '<<ref>>';
+                return v;
+            })
+        );
     }, [options]);
 
     useImperativeInstance<ConstraintTypeMap[T] | null>(
@@ -88,16 +89,22 @@ export const useConstraint = <T extends ConstraintType>(
             const resolvedOptions = options ? { ...options } : undefined;
             if (resolvedOptions) {
                 if (resolvedOptions.hinge1) {
-                    resolvedOptions.hinge1 = dereferenceConstraintRef(resolvedOptions.hinge1) as any;
+                    resolvedOptions.hinge1 = dereferenceConstraintRef(
+                        resolvedOptions.hinge1
+                    ) as any;
                 }
                 if (resolvedOptions.hinge2) {
-                    resolvedOptions.hinge2 = dereferenceConstraintRef(resolvedOptions.hinge2) as any;
+                    resolvedOptions.hinge2 = dereferenceConstraintRef(
+                        resolvedOptions.hinge2
+                    ) as any;
                 }
                 if (resolvedOptions.hinge) {
                     resolvedOptions.hinge = dereferenceConstraintRef(resolvedOptions.hinge) as any;
                 }
                 if (resolvedOptions.slider) {
-                    resolvedOptions.slider = dereferenceConstraintRef(resolvedOptions.slider) as any;
+                    resolvedOptions.slider = dereferenceConstraintRef(
+                        resolvedOptions.slider
+                    ) as any;
                 }
             }
 
