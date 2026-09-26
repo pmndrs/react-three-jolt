@@ -83,14 +83,22 @@ describe('collision enter / persist / exit', () => {
             // the listener itself, which held steady memory throughout).
             assert.isUndefined(e.target.body, 'a soft body has no BodyState');
             assert.isDefined(e.target.softBody, 'target.softBody should be set');
-            assert.equal(e.target.softBody?.handle, soft.handle, 'target.softBody should be this soft body');
+            assert.equal(
+                e.target.softBody?.handle,
+                soft.handle,
+                'target.softBody should be this soft body'
+            );
             assert.equal(e.target.object, soft.object);
             assert.isDefined(e.other.body, "other.body should resolve to the floor's BodyState");
             assert.equal(e.other.body?.handle, floorState.handle);
             assert.isUndefined(e.other.softBody);
             assert.isAbove(e.contactCount, 0);
             // the floor is below the soft body, so the contact normal (other -> target) points up
-            assert.isAbove(e.normal.y, 0.3, `normal did not point away from the floor: ${e.normal.y}`);
+            assert.isAbove(
+                e.normal.y,
+                0.3,
+                `normal did not point away from the floor: ${e.normal.y}`
+            );
         } finally {
             ps.destroy('soft-events-basic');
         }
@@ -112,7 +120,11 @@ describe('collision enter / persist / exit', () => {
             // the exit is queued by removeBody and dispatched on the next flush
             ps.onUpdate(STEP);
 
-            assert.isAbove(worldExits, 0, 'destroying a resting soft body never closed its contact');
+            assert.isAbove(
+                worldExits,
+                0,
+                'destroying a resting soft body never closed its contact'
+            );
         } finally {
             ps.destroy('soft-events-remove');
         }
@@ -144,7 +156,11 @@ describe('onContactValidate', () => {
             for (let i = 0; i < 90; i++) ps.onUpdate(STEP);
 
             assert.equal(enters, 0, 'a rejected contact still entered');
-            assert.isBelow(soft.object.position.y, -1, 'the soft body did not fall through the floor');
+            assert.isBelow(
+                soft.object.position.y,
+                -1,
+                'the soft body did not fall through the floor'
+            );
         } finally {
             ps.destroy('soft-events-validate');
         }
@@ -208,7 +224,11 @@ describe('cost and lifecycle', () => {
             const before = jolt.JoltInterface.prototype.sGetFreeMemory();
             for (let i = 0; i < 60; i++) ps.onUpdate(STEP);
             const after = jolt.JoltInterface.prototype.sGetFreeMemory();
-            assert.isAtLeast(after, before - 256, `leaked ${before - after} bytes with no listeners`);
+            assert.isAtLeast(
+                after,
+                before - 256,
+                `leaked ${before - after} bytes with no listeners`
+            );
         } finally {
             ps.destroy('soft-events-cost');
         }

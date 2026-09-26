@@ -484,11 +484,17 @@ export class SoftBodyContactAccumulator {
      */
     end(
         softHandle: number,
-        onPeer: (peer: number, accum: SoftPeerAccum | undefined, isNew: boolean, sensor: boolean) => void
+        onPeer: (
+            peer: number,
+            accum: SoftPeerAccum | undefined,
+            isNew: boolean,
+            sensor: boolean
+        ) => void
     ): void {
         const prev = this.previous.get(softHandle);
         if (prev) {
-            for (const [peer, accum] of this.scratch) onPeer(peer, accum, !prev.has(peer), accum.sensor);
+            for (const [peer, accum] of this.scratch)
+                onPeer(peer, accum, !prev.has(peer), accum.sensor);
             for (const [peer, sensor] of prev)
                 if (!this.scratch.has(peer)) onPeer(peer, undefined, false, sensor);
         } else {

@@ -431,7 +431,13 @@ export class SoftBodySystem {
     debug = false;
     /** Single reused payload for the synchronous, inside-the-step validate callback. */
     private readonly validatePayload: SoftBodyValidatePayload = {
-        target: { body: undefined, object: undefined, handle: 0, subShapeId: -1, softBody: undefined },
+        target: {
+            body: undefined,
+            object: undefined,
+            handle: 0,
+            subShapeId: -1,
+            softBody: undefined
+        },
         other: { body: undefined, object: undefined, handle: 0, subShapeId: -1 }
     };
 
@@ -614,7 +620,8 @@ export class SoftBodySystem {
         const state = this.bodies.get(softHandle);
         if (!state) return;
 
-        const contactBits = EventBit.collisionEnter | EventBit.collisionPersist | EventBit.collisionExit;
+        const contactBits =
+            EventBit.collisionEnter | EventBit.collisionPersist | EventBit.collisionExit;
         const sensorBits = EventBit.sensorEnter | EventBit.sensorExit;
         const mask = state.eventMask | this.worldEventMask;
         if ((mask & (contactBits | sensorBits)) === 0) return;
@@ -664,7 +671,13 @@ export class SoftBodySystem {
                         _softPoint.z
                     );
                 } else {
-                    this.accumulator.touch(peerHandle, false, _softNormal.x, _softNormal.y, _softNormal.z);
+                    this.accumulator.touch(
+                        peerHandle,
+                        false,
+                        _softNormal.x,
+                        _softNormal.y,
+                        _softNormal.z
+                    );
                 }
             }
         }
@@ -778,11 +791,7 @@ export class SoftBodySystem {
 
     private dispatchEvent = (kind: number, index: number): void => {
         const type = KIND_EVENT[kind] as
-            | 'collisionEnter'
-            | 'collisionPersist'
-            | 'collisionExit'
-            | 'sensorEnter'
-            | 'sensorExit';
+            'collisionEnter' | 'collisionPersist' | 'collisionExit' | 'sensorEnter' | 'sensorExit';
         const queue = this.eventQueue;
         const softHandle = queue.handle1(index);
         const peerHandle = queue.handle2(index);
