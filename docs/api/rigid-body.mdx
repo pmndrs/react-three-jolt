@@ -181,6 +181,8 @@ detail.
 | `setKinematicTarget(position, rotation?)` | aim a kinematic body; the step loop drives it |
 | `clearKinematicTarget()` | stop driving it |
 | `isStatic` | read-only |
+| `saveState()` | returns a [`PhysicsSnapshot`](/api/physics#physicssnapshot) of just this body |
+| `restoreState(snapshot)` | restores it and resyncs the three.js object + interpolation cache immediately, sleeping included |
 
 ```tsx
 const position = useRef(new THREE.Vector3());

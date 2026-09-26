@@ -11,6 +11,7 @@ import {
 } from 'three';
 import type { SurfaceMaterialTable } from '../heightfield/materials';
 import { Raw } from '../raw';
+import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
 
 import { anyQuat, anyVec3, devWarn, disposedGuard, joltScratch, quat, vec3 } from '../utils';
 // `BodySystem` is a type-only import: this file only ever holds a reference to one, it never
@@ -36,6 +37,7 @@ import {
     type Vec3Tuple,
     validScaleFor
 } from './shape-system';
+import { PhysicsSnapshot } from './state-recorder';
 
 /**
  * Any callable, used only as the identity key of the deprecated remove-by-function APIs.
@@ -449,6 +451,80 @@ export class BodyState {
         if (this.checkDisposed()) return;
         vec3.joltToThree(this.body.GetPosition(), outPosition);
         quat.joltToThree(this.body.GetRotation(), outRotation);
+    }
+
+    /**
+     * Push a world-space physics pose onto this body's three.js object, going through the same
+     * parent-space conversion (and `matrixAutoUpdate === false` fast path, issue #168) the
+     * per-frame sync loop uses - see `PhysicsSystem.syncBodyToObject`. Allocation free: writes
+     * through the shared `tmp.ts` scratch objects, same as that loop.
+     *
+     * Public so a caller that needs the object updated *now* rather than next frame - notably
+     * {@link syncFromPhysics}, used right after {@link restoreState} - doesn't have to duplicate
+     * this math.
+     */
+    applyWorldPose(position: THREE.Vector3, rotation: THREE.Quaternion) {
+        if (this.checkDisposed()) return;
+        // activeScale rather than the `scale` getter: same value, but typed as a Vector3
+        _matrix4
+            .compose(position, rotation, this.activeScale)
+            .premultiply(this.invertedWorldMatrix);
+        if (this._matrixAutoUpdate === false && !this.isInstance) {
+            this.setLocalMatrix(_matrix4);
+            return;
+        }
+        _matrix4.decompose(_position, _rotation, _scale);
+        this.update(_position, _rotation);
+    }
+
+    /**
+     * Read this body's live physics pose and push it onto the three.js object immediately,
+     * regardless of sleep state. The per-frame sync loop skips sleeping bodies (and statics that
+     * haven't been flagged moved), which is exactly wrong right after a restore - see
+     * {@link restoreState} / `PhysicsSystem.restoreState`, either of which can wake or sleep a
+     * body relative to how it was before the restore.
+     */
+    syncFromPhysics() {
+        if (this.checkDisposed()) return;
+        this.readPose(_vector3, _quaternion);
+        this.applyWorldPose(_vector3, _quaternion);
+    }
+
+    //* State snapshots (issue #247) ===============================
+    /**
+     * Snapshot just this body's physics state (pose, velocity, activation...) into a
+     * {@link PhysicsSnapshot}. For a whole-world snapshot use `PhysicsSystem.saveState()` instead
+     * - this is for restoring one body independently, e.g. resetting a single knocked-over prop
+     * without touching the rest of the scene.
+     */
+    saveState(): PhysicsSnapshot | undefined {
+        if (this.checkDisposed()) return undefined;
+        const recorder = new Raw.module.StateRecorderImpl();
+        this.body.SaveState(recorder);
+        return new PhysicsSnapshot(recorder);
+    }
+
+    /**
+     * Restore a snapshot taken by {@link saveState}. Rewinds the snapshot's read cursor first (so
+     * it can be restored more than once) and resyncs this body's three.js object and
+     * interpolation cache immediately - see {@link syncFromPhysics}.
+     */
+    restoreState(snapshot: PhysicsSnapshot | undefined): void {
+        if (this.checkDisposed()) return;
+        if (!snapshot || snapshot.destroyed) {
+            devWarn(
+                `r3/jolt: BodyState.restoreState() on '${this.object?.name || `handle ${this.handle}`}' ` +
+                    'called with a missing or already-destroyed snapshot'
+            );
+            return;
+        }
+        snapshot.rewind();
+        this.body.RestoreState(snapshot.recorder);
+        // teleport, not simulation: reseed the interpolation cache from the restored pose so the
+        // next frame does not lerp across the discontinuity (see `setPosition`)
+        this.resetPoseCache();
+        this.capturePose();
+        this.syncFromPhysics();
     }
 
     //* Updates ===============================================

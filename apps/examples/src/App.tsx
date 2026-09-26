@@ -35,6 +35,7 @@ import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
 import { RaycastManyDemo } from './examples/RaycastManyDemo';
 import { RaycastSimpleDemo } from './examples/RaycastSimpleDemo';
+import { Rewind } from './examples/Rewind';
 import { JoltMemoryReadout } from './JoltMemoryReadout';
 import {
     getJoltFactory,
@@ -213,6 +214,12 @@ const routes: RouteMap = {
         transition: false,
         background: '#141622',
         element: <FooterFunnel />
+    },
+    Rewind: {
+        position: [2, 12, 25],
+        target: [0, 3, 0],
+        background: '#3d405b',
+        element: <Rewind />
     }
 };
 
