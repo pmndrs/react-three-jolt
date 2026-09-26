@@ -33,7 +33,7 @@ export interface CreateSkeletalAnimationOptions {
  */
 export function createSkeletalAnimation(
     clip: THREE.AnimationClip,
-    joltSkeleton: Jolt.Skeleton,
+    _joltSkeleton: Jolt.Skeleton,
     options?: CreateSkeletalAnimationOptions
 ): Jolt.SkeletalAnimation {
     const jolt = Raw.module;
