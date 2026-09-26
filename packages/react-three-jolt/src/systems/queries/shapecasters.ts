@@ -181,8 +181,18 @@ export class Shapecaster extends CastQueryBase<ShapecastHit, ShapecasterCollecto
         // nulling the field, so an unguarded call here would double-free it and then rebuild a
         // shapecast out of filters that are gone too.
         if (this.checkDestroyed()) return;
+        // issue #303: `initializeShapecast()` rebuilds `direction` from `this.activeDirection`,
+        // which the `direction` setter never updates (it mutates the live `this.shapecast.
+        // mDirection` in place instead - see that setter below). Left alone, every `origin`/
+        // `rotation`/`scale` write after a `direction` write would silently reset direction back
+        // to the zero vector `activeDirection` starts life as - exactly the bug that made the
+        // Shapecast example (origin written every frame, direction written once up front) never
+        // report a hit. Capture + restore across the rebuild, the same fix the `shape` setter
+        // above already applies for the same reason.
+        const direction = vec3.three(this.shapecast.mDirection);
         Raw.module.destroy(this.shapecast);
         this.initializeShapecast();
+        this.direction = direction;
         //const translation = vec3.jolt(this.activePosition);
         //const rotation = quat.jolt(this.activeRotation);
         //this.shapecast.mCenterOfMassStart.SetTranslation(translation);
