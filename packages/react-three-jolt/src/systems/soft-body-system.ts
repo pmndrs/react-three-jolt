@@ -11,7 +11,15 @@ import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Layer } from '../constants';
 import { castObject, Raw } from '../raw';
+import { _matrix4, _position, _quaternion, _rotation, _scale, _vector3 } from '../tmp';
 import { devWarn, quat, vec3 } from '../utils';
+
+// Scale component for `syncGeometry`'s compose/decompose round trip - a soft body has no
+// independent "shape scale" the way a `<RigidBody>`'s `activeScale` does, so this is always
+// identity; decompose still needs somewhere to put the scale it derives from the composed
+// matrix, which is discarded (never written to `object.scale`) exactly like `BodyState`'s own
+// per-frame sync discards its `_scale` output. Never mutated - safe to share.
+const UNIT_SCALE = new THREE.Vector3(1, 1, 1);
 
 /**
  * How `CreateConstraints` builds the extra constraints on top of the structural (triangle-edge)
@@ -235,25 +243,82 @@ export function buildSoftBodySharedSettings(
 }
 
 /**
- * `geometry` run through `mergeVertices` so shared positions become one Jolt vertex - required
- * before {@link buildSoftBodySharedSettings}, since an un-merged geometry (every three.js
- * primitive that isn't already indexed, or one duplicated for flat shading) would otherwise give
- * a seam's vertices separate, unconnected Jolt vertices.
+ * `geometry` welded so shared positions become one Jolt vertex - required before
+ * {@link buildSoftBodySharedSettings}, since an un-welded geometry (every three.js primitive
+ * that isn't already indexed, or one duplicated for flat shading/UV seams) would otherwise give
+ * a seam's vertices separate, unconnected Jolt vertices - the physics mesh has an actual gap
+ * there, which pressure/tension then pulls open (QA: "the ball is split open on the side").
+ *
+ * Welds on **position only**, not three's `mergeVertices(geometry)` directly - that only merges
+ * vertices whose *every* attribute matches, and every UV-mapped closed shape (a `SphereGeometry`,
+ * for one) duplicates a column of vertices along the UV seam (and the poles) that share a
+ * position but differ in `uv`, so they never merge and the seam never closes. Instead this welds
+ * a position-only clone (so distinct-uv/normal duplicates at the same position still collapse to
+ * one vertex), then rebuilds the render geometry's other attributes (uv, color, ...) around that
+ * same deduplicated vertex set, taking each attribute's value from whichever original vertex
+ * happened to weld first into a given slot - fine for uv/color, where an exact seam match isn't
+ * required the way it is for position.
  *
  * Returns a **new** geometry; the caller (`SoftBodySystem.addBody`) swaps it onto the mesh so the
  * rendered vertex order matches the simulated one exactly - `SoftBodyState.syncGeometry` writes
- * simulated positions back into this same buffer by index.
+ * simulated positions back into this same buffer by index, and recomputes normals every frame
+ * (so a stale/absent `normal` attribute here doesn't matter).
  */
 export function prepareSoftBodyGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
-    const merged = mergeVertices(geometry);
-    if (!merged.index)
+    const posAttr = geometry.attributes.position as THREE.BufferAttribute | undefined;
+    if (!posAttr) throw new Error('r3/jolt: SoftBody geometry must have a position attribute.');
+
+    const positionOnly = new THREE.BufferGeometry();
+    positionOnly.setAttribute('position', posAttr);
+    if (geometry.index) positionOnly.setIndex(geometry.index);
+    const merged = mergeVertices(positionOnly);
+    const mergedIndex = merged.index;
+    if (!mergedIndex) {
         // mergeVertices always indexes its result; this would only happen against a future three
         // version that changed that contract.
         devWarn(
             'r3/jolt: SoftBody - mergeVertices returned a non-indexed geometry; this is ' +
                 'unexpected and the soft body will fail to build.'
         );
-    return merged;
+        return merged;
+    }
+
+    const weldedVertexCount = merged.attributes.position.count;
+    const cornerCount = mergedIndex.count;
+    const originalIndex = geometry.index;
+
+    // For every corner (original vertex reference) find which welded slot it landed in, and
+    // record the FIRST original vertex seen for each slot - that's the source for every
+    // non-position attribute on that welded vertex.
+    const firstCorner = new Int32Array(weldedVertexCount).fill(-1);
+    for (let c = 0; c < cornerCount; c++) {
+        const welded = mergedIndex.getX(c);
+        if (firstCorner[welded] === -1)
+            firstCorner[welded] = originalIndex ? originalIndex.getX(c) : c;
+    }
+
+    const result = new THREE.BufferGeometry();
+    result.setIndex(mergedIndex);
+    for (const name of Object.keys(geometry.attributes)) {
+        const attr = geometry.attributes[name] as THREE.BufferAttribute;
+        if (name === 'position') {
+            result.setAttribute('position', merged.attributes.position);
+            continue;
+        }
+        const itemSize = attr.itemSize;
+        const newArray = new (attr.array.constructor as new (length: number) => typeof attr.array)(
+            weldedVertexCount * itemSize
+        );
+        const newAttr = new THREE.BufferAttribute(newArray, itemSize, attr.normalized);
+        const getters = ['getX', 'getY', 'getZ', 'getW'] as const;
+        const setters = ['setX', 'setY', 'setZ', 'setW'] as const;
+        for (let v = 0; v < weldedVertexCount; v++) {
+            const source = firstCorner[v];
+            for (let k = 0; k < itemSize; k++) newAttr[setters[k]](v, attr[getters[k]](source));
+        }
+        result.setAttribute(name, newAttr);
+    }
+    return result;
 }
 
 /** One live soft body: the Jolt body, the mesh whose geometry it drives, and its shared settings. */
@@ -265,6 +330,18 @@ export class SoftBodyState {
     /** Owns one reference, released in {@link destroy}. See {@link buildSoftBodySharedSettings}. */
     private sharedSettings: Jolt.SoftBodySharedSettings | undefined;
     private readonly bodyInterface: Jolt.BodyInterface;
+    /**
+     * The space `syncGeometry` writes the synced pose into: the object's **parent**, captured
+     * once here (not re-read every frame) exactly like `BodyState`'s own field of the same name
+     * (issue #300) - `body.GetPosition()`/`GetRotation()` are always in Jolt's world space, but
+     * `object.position`/`.quaternion` are local to whatever three.js parent the mesh sits under,
+     * which is the scene root (identity) for every shipped demo today but not guaranteed in
+     * general (nesting a `<SoftBody>`/`<Cloth>` under a positioned/rotated `<group>`, say).
+     * Deliberately the PARENT's `matrixWorld`, never the object's own - taking the object's own
+     * was #300's bug: it only reads as identity before the object has ever rendered, and once a
+     * frame has run, it already holds the spawn pose, so every sync would subtract it again.
+     */
+    private readonly invertedWorldMatrix: THREE.Matrix4;
     disposed = false;
 
     constructor(
@@ -280,6 +357,12 @@ export class SoftBodyState {
         this.bodyInterface = bodyInterface;
         this.vertexCount = vertexCount;
         this.handle = body.GetID().GetIndexAndSequenceNumber();
+
+        const parent = object.parent;
+        parent?.updateWorldMatrix(true, false);
+        this.invertedWorldMatrix = parent
+            ? parent.matrixWorld.clone().invert()
+            : new THREE.Matrix4();
     }
 
     /**
@@ -291,8 +374,10 @@ export class SoftBodyState {
      * `JoltInterface.sGetFreeMemory()` unchanged across 500 frames of reads. Vertices are in the
      * body's **local** space (relative to an origin Jolt re-centers on the simulated shape when
      * `updatePosition` is true, the default) - the object's position/rotation are synced from the
-     * body's pose exactly like `BodyState.readPose`, so world space comes from the two combined,
-     * the same way a `<RigidBody>`'s object and its collision shape do.
+     * body's pose, converted from Jolt's world space into the object's parent's space via
+     * {@link invertedWorldMatrix} exactly like `BodyState`'s own per-frame sync, so world space
+     * comes from the two combined, the same way a `<RigidBody>`'s object and its collision shape
+     * do.
      */
     syncGeometry(): void {
         if (this.disposed) return;
@@ -312,8 +397,20 @@ export class SoftBodyState {
         geometry.computeBoundingSphere();
 
         // `GetPosition`/`GetRotation` return static by-value temporaries - read, never destroy.
-        vec3.joltToThree(this.body.GetPosition(), this.object.position);
-        quat.joltToThree(this.body.GetRotation(), this.object.quaternion);
+        // World space pose -> _vector3/_quaternion, then converted into the object's PARENT
+        // space via `invertedWorldMatrix` (issue #300's fix, applied here too) exactly like
+        // `PhysicsSystem`'s own `syncBodyToObject` does for a `<RigidBody>` - `object.position`/
+        // `.quaternion` are local to the parent, not world, so writing Jolt's world pose into
+        // them directly (as this used to) is only correct while that parent is the identity
+        // (every shipped demo today, but not guaranteed in general).
+        vec3.joltToThree(this.body.GetPosition(), _vector3);
+        quat.joltToThree(this.body.GetRotation(), _quaternion);
+        _matrix4.compose(_vector3, _quaternion, UNIT_SCALE).premultiply(this.invertedWorldMatrix);
+        // `_scale` is discarded, same as `BodyState`'s own per-frame sync - this object's scale
+        // is whatever it was already set to (there is no per-body "shape scale" to reapply).
+        _matrix4.decompose(_position, _rotation, _scale);
+        this.object.position.copy(_position);
+        this.object.quaternion.copy(_rotation);
     }
 
     /**
