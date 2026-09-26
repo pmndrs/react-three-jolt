@@ -386,7 +386,7 @@ The object most of the world's behaviour lives on. Beyond the props above:
 | `events` | the world [`Emitter`](#world-events) |
 | `onBeforeStep(fn)` / `onAfterStep(fn)` | [step hooks](#step-hooks), called `(deltaTime, subframe)`; each returns its unsubscribe |
 | `addPreStepListener(fn)` / `addPostStepListener(fn)` / `removeStepListener(fn)` | **deprecated** aliases of the above |
-| `getRaycaster()` / `getAdvancedRaycaster()` / `getMulticaster()` / `getShapecaster()` / `getShapeCollider()` | [queries](/api/queries) |
+| `getRaycaster()` / `getAdvancedRaycaster()` / `getMulticaster()` / `getShapecaster()` / `getShapeCollider()` / `getPointCollider()` | [queries](/api/queries) |
 | `constraintSystem` | [constraints](/api/rigid-body#constraints) |
 | `registerDisposable(disposable)` | tie something to this world's lifetime — see [Destroying a world](#destroying-a-world) |
 | `destroy()` | tear the whole world down; idempotent |

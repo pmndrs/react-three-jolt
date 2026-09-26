@@ -21,6 +21,7 @@ import { ConstraintSystem } from './constraint-system';
 import { Emitter, type Unsubscribe } from './emitter';
 import { type StepCallback, WORLD_EVENT_BITS, type WorldEventMap } from './events';
 import { ShapeCollider } from './queries/collider';
+import { PointCollider } from './queries/point-collider';
 import { AdvancedRaycaster, Multicaster, Raycaster } from './queries/raycasters';
 import { Shapecaster } from './queries/shapecasters';
 
@@ -722,6 +723,12 @@ export class PhysicsSystem {
     getShapeCollider() {
         this.assertAlive('getShapeCollider()');
         return this.trackQuery(new ShapeCollider(this.joltPhysicsSystem, this.joltInterface));
+    }
+    // -- PointCollider (issue #248): `NarrowPhaseQuery.CollidePoint`, "which bodies contain this
+    // point right now"
+    getPointCollider() {
+        this.assertAlive('getPointCollider()');
+        return this.trackQuery(new PointCollider(this.joltPhysicsSystem, this.joltInterface));
     }
 
     //* Utility methods ----------------------------

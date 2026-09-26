@@ -22,6 +22,7 @@ import {
 import { NavLink, type NavLinkProps, Route, Routes, useLocation } from 'react-router';
 import { BallBox } from './examples/BallBox';
 import { CharacterVirtualDemo } from './examples/CharacterVirtualDemo';
+import { CollidePoint } from './examples/CollidePoint';
 import { Constraints } from './examples/Constraints';
 import { CubeHeap } from './examples/CubeHeap';
 import { FloatingPlatforms } from './examples/FloatingPlatforms';
@@ -30,6 +31,7 @@ import { FourWheelDemo } from './examples/FourWheelsWithHeightmap';
 import { HeightfieldDemo } from './examples/Heightfield';
 import { Impulses } from './examples/Impulses';
 import { JustBoxes } from './examples/JustBoxes';
+import { MotionQuality } from './examples/MotionQuality';
 import { MotionSources } from './examples/motionSources';
 import { OneWayPlatform } from './examples/OneWayPlatform';
 //* All the examples ------------------------------
@@ -213,6 +215,20 @@ const routes: RouteMap = {
         transition: false,
         background: '#141622',
         element: <FooterFunnel />
+    },
+    MotionQuality: {
+        label: 'Motion Quality',
+        position: [0, 6, -18],
+        target: [0, 1.5, 3],
+        background: '#0b132b',
+        element: <MotionQuality />
+    },
+    CollidePoint: {
+        label: 'Collide Point',
+        position: [0, 9, 8],
+        target: [0, 1, 0],
+        background: '#1b263b',
+        element: <CollidePoint />
     }
 };
 

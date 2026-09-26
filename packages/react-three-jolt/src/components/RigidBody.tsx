@@ -152,6 +152,13 @@ interface RigidBodyProps extends Omit<
      * `1`. Only meaningful on a dynamic body.
      */
     gravityFactor?: number;
+    /**
+     * `'discrete'` (Jolt's default) only tests collisions at the start and end of a step -
+     * `'linearCast'` sweeps the body along its motion for the step instead, so a small, fast
+     * body doesn't tunnel through thin geometry. Costs more; use it only where needed. Reactive,
+     * like {@link gravityFactor}.
+     */
+    motionQuality?: 'discrete' | 'linearCast';
     scale?: number[];
 
     // dof
@@ -317,6 +324,7 @@ export const RigidBody = memo(function RigidBody(props: RigidBodyProps) {
         friction,
         restitution,
         gravityFactor,
+        motionQuality,
         group,
         subGroup,
         activateOnChange,
@@ -671,6 +679,7 @@ export const RigidBody = memo(function RigidBody(props: RigidBodyProps) {
         if (friction !== undefined) body.friction = friction;
         if (restitution !== undefined) body.restitution = restitution;
         if (gravityFactor !== undefined) body.gravityFactor = gravityFactor;
+        if (motionQuality !== undefined) body.motionQuality = motionQuality;
 
         // check if the body is allowing obstruction
         const isAllowing = body.allowObstruction;
@@ -696,6 +705,7 @@ export const RigidBody = memo(function RigidBody(props: RigidBodyProps) {
         friction,
         restitution,
         gravityFactor,
+        motionQuality,
         isSensor
     ]);
 

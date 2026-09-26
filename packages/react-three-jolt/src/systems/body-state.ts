@@ -1014,6 +1014,38 @@ export class BodyState {
         this.motionProperties?.SetGravityFactor(factor);
     }
     /**
+     * `mMotionQuality` (issue #248): `'discrete'` (Jolt's default) only tests for collisions at
+     * the start and end of a step, which is fine for anything slow enough not to skip past thin
+     * geometry within one step. `'linearCast'` sweeps the body along its motion for the step
+     * instead, so a small, fast body (a bullet, a marble) doesn't tunnel straight through a thin
+     * box it would otherwise never register a collision with. Costs more than `'discrete'` -
+     * reserve it for bodies that actually need it.
+     *
+     * `undefined` for a static body, which has no `MotionProperties` at all - same as every other
+     * motion-properties-backed getter above.
+     *
+     * Unlike `gravityFactor`/`friction`/etc, this goes through `bodyInterface.SetMotionQuality`
+     * rather than a `MotionProperties` setter: `MotionProperties.GetMotionQuality()` exists, but
+     * jolt-physics doesn't expose a matching setter on it, only on `BodyInterface`.
+     */
+    get motionQuality(): 'discrete' | 'linearCast' {
+        if (this.checkDisposed()) return 'discrete';
+        const quality = this.motionProperties?.GetMotionQuality();
+        return quality === Raw.module.EMotionQuality_LinearCast ? 'linearCast' : 'discrete';
+    }
+    set motionQuality(quality: 'discrete' | 'linearCast') {
+        if (this.checkDisposed()) return;
+        // a static body has no MotionProperties (and can't move), so there's nothing to set -
+        // same guard every other motion-properties-backed setter above uses.
+        if (!this.motionProperties) return;
+        this.bodyInterface.SetMotionQuality(
+            this.BodyID,
+            quality === 'linearCast'
+                ? Raw.module.EMotionQuality_LinearCast
+                : Raw.module.EMotionQuality_Discrete
+        );
+    }
+    /**
      * The body's mass in kilograms (issue #201).
      *
      * Read from the body's own `MotionProperties`, not from the shape: a body created with a
