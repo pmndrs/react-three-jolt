@@ -8,4 +8,5 @@ export * from './physics-system';
 export * from './queries';
 export * from './queries/raycasters';
 export * from './shape-system';
+export * from './skeletal-animation';
 export * from './skeleton-system';
