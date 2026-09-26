@@ -355,7 +355,6 @@ test('paused stops the simulation while the frame loop keeps running', async () 
 const TRACKED = ['Vec3', 'RVec3', 'Quat', 'Mat44', 'RMat44'] as const;
 
 function allocationSpy() {
-    // biome-ignore lint/suspicious/noExplicitAny: the jolt module is an untyped embind namespace
     const jolt = Raw.module as any;
     const originals = new Map<string, any>();
     let created = 0;

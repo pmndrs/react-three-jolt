@@ -1084,11 +1084,7 @@ export class BodySystem {
 
     private dispatchContact(kind: number, index: number): void {
         const type = KIND_EVENT[kind] as
-            | 'collisionEnter'
-            | 'collisionPersist'
-            | 'collisionExit'
-            | 'sensorEnter'
-            | 'sensorExit';
+            'collisionEnter' | 'collisionPersist' | 'collisionExit' | 'sensorEnter' | 'sensorExit';
         const queue = this.eventQueue;
         const handle1 = queue.handle1(index);
         const handle2 = queue.handle2(index);
