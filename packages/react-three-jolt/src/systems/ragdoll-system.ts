@@ -68,7 +68,12 @@ import { BodyState } from './body-state';
 import type { BodySystem } from './body-system';
 import type { PhysicsSystem } from './physics-system';
 import type { Vec3Tuple } from './shape-system';
-import { createJoltSkeleton, type JoltSkeletonBuild, writePoseToBones } from './skeleton-system';
+import {
+    createJoltSkeleton,
+    type JoltSkeletonBuild,
+    readPoseFromBones,
+    writePoseToBones
+} from './skeleton-system';
 
 //* Public types =============================================================================
 
@@ -90,6 +95,38 @@ import { createJoltSkeleton, type JoltSkeletonBuild, writePoseToBones } from './
  *   here. See docs/ragdolls.md's "Recommended design" section and this file's module doc.
  */
 export type RagdollJointConstraint = 'swingTwist' | 'hinge' | 'fixed' | 'none';
+
+/**
+ * How a spawned {@link RagdollInstance} is driven, issue #252:
+ *
+ * - `'ragdoll'` (default): bodies are free - no pose driving at all, `captureStep()`'s usual
+ *   physics-to-bones sync is the only thing touching `bones`. What
+ *   `test/ragdoll-system.test.ts`'s existing tests exercise.
+ * - `'animated'`: every substep, `driveStep()` reads `bones`' CURRENT local transforms (assumed
+ *   externally driven, e.g. by a `THREE.AnimationMixer` acting on the same `SkinnedMesh` this
+ *   instance was spawned from) into a private target `SkeletonPose`
+ *   (`SkeletonSystem.readPoseFromBones`) and calls `ragdoll.DriveToPoseUsingKinematics(pose,
+ *   deltaTime)` - Jolt sets each body's velocity to close the gap to that target over `deltaTime`,
+ *   it does not teleport. `captureStep()` then writes the (very-nearly-identical, since kinematic
+ *   driving converges tightly) physics result back onto the SAME `bones` afterwards, same as
+ *   `'ragdoll'` mode - see the module doc's "Drive modes" section for why one bone array can serve
+ *   both as the per-frame target (read before the step) and the render output (written after it).
+ * - `'powered'`: same target-pose read, but `ragdoll.DriveToPoseUsingMotors(pose)` - each
+ *   `swingTwist` joint's `SwingTwistConstraint` motor (torque-limited, spring-driven towards the
+ *   pose's target orientation) does the work instead of a direct velocity set, so external forces
+ *   (a hit, another body) can still perturb the pose while it's being driven. A joint built with
+ *   `motorStrength: 0` (see {@link RagdollPartOptions}) never has its motor turned on in this mode
+ *   - it stays limp (free) even while the rest of the ragdoll is powered, the mechanism issue #252
+ *   calls out for "a hit region go limp". Only `swingTwist` joints are motor-driven; `hinge`/
+ *   `fixed`/`none` joints are unaffected by `'powered'` mode (see the module doc).
+ *
+ * Switching FROM `'powered'` (or between any mode) TO `'ragdoll'` needs no special handling to
+ * "inherit velocity" - `DriveToPoseUsingKinematics`/motor torque already left the bodies with real
+ * physics velocity, simply not driving them further is enough. Switching AWAY from `'ragdoll'`
+ * blends `bones` from their current (free) pose to the newly-driven one over `blendTime` seconds
+ * instead of popping - see {@link RagdollInstance.setMode}.
+ */
+export type RagdollMode = 'animated' | 'powered' | 'ragdoll';
 
 /** Per-bone overrides. Keyed by bone name in {@link RagdollTemplateOptions.parts}. */
 export interface RagdollPartOptions {
@@ -128,6 +165,23 @@ export interface RagdollPartOptions {
     hingeMin?: number;
     /** Hinge limit upper bound, radians. Default `0`. */
     hingeMax?: number;
+
+    //* powered mode (issue #252) ---------------------------
+    /**
+     * `swingTwist`-only: the joint's motor spring frequency (Hz), baked into
+     * `mSwingMotorSettings`/`mTwistMotorSettings` at template build time (motors can't be
+     * rebuilt cheaply per docs/ragdolls.md, same reasoning as every other template-time-only
+     * option here). `0` (or omitted with `defaultMotorStrength` also `0`) means this joint's
+     * motor is never turned on in `'powered'` mode - see {@link RagdollMode}'s "go limp" note.
+     * Defaults to {@link RagdollTemplateOptions.defaultMotorStrength}.
+     */
+    motorStrength?: number;
+    /**
+     * `swingTwist`-only: the joint's motor spring damping ratio (0..1+, same units as
+     * {@link ConstraintSpringOptions.damping} elsewhere in this package). Defaults to
+     * {@link RagdollTemplateOptions.defaultMotorDamping}.
+     */
+    motorDamping?: number;
 }
 
 export type RagdollPartsConfig = Record<string, RagdollPartOptions>;
@@ -151,6 +205,10 @@ export interface RagdollTemplateOptions {
     stabilize?: boolean;
     /** Call `RagdollSettings.DisableParentChildCollisions()` after building. Default `true`. */
     disableParentChildCollisions?: boolean;
+    /** Default {@link RagdollPartOptions.motorStrength} for every `swingTwist` joint that doesn't say its own. Default `6`. */
+    defaultMotorStrength?: number;
+    /** Default {@link RagdollPartOptions.motorDamping} for every `swingTwist` joint that doesn't say its own. Default `1`. */
+    defaultMotorDamping?: number;
 }
 
 /**
@@ -167,6 +225,34 @@ export interface RagdollTemplate {
     joints: THREE.Bone[];
     /** `joints[i]`'s parent's index within `joints`, or `-1` for a root joint. */
     parentIndex: number[];
+    /**
+     * `joints[i]`'s resolved constraint type (after `parts[boneName].constraint` /
+     * `defaultConstraint` resolution) - `'none'` for the root joint too, even though the root
+     * simply has no parent to constrain to, not because a `'none'` constraint was requested for
+     * it. Issue #252's `'powered'` mode motor-drives only `'swingTwist'` joints; this is how
+     * {@link RagdollInstance.setMode} knows which joints to skip.
+     */
+    jointConstraintType: RagdollJointConstraint[];
+    /**
+     * `joints[i]`'s index into `ragdoll.GetConstraint()`, or `-1` for a joint with no `mToParent`
+     * (the root, or a `'none'` constraint). `Jolt.Ragdoll`/`RagdollSettings` expose no getter for
+     * this mapping (`CalculateBodyIndexToConstraintIndex`/`CalculateConstraintIndexToBodyIdxPair`
+     * are write-only, like `Skeleton`'s parent index - see `docs/skeletons.md`), so this file
+     * tracks it itself while building `mParts`: constraints are created in the same order as
+     * `CreateRagdoll()` walks `mParts`, skipping any joint that never got an `mToParent`
+     * assigned, which is the assumption this array encodes. Verified in
+     * `test/ragdoll-modes.test.ts` by casting `GetConstraint(constraintIndex[i])` to
+     * `SwingTwistConstraint` for every `swingTwist` joint and checking it does not throw/return
+     * null.
+     */
+    constraintIndex: number[];
+    /**
+     * `joints[i]`'s resolved {@link RagdollPartOptions.motorStrength} (issue #252), `0` for any
+     * joint whose `jointConstraintType` isn't `'swingTwist'`. `RagdollInstance.setMode('powered')`
+     * only turns a joint's motor on (`EMotorState_Position`) when this is `> 0` - see
+     * {@link RagdollMode}'s "go limp" note.
+     */
+    motorStrength: number[];
     /** The object layer every part was created on. */
     layer: number;
     /** Frees `settings` (which cascades: skeleton, every part's shape, every part's `mToParent` - see docs/ragdolls.md's ownership table). Safe to call once every spawned {@link RagdollInstance} has already been destroyed; does not touch any live instance. */
@@ -179,6 +265,10 @@ export interface SpawnRagdollOptions {
     /** Whether the spawned ragdoll starts simulated. Default `'activate'`. */
     activation?: 'activate' | 'deactivate';
     userData?: number;
+    /** Initial {@link RagdollMode} (issue #252). Default `'ragdoll'`. */
+    mode?: RagdollMode;
+    /** Default seconds {@link RagdollInstance.setMode} blends bones over when leaving `'ragdoll'` without its own `blendTime` argument. Default `0.2`. */
+    blendTime?: number;
 }
 
 /** A live ragdoll instance: bodies + constraints in the simulation, plus its own pose/bone sync state. */
@@ -210,14 +300,50 @@ export interface RagdollInstance {
      * into the previous/current snapshot pair {@link applyInterpolated} blends between, and - as
      * a side effect - writes the live (uninterpolated) pose onto `bones` too, so the rig always
      * shows *some* current pose even before a caller ever asks for interpolation.
+     *
+     * `delta` (issue #252, optional - omit outside a mode-switch blend) is the substep's own
+     * length, used only to advance the `setMode()` bone blend timer; passing it every call (as
+     * `<Ragdoll>` does) is what makes `blendTime` a real seconds value instead of a per-substep
+     * fraction.
      */
-    captureStep(): void;
+    captureStep(delta?: number): void;
     /**
      * Blend the last two `captureStep()` snapshots by `alpha` (0..1, see
      * `PhysicsSystem.frameAlpha`) and write the result onto `bones`. Falls back to whatever
      * `captureStep()` last wrote (the live pose) until two snapshots exist.
      */
     applyInterpolated(alpha: number): void;
+    /**
+     * Current drive mode (issue #252) - see {@link RagdollMode}. Change it with {@link setMode}.
+     */
+    readonly mode: RagdollMode;
+    /**
+     * Issue #252: switch how this instance is driven.
+     *
+     * - Any transition AWAY from `'ragdoll'` (into `'animated'` or `'powered'`) snapshots `bones`'
+     *   current local transforms and blends `captureStep()`'s writes from that snapshot towards
+     *   the newly-driven pose over `blendSeconds` (default the instance's `blendTime`, from
+     *   {@link SpawnRagdollOptions}) instead of popping straight to the driven pose. Pass `0` for
+     *   an immediate cut.
+     * - A transition INTO `'ragdoll'` needs no special handling to "inherit velocity" - see
+     *   {@link RagdollMode}'s doc comment - and is never blended (the whole point of going limp is
+     *   an immediate, physically real transition, not a smoothed one).
+     * - Entering/leaving `'powered'` flips every `swingTwist` joint's `SwingTwistConstraint` motor
+     *   state (`SetSwingMotorState`/`SetTwistMotorState`) between `EMotorState_Position` (only for
+     *   a joint whose {@link RagdollTemplate.motorStrength} is `> 0`) and `EMotorState_Off`.
+     *   `'animated'`'s kinematic driving does not use constraint motors at all, so this is a no-op
+     *   for that transition.
+     *
+     * A no-op if `mode` is already the current mode.
+     */
+    setMode(mode: RagdollMode, blendSeconds?: number): void;
+    /**
+     * Call once before every physics substep (see `useBeforePhysicsStep`), before `Step()`: in
+     * `'animated'`/`'powered'` mode, reads `bones`' CURRENT local transforms (see
+     * {@link RagdollMode}) into a private target `SkeletonPose` and calls
+     * `DriveToPoseUsingKinematics`/`DriveToPoseUsingMotors`. A no-op in `'ragdoll'` mode.
+     */
+    driveStep(delta: number): void;
     /** `RemoveFromPhysicsSystem()` then `destroy()`, in that order - see the module doc. Idempotent. */
     destroy(): void;
 }
@@ -367,7 +493,9 @@ export class RagdollSystem {
             defaultLeafLength = 0.1,
             layer = Layer.MOVING,
             stabilize = true,
-            disableParentChildCollisions = true
+            disableParentChildCollisions = true,
+            defaultMotorStrength = 6,
+            defaultMotorDamping = 1
         } = options;
 
         const build: JoltSkeletonBuild = createJoltSkeleton(source);
@@ -377,6 +505,15 @@ export class RagdollSystem {
         const settings = new jolt.RagdollSettings();
         settings.mSkeleton = skeleton; // ownership transfers - see docs/ragdolls.md
         settings.mParts.resize(joints.length);
+
+        // issue #252: tracked ourselves for the same reason `parentIndex` is - Jolt exposes no
+        // getter for either the joint-index -> constraint-index mapping
+        // (`CalculateBodyIndexToConstraintIndex` is write-only) or a joint's resolved constraint
+        // type. See RagdollTemplate's doc comments.
+        const jointConstraintType: RagdollJointConstraint[] = joints.map(() => 'none');
+        const constraintIndex: number[] = joints.map(() => -1);
+        const motorStrength: number[] = joints.map(() => 0);
+        let nextConstraintIndex = 0;
 
         const temps = new Temporaries();
         try {
@@ -422,14 +559,23 @@ export class RagdollSystem {
 
                 if (parentIndex[i] < 0) return; // root: no constraint to a parent
                 const constraintType = partOptions.constraint ?? defaultConstraint;
+                jointConstraintType[i] = constraintType;
                 if (constraintType === 'none') return;
                 part.mToParent = this.buildJointConstraint(
                     constraintType,
                     geometry.worldPosition[i],
                     geometry.direction[i],
                     partOptions,
-                    temps
+                    temps,
+                    { defaultMotorStrength, defaultMotorDamping }
                 );
+                // Constraints are created by CreateRagdoll() in mParts order, skipping any joint
+                // that never got an mToParent assigned (root, or 'none') - see
+                // RagdollTemplate.constraintIndex's doc comment for why this can't just be read
+                // back from Jolt.
+                constraintIndex[i] = nextConstraintIndex++;
+                if (constraintType === 'swingTwist')
+                    motorStrength[i] = partOptions.motorStrength ?? defaultMotorStrength;
             });
 
             if (stabilize) settings.Stabilize();
@@ -459,6 +605,9 @@ export class RagdollSystem {
             settings,
             joints,
             parentIndex,
+            jointConstraintType,
+            constraintIndex,
+            motorStrength,
             layer,
             destroy
         };
@@ -470,7 +619,8 @@ export class RagdollSystem {
         jointPosition: THREE.Vector3,
         boneDirection: THREE.Vector3,
         options: RagdollPartOptions,
-        temps: Temporaries
+        temps: Temporaries,
+        motorDefaults: { defaultMotorStrength: number; defaultMotorDamping: number }
     ): Jolt.TwoBodyConstraintSettings {
         const jolt = Raw.module;
         const position = temps.track(ownedRVec3(jointPosition));
@@ -512,6 +662,25 @@ export class RagdollSystem {
         settings.mPlaneHalfConeAngle = (options.planeConeAngle ?? Math.PI / 2) / 2;
         settings.mTwistMinAngle = options.twistMin ?? -Math.PI / 8;
         settings.mTwistMaxAngle = options.twistMax ?? Math.PI / 8;
+
+        // issue #252 ("powered" mode): bake the motor's spring into the template now - motors,
+        // like every other constraint setting here, can't be cheaply rebuilt per spawn (see
+        // docs/ragdolls.md). Only the constraint's MOTOR STATE (off/position, per joint,
+        // runtime-togglable) is left for RagdollInstance.setMode() to flip; the spring itself is
+        // fixed for the template's lifetime. `mSpringSettings`/`mSwingMotorSettings`/
+        // `mTwistMotorSettings` are plain value-type fields (same category as Vec3/Quat, per
+        // constraint-system.ts's `createMotorSettings` - copy on assignment), so the temporaries
+        // built here are tracked for release with everything else, not owned by the settings.
+        const strength = options.motorStrength ?? motorDefaults.defaultMotorStrength;
+        const damping = options.motorDamping ?? motorDefaults.defaultMotorDamping;
+        const spring = temps.track(new jolt.SpringSettings());
+        spring.mFrequency = strength;
+        spring.mDamping = damping;
+        const motor = temps.track(new jolt.MotorSettings());
+        motor.mSpringSettings = spring; // copies
+        settings.mSwingMotorSettings = motor; // copies
+        settings.mTwistMotorSettings = motor; // copies
+
         return settings;
     }
 
@@ -571,6 +740,17 @@ export class RagdollSystem {
         pose.SetSkeleton(privateSkeleton);
         // `pose` now owns `privateSkeleton` - never destroy it separately, see above.
 
+        // issue #252: a SECOND, equally private pose/skeleton pair - `pose` above is GetPose()'s
+        // OUTPUT (physics -> bones, read every captureStep()); `drivePose` is `driveStep()`'s
+        // INPUT (bones -> physics target, read every substep in 'animated'/'powered' mode, via
+        // readPoseFromBones + DriveToPoseUsingKinematics/Motors). Two separate `Jolt.SkeletonPose`
+        // objects because they're written by two different code paths within the same substep
+        // (driveStep() before Step(), captureStep() after) - see the module doc's "Drive modes"
+        // section for why `bones` itself can still be the single source/destination for both.
+        const driveSkeleton = buildPoseSkeleton(template.parentIndex);
+        const drivePose = new jolt.SkeletonPose();
+        drivePose.SetSkeleton(driveSkeleton);
+
         // One BodyState per part, on an unparented Object3D proxy (never the bone itself - see
         // RagdollInstance.bodyStates' doc). `skipAddBody` because AddToPhysicsSystem() above
         // already added these bodies to the simulation.
@@ -611,7 +791,74 @@ export class RagdollSystem {
             writePoseToBones(pose, bones, template.parentIndex);
         };
 
-        const captureStep = () => {
+        //* Drive modes (issue #252) ==========================================================
+
+        let currentMode: RagdollMode = options.mode ?? 'ragdoll';
+        const defaultBlendTime = options.blendTime ?? 0.2;
+        // A snapshot of `bones`' local transforms taken the instant a switch AWAY from 'ragdoll'
+        // happens, blended towards the newly-driven pose over the next `blendDuration` seconds of
+        // captureStep() calls - see RagdollInstance.setMode's doc comment. `undefined` outside an
+        // active blend.
+        let blendFrom: { position: THREE.Vector3; quaternion: THREE.Quaternion }[] | undefined;
+        let blendDuration = 0;
+        let blendElapsed = 0;
+
+        /** Flip every swingTwist joint's constraint motor state - see setMode's doc comment. */
+        const applyMotorStates = (enabled: boolean) => {
+            for (let i = 0; i < jointCount; i++) {
+                if (template.jointConstraintType[i] !== 'swingTwist') continue;
+                const ci = template.constraintIndex[i];
+                if (ci < 0) continue;
+                const constraint = jolt.castObject(
+                    ragdoll.GetConstraint(ci),
+                    jolt.SwingTwistConstraint
+                );
+                const active = enabled && template.motorStrength[i] > 0;
+                const state = active ? jolt.EMotorState_Position : jolt.EMotorState_Off;
+                constraint.SetSwingMotorState(state);
+                constraint.SetTwistMotorState(state);
+            }
+        };
+
+        const setMode = (mode: RagdollMode, blendSeconds = defaultBlendTime) => {
+            if (mode === currentMode) return;
+            if (currentMode === 'ragdoll' && blendSeconds > 0) {
+                // leaving 'ragdoll': snapshot the free pose bones currently hold, so captureStep()
+                // can blend from it towards the newly-driven pose instead of popping.
+                blendFrom = bones.map((bone) => ({
+                    position: bone.position.clone(),
+                    quaternion: bone.quaternion.clone()
+                }));
+                blendDuration = blendSeconds;
+                blendElapsed = 0;
+            } else {
+                blendFrom = undefined;
+                blendDuration = 0;
+            }
+            if (mode === 'powered') applyMotorStates(true);
+            else if (currentMode === 'powered') applyMotorStates(false);
+            currentMode = mode;
+        };
+
+        // Apply the instance's initial mode (may be 'powered' from the start - see the module
+        // doc's Drive modes section). No blend: nothing has been captured yet to blend from.
+        if (currentMode !== 'ragdoll') {
+            const initialMode = currentMode;
+            currentMode = 'ragdoll';
+            setMode(initialMode, 0);
+        }
+
+        const driveStep = (delta: number) => {
+            if (currentMode === 'ragdoll') return;
+            // bones' CURRENT local transforms are the drive target - see RagdollMode's doc
+            // comment for why the same array that captureStep() writes below can serve both
+            // roles (read here, before Step(); written there, after it).
+            readPoseFromBones(bones, drivePose);
+            if (currentMode === 'animated') ragdoll.DriveToPoseUsingKinematics(drivePose, delta);
+            else ragdoll.DriveToPoseUsingMotors(drivePose);
+        };
+
+        const captureStep = (delta = 0) => {
             // shift current -> previous (copy, not swap: callers may be mid-read of the arrays)
             for (let i = 0; i < jointCount; i++) previousModel[i].copy(currentModel[i]);
             ragdoll.GetPose(pose, true);
@@ -619,6 +866,19 @@ export class RagdollSystem {
                 modelMatrixScratch: currentModel
             });
             if (captures < 2) captures++;
+
+            if (blendFrom && blendDuration > 0) {
+                blendElapsed += delta;
+                const t = Math.min(blendElapsed / blendDuration, 1);
+                for (let i = 0; i < jointCount; i++) {
+                    bones[i].position.lerpVectors(blendFrom[i].position, bones[i].position, t);
+                    bones[i].quaternion.copy(blendFrom[i].quaternion).slerp(bones[i].quaternion, t);
+                }
+                if (t >= 1) {
+                    blendFrom = undefined;
+                    blendDuration = 0;
+                }
+            }
         };
 
         const applyInterpolated = (alpha: number) => {
@@ -655,6 +915,7 @@ export class RagdollSystem {
             if (!this.physicsSystem.destroyed) ragdoll.RemoveFromPhysicsSystem();
             jolt.destroy(ragdoll);
             jolt.destroy(pose);
+            jolt.destroy(drivePose);
         };
 
         return {
@@ -668,6 +929,11 @@ export class RagdollSystem {
             syncPoseNow,
             captureStep,
             applyInterpolated,
+            get mode() {
+                return currentMode;
+            },
+            setMode,
+            driveStep,
             destroy: destroyInstance
         };
     }

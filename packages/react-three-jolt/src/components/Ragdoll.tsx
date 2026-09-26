@@ -12,12 +12,19 @@ import { useFrame, useThree } from '@react-three/fiber';
 import React, { type ReactNode, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Layer } from '../constants';
-import { useAfterPhysicsStep, useEventCallback, useForwardedRef, useJolt } from '../hooks';
+import {
+    useAfterPhysicsStep,
+    useBeforePhysicsStep,
+    useEventCallback,
+    useForwardedRef,
+    useJolt
+} from '../hooks';
 import type { BodyState } from '../systems/body-state';
 import type { BodyEventMap } from '../systems/events';
 import {
     type RagdollInstance,
     type RagdollJointConstraint,
+    type RagdollMode,
     type RagdollPartsConfig,
     type RagdollTemplate
 } from '../systems/ragdoll-system';
@@ -35,6 +42,21 @@ export interface RagdollProps {
     layer?: number;
     /** Draw a wireframe capsule for every part (reuses `BodyState.debug`, the same overlay `<RigidBody debug>` uses). */
     debug?: boolean;
+
+    //* Drive modes (issue #252) ---------------------------
+    /**
+     * How this instance is driven - see `RagdollMode`'s doc comment in `ragdoll-system.ts`.
+     * Default `'ragdoll'`. Reactive, unlike `parts`/`layer`: changing it after mount calls
+     * `RagdollInstance.setMode()`.
+     */
+    mode?: RagdollMode;
+    /** Seconds `setMode()` blends bones over when leaving `'ragdoll'` (see `RagdollMode`). Default `0.2`. Read once, at mode-change time - not itself reactive mid-blend. */
+    blendTime?: number;
+    /** Default `swingTwist` motor spring frequency (Hz), used by `'powered'` mode - see `RagdollPartOptions.motorStrength`. Set once, at mount, same as `parts`. Default `6`. */
+    defaultMotorStrength?: number;
+    /** Default `swingTwist` motor spring damping ratio - see `RagdollPartOptions.motorDamping`. Set once, at mount. Default `1`. */
+    defaultMotorDamping?: number;
+
     /** Imperative access: part `BodyState`s, `setVelocity`, `addImpulse`. */
     ref?: React.Ref<RagdollHandle | undefined>;
 
@@ -60,6 +82,10 @@ export interface RagdollHandle {
     setVelocity: (velocity: anyVec3) => void;
     /** Add an impulse to one named part. Warns (and no-ops) for an unknown bone name. */
     addImpulse: (boneName: string, impulse: anyVec3) => void;
+    /** Current drive mode (issue #252) - see `RagdollMode`'s doc comment. */
+    getMode: () => RagdollMode;
+    /** Switch drive mode imperatively - see `RagdollInstance.setMode`'s doc comment. */
+    setMode: (mode: RagdollMode, blendSeconds?: number) => void;
     /** The underlying instance, for anything this handle doesn't wrap directly. */
     instance: RagdollInstance;
 }
@@ -102,6 +128,10 @@ export const Ragdoll = React.memo(function Ragdoll(props: RagdollProps) {
         activate = true,
         layer = Layer.MOVING,
         debug = false,
+        mode = 'ragdoll',
+        blendTime = 0.2,
+        defaultMotorStrength,
+        defaultMotorDamping,
         ref: forwardedRef,
 
         onCollisionEnter,
@@ -139,17 +169,23 @@ export const Ragdoll = React.memo(function Ragdoll(props: RagdollProps) {
         const template = physicsSystem.ragdollSystem.buildTemplate(mesh.skeleton, {
             parts,
             defaultConstraint,
-            layer
+            layer,
+            defaultMotorStrength,
+            defaultMotorDamping
         });
         const spawned = physicsSystem.ragdollSystem.spawn(template, {
-            activation: activate ? 'activate' : 'deactivate'
+            activation: activate ? 'activate' : 'deactivate',
+            mode,
+            blendTime
         });
         templateRef.current = template;
         instanceRef.current = spawned;
         setInstance(spawned);
-        // `parts`/`defaultConstraint`/`layer` are deliberately not deps (see the module doc) -
-        // build-time only, and the `built` guard above makes this effect run its real body
-        // exactly once regardless of how often `physicsSystem` or those props change.
+        // `parts`/`defaultConstraint`/`layer`/`defaultMotorStrength`/`defaultMotorDamping` are
+        // deliberately not deps (see the module doc) - build-time only, and the `built` guard
+        // above makes this effect run its real body exactly once regardless of how often
+        // `physicsSystem` or those props change. `mode`/`blendTime` ARE reactive - see the
+        // dedicated effect below - this initial `spawn()` call only sets the STARTING mode.
     }, [physicsSystem]);
 
     //* Teardown, on unmount only ---------------------------------------------
@@ -176,6 +212,17 @@ export const Ragdoll = React.memo(function Ragdoll(props: RagdollProps) {
         if (activate && !wasActive.current) instance.ragdoll.Activate();
         wasActive.current = activate;
     }, [instance, activate]);
+
+    //* Drive mode (issue #252's `mode` prop) - reactive, unlike `parts`/`layer`. Skips the very
+    // first render's "change" (the initial mode was already applied by `spawn()` above) by
+    // tracking what the instance was last set to, so mounting with `mode="powered"` doesn't
+    // immediately re-trigger a (harmless but pointless) `setMode()` blend-snapshot on frame one.
+    const lastMode = useRef(mode);
+    useEffect(() => {
+        if (!instance) return;
+        if (lastMode.current !== mode) instance.setMode(mode, blendTime);
+        lastMode.current = mode;
+    }, [instance, mode, blendTime]);
 
     //* Debug capsules (reuses BodyState.debug, same overlay <RigidBody debug> uses) ----------
     useEffect(() => {
@@ -205,7 +252,12 @@ export const Ragdoll = React.memo(function Ragdoll(props: RagdollProps) {
     // relies on) - when interpolation is on, it overwrites that live write with a properly
     // blended one, respecting interpolation the same way `<RigidBody>`'s own body-to-object sync
     // does (see `PhysicsSystem.syncBodyToObject`).
-    useAfterPhysicsStep(() => instanceRef.current?.captureStep());
+    // issue #252: `driveStep()` runs before each substep's `Step()` - see `RagdollMode`'s doc
+    // comment for why reading `bones`' CURRENT transform here (before `captureStep()` below
+    // overwrites it) is what lets one bone array serve as both the animated/powered drive target
+    // and the physics-driven render output.
+    useBeforePhysicsStep((delta) => instanceRef.current?.driveStep(delta));
+    useAfterPhysicsStep((delta) => instanceRef.current?.captureStep(delta));
     useFrame(() => {
         const current = instanceRef.current;
         if (!current) return;
@@ -244,6 +296,8 @@ export const Ragdoll = React.memo(function Ragdoll(props: RagdollProps) {
                 }
                 state.addImpulse(vec3.three(impulse));
             },
+            getMode: () => instance.mode,
+            setMode: (nextMode, blendSeconds) => instance.setMode(nextMode, blendSeconds),
             instance
         };
     }, [instance, ragdollRef]);
