@@ -20,7 +20,7 @@
         "r3f-perf": "^7.2.3",
         "react": "19.2.8",
         "react-dom": "19.2.8",
-        "react-router": "^7.18.4",
+        "react-router": "^8.4.0",
         "three": "^0.186.0"
     },
     "devDependencies": {
