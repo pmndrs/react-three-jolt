@@ -1473,7 +1473,7 @@ __metadata:
   dependencies:
     "@biomejs/biome": "npm:^2.5.14"
     "@react-three/fiber": "npm:10.0.0-alpha.5"
-    "@react-three/test-renderer": "npm:10.0.0-alpha.5"
+    "@react-three/test-renderer": "npm:10.0.0-canary.39882dd"
     "@rollup/plugin-commonjs": "npm:^29.0.3"
     "@rollup/plugin-node-resolve": "npm:^16.0.3"
     "@types/react": "npm:~19.2.18"
@@ -1508,9 +1508,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@react-three/test-renderer@npm:10.0.0-alpha.5":
-  version: 10.0.0-alpha.5
-  resolution: "@react-three/test-renderer@npm:10.0.0-alpha.5"
+"@react-three/test-renderer@npm:10.0.0-canary.39882dd":
+  version: 10.0.0-canary.39882dd
+  resolution: "@react-three/test-renderer@npm:10.0.0-canary.39882dd"
   peerDependencies:
     "@react-three/fiber": ">=10.0.0-alpha.0"
     react: ">=19.0 <19.3"
@@ -1518,7 +1518,7 @@ __metadata:
   peerDependenciesMeta:
     three:
       optional: false
-  checksum: 10c0/cceaa3afdf4b6ecaae8a93d3ee471297697566f5e0eb245bf2d76815ae3e56240936ab37d52940e9770fb6f6dc9d6f64d8f037f8a0b14c02f6ed982b0f49a4e9
+  checksum: 10c0/ec8e1cc4c5685b409072edf75aca228e93a2aac546ca992ea12ebcffc7401a04183216e5fc11d332b3818834ab33e5905985a74999469ef5749947d5f7df0422
   languageName: node
   linkType: hard
 
