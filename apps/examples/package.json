@@ -11,7 +11,7 @@
     },
     "dependencies": {
         "@react-three/drei": "11.0.0-alpha.7",
-        "@react-three/fiber": "10.0.0-alpha.5",
+        "@react-three/fiber": "10.0.0-canary.9806389",
         "@react-three/jolt": "0.0.1",
         "jolt-physics": "^1.1.0",
         "leva": "^0.10.1",

@@ -933,21 +933,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@pmndrs/scheduler@npm:^0.2.0":
-  version: 0.2.0
-  resolution: "@pmndrs/scheduler@npm:0.2.0"
-  peerDependencies:
-    react: ">=18"
-    react-dom: ">=18"
-  peerDependenciesMeta:
-    react:
-      optional: true
-    react-dom:
-      optional: true
-  checksum: 10c0/ca8b50c9dcbe002a20ea10d9fca33bd347b3419fd8545a22189ecedf515fd26a8ed835bfd4db3df8dad26c5f341e5de7d291fe1f59a583516995ffa162437329
-  languageName: node
-  linkType: hard
-
 "@pnpm/deps.graph-sequencer@npm:^1100.0.1":
   version: 1100.0.1
   resolution: "@pnpm/deps.graph-sequencer@npm:1100.0.1"
@@ -1442,13 +1427,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@react-three/fiber@npm:10.0.0-alpha.5":
-  version: 10.0.0-alpha.5
-  resolution: "@react-three/fiber@npm:10.0.0-alpha.5"
+"@react-three/fiber@npm:10.0.0-canary.9806389":
+  version: 10.0.0-canary.9806389
+  resolution: "@react-three/fiber@npm:10.0.0-canary.9806389"
   dependencies:
     "@babel/runtime": "npm:^7.28.6"
     "@monogrid/gainmap-js": "npm:^3.4.0"
-    "@pmndrs/scheduler": "npm:^0.2.0"
     dequal: "npm:^2.0.3"
     its-fine: "npm:^2.0.0"
     react-use-measure: "npm:^2.1.7"
@@ -1459,11 +1443,11 @@ __metadata:
   peerDependencies:
     react: ">=19.0 <19.3"
     react-dom: ">=19.0 <19.3"
-    three: ">=0.185.0"
+    three: ">=0.181.2"
   peerDependenciesMeta:
     react-dom:
       optional: true
-  checksum: 10c0/20decf37abb760aa4fc3cd16af62c214b694de56bfb6bf3035b27a510c292ec1cfd392781a8dd48ff84e9aea7b90b04e73f8ca47b1b80f21061c42cce5d2da33
+  checksum: 10c0/336870c847934c7525ea6a0c53f012a58690efca8ce5811cabedc9d161a58aae782856e39b4e46995b0beea39710e8399ef0b0f75c37608f50cbc18422d1e5ae
   languageName: node
   linkType: hard
 
@@ -1472,7 +1456,7 @@ __metadata:
   resolution: "@react-three/jolt@workspace:packages/react-three-jolt"
   dependencies:
     "@biomejs/biome": "npm:^2.5.14"
-    "@react-three/fiber": "npm:10.0.0-alpha.5"
+    "@react-three/fiber": "npm:10.0.0-canary.9806389"
     "@react-three/test-renderer": "npm:10.0.0-alpha.5"
     "@rollup/plugin-commonjs": "npm:^29.0.3"
     "@rollup/plugin-node-resolve": "npm:^16.0.3"
@@ -3206,7 +3190,7 @@ __metadata:
   dependencies:
     "@biomejs/biome": "npm:^2.5.14"
     "@react-three/drei": "npm:11.0.0-alpha.7"
-    "@react-three/fiber": "npm:10.0.0-alpha.5"
+    "@react-three/fiber": "npm:10.0.0-canary.9806389"
     "@react-three/jolt": "npm:0.0.1"
     "@types/react": "npm:~19.2.18"
     "@types/react-dom": "npm:~19.2.7"
