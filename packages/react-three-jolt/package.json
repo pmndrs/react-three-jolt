@@ -98,7 +98,7 @@
     "devDependencies": {
         "@biomejs/biome": "^2.5.14",
         "@react-three/fiber": "10.0.0-alpha.5",
-        "@react-three/test-renderer": "10.0.0-alpha.5",
+        "@react-three/test-renderer": "10.0.0-canary.6413936",
         "@rollup/plugin-commonjs": "^29.0.3",
         "@rollup/plugin-node-resolve": "^16.0.3",
         "@types/react": "~19.2.18",
