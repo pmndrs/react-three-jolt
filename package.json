@@ -28,7 +28,7 @@
         "changeset:publish": "yarn build && yarn test && changeset publish"
     },
     "devDependencies": {
-        "@biomejs/biome": "^2.5.14",
+        "@biomejs/biome": "^2.5.15",
         "@changesets/cli": "^3.0.3"
     },
     "engines": {
